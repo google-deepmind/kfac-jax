@@ -6,7 +6,7 @@
 | [**Examples**](https://github.com/deepmind/kfac_jax/tree/main/examples/)
 | [**Citing KFAC JAX**](#citing-kfac-jax)
 
-![pytest](https://github.com/deepmind/kfac_jax/workflows/pytest/badge.svg)
+![CI status](https://github.com/deepmind/kfac_jax/workflows/ci/badge.svg)
 ![docs](https://readthedocs.org/projects/kfac_jax/badge/?version=latest)
 ![pypi](https://img.shields.io/pypi/v/kfac_jax)
 
