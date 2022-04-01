@@ -88,6 +88,8 @@ class TestTracer(parameterized.TestCase):
       data: Any,
       data_size: int,
       combine: str,
+      atol: float = 1e-6,
+      rtol: float = 1e-6,
   ):
     """Compares `func` with a single large batch and multiple small one."""
     # Single batch computation
@@ -107,7 +109,7 @@ class TestTracer(parameterized.TestCase):
     else:
       raise NotImplementedError()
 
-    self.assertAllClose(single_output, outputs)
+    self.assertAllClose(single_output, outputs, atol=atol, rtol=rtol)
 
   @parameterized.parameters(models.NON_LINEAR_MODELS)
   def test_loss_tags_jvp(
@@ -287,7 +289,7 @@ class TestTracer(parameterized.TestCase):
     def func(data_):
       return hvp((params, data_), p_tangents)[0]
 
-    self.compare_multi_batch(func, data, data_size, "sum")
+    self.compare_multi_batch(func, data, data_size, "sum", rtol=1e-4)
 
   @parameterized.parameters(models.NON_LINEAR_MODELS)
   def test_layer_tags_vjp(
