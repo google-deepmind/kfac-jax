@@ -3,12 +3,12 @@
 [**Installation**](#installation)
 | [**Quickstart**](#quickstart)
 | [**Documentation**](https://kfac-jax.readthedocs.io/)
-| [**Examples**](https://github.com/deepmind/kfac_jax/tree/main/examples/)
+| [**Examples**](https://github.com/deepmind/kfac-jax/tree/main/examples/)
 | [**Citing KFAC-JAX**](#citing-kfac-jax)
 
-![CI status](https://github.com/deepmind/kfac_jax/workflows/ci/badge.svg)
-![docs](https://readthedocs.org/projects/kfac_jax/badge/?version=latest)
-![pypi](https://img.shields.io/pypi/v/kfac_jax)
+![CI status](https://github.com/deepmind/kfac-jax/workflows/ci/badge.svg)
+![docs](https://readthedocs.org/projects/kfac-jax/badge/?version=latest)
+![pypi](https://img.shields.io/pypi/v/kfac-jax)
 
 KFAC-JAX is a library built on top of [JAX] for second-order optimization of 
 neural networks and for computing scalable curvature approximations.
@@ -25,13 +25,13 @@ to install JAX with the relevant accelerator support.
 Then, install KFAC-JAX using pip:
 
 ```bash
-$ pip install git+https://github.com/deepmind/kfac_jax
+$ pip install git+https://github.com/deepmind/kfac-jax
 ```
 
 Alternatively, you can install via PyPI:
 
 ```bash
-$ pip install -U kfac_jax
+$ pip install -U kfac-jax
 ```
 
 Our examples rely on additional libraries, all of which you can install using:
@@ -201,17 +201,17 @@ approximations, and the supported layers, please see the [documentation].
 To cite this repository:
 
 ```
-@software{kfac_jax2022github,
+@software{kfac-jax2022github,
   author = {Aleksandar Botev and James Martens},
   title = {{KFAC-JAX}},
-  url = {http://github.com/deepmind/kfac_jax},
+  url = {http://github.com/deepmind/kfac-jax},
   version = {0.0.1},
   year = {2022},
 }
 ```
 
 In this bibtex entry, the version number is intended to be from
-[`kfac_jax/__init__.py`](https://github.com/deepmind/kfac_jax/blob/main/kfac_jax/__init__.py),
+[`kfac_jax/__init__.py`](https://github.com/deepmind/kfac-jax/blob/main/kfac_jax/__init__.py),
 and the year corresponds to the project's open-source release.
 
 

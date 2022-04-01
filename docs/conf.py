@@ -177,7 +177,7 @@ def linkcode_resolve(domain, info):
   except OSError:
     return None
 
-  return 'https://github.com/deepmind/kfac_jax/tree/master/kfac_jax/%s#L%d#L%d' % (
+  return 'https://github.com/deepmind/kfac-jax/tree/master/kfac_jax/%s#L%d#L%d' % (
       os.path.relpath(filename, start=os.path.dirname(
           kfac_jax.__file__)), lineno, lineno + len(source) - 1)
 

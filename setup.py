@@ -46,7 +46,7 @@ def _parse_requirements(requirements_txt_path):
 _VERSION = _get_version()
 
 setuptools.setup(
-    name="kfac_jax",
+    name="kfac-jax",
     version=_VERSION,
     url="https://github.com/deepmind/kfac-jax",
     license="Apache 2.0",

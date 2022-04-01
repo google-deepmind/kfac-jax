@@ -1,4 +1,4 @@
-:github_url: https://github.com/deepmind/kfac_jax/tree/main/docs
+:github_url: https://github.com/deepmind/kfac-jax/tree/main/docs
 
 KFAC-JAX Documentation
 ======================
@@ -21,11 +21,11 @@ to install JAX with the relevant accelerator support.
 
 Then, install KFAC-JAX using pip::
 
-    $ pip install git+https://github.com/deepmind/kfac_jax
+    $ pip install git+https://github.com/deepmind/kfac-jax
 
 Alternatively, you can install via PyPI::
 
-    $ pip install -U kfac_jax
+    $ pip install -U kfac-jax
 
 Our examples rely on additional libraries, all of which you can install using::
 
@@ -58,14 +58,14 @@ Our examples rely on additional libraries, all of which you can install using::
 Contribute
 ----------
 
-- Issue tracker: https://github.com/deepmind/kfac_jax/issues
-- Source code: https://github.com/deepmind/kfac_jax/tree/main
+- Issue tracker: https://github.com/deepmind/kfac-jax/issues
+- Source code: https://github.com/deepmind/kfac-jax/tree/main
 
 Support
 -------
 
 If you are having issues, please let us know by filing an issue on our
-`issue tracker <https://github.com/deepmind/kfac_jax/issues>`_.
+`issue tracker <https://github.com/deepmind/kfac-jax/issues>`_.
 
 License
 -------

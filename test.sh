@@ -14,7 +14,7 @@
 # limitations under the License.
 set -e
 
-readonly VENV_DIR=/tmp/kfac_jax_test_env
+readonly VENV_DIR=/tmp/kfac-jax-test-env
 echo "Creating virtual environment under ${VENV_DIR}."
 echo "You might want to remove this when you no longer need it."
 
