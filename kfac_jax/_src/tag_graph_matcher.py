@@ -14,6 +14,7 @@
 """K-FAC functionality for auto-detecting layer tags and graph matching."""
 import functools
 import itertools
+import pprint
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple, TypeVar, Union
 
 from absl import logging
@@ -395,7 +396,8 @@ class GraphPattern:
     """The Jaxpr graph representing the computation of this pattern."""
     if self._graph is None:
       jnp_args = jax.tree_map(jnp.asarray, self._example_args)
-      self._graph = make_jax_graph(self._compute_func, jnp_args, 1, self._name)
+      self._graph = make_jax_graph(
+          broadcast_merger(self._compute_func), jnp_args, 1, self._name)
     return self._graph
 
   def tag_ctor(
@@ -714,6 +716,26 @@ def clean_jaxpr_eqns(
 def broadcast_merger(f: utils.Func) -> utils.Func:
   """Transforms ``f`` by merging any consecutive broadcasts in its Jaxpr."""
 
+  def read_with_delayed_evaluation(env, var):
+    if isinstance(var, (list, tuple)):
+      return jax.tree_map(lambda x: read_with_delayed_evaluation(env, x), var)
+    elif isinstance(var, core.Literal):
+      # Literals are values baked into the Jaxpr
+      return var.val
+    elif isinstance(var, core.Var):
+      r = env[var]
+      if isinstance(r, (jnp.ndarray, np.ndarray)):
+        return r
+      elif isinstance(r, Callable):
+        y = r()
+        if isinstance(y, list):
+          assert len(y) == 1
+          y = y[0]
+        assert isinstance(y, jnp.ndarray)
+        env[var] = y
+        return y
+    raise NotImplementedError()
+
   @functools.wraps(f)
   def merged_func(*func_args: Any) -> Any:
     typed_jaxpr, out_avals = jax.make_jaxpr(f, return_shape=True)(*func_args)
@@ -722,7 +744,7 @@ def broadcast_merger(f: utils.Func) -> utils.Func:
 
     # Mapping from variable -> value
     env = {}
-    read = functools.partial(read_env, env)
+    read = functools.partial(read_with_delayed_evaluation, env)
     write = functools.partial(write_env, env)
 
     # Bind args and consts to environment
@@ -746,13 +768,17 @@ def broadcast_merger(f: utils.Func) -> utils.Func:
           x, dims = broadcasts_outputs[eqn.invars[0]]
           kept_dims = eqn.params["broadcast_dimensions"]
           kept_dims = [kept_dims[d] for d in dims]
-          y = lax.broadcast_in_dim(x, eqn.params["shape"], kept_dims)
-          write(eqn.outvars, [y])
+          # In order not to compute any un-needed broadcasting we instead put
+          # in a function for delayed evaluation.
+          write(eqn.outvars, [functools.partial(
+              lax.broadcast_in_dim, x, eqn.params["shape"], kept_dims)])
           broadcasts_outputs[eqn.outvars[0]] = (x, kept_dims)
         else:
           input_values = read(eqn.invars)
-          out_values = eval_jaxpr_eqn(eqn, input_values)
-          write(eqn.outvars, out_values)
+          # In order not to compute any un-needed broadcasting we instead put
+          # in a function for delayed evaluation.
+          write(eqn.outvars, [functools.partial(
+              eval_jaxpr_eqn, eqn, input_values)])
           broadcasts_outputs[eqn.outvars[0]] = (
               (input_values[0], eqn.params["broadcast_dimensions"]))
       else:
@@ -1111,8 +1137,9 @@ def auto_register_tags(
 
   params_labels = [tagged_params.get(p, "Orphan") for p in graph.params_vars]
   logging.info("=" * 50)
-  logging.info("Graph parameter registrations: %s",
-               str(jax.tree_unflatten(graph.params_tree, params_labels)))
+  logging.info("Graph parameter registrations:")
+  logging.info(pprint.pformat(
+      jax.tree_unflatten(graph.params_tree, params_labels)))
   logging.info("=" * 50)
 
   # Construct a function with all of the extra tag registrations

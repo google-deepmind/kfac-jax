@@ -23,11 +23,33 @@ import jax.numpy as jnp
 import kfac_jax
 from tests import models
 
-tag_graph_matcher = kfac_jax.tag_graph_matcher
-
 
 class TestGraphMatcher(parameterized.TestCase):
   """Test class for the functions in `tag_graph_matcher.py`."""
+
+  def check_equation_match(self, eqn1, vars_to_vars, vars_to_eqn):
+    """Checks that equation is matched in the other graph."""
+    eqn1_out_vars = [v for v in eqn1.outvars
+                     if not isinstance(v, (jax.core.UnitVar, jax.core.DropVar))]
+    eqn2_out_vars = [vars_to_vars[v] for v in eqn1_out_vars]
+    eqns = [vars_to_eqn[v] for v in eqn2_out_vars]
+    self.assertTrue(all(e == eqns[0] for e in eqns[1:]))
+    eqn2 = eqns[0]
+
+    self.assertEqual(eqn1.primitive, eqn2.primitive)
+    # For xla_call we skip any detailed check as they are very complicated.
+    if eqn1.primitive.name != "xla_call":
+      for k in eqn1.params:
+        self.assertEqual(eqn1.params[k], eqn2.params[k])
+    for v1, v2 in zip(eqn1.invars, eqn2.invars):
+      if isinstance(v1, jax.core.Literal):
+        self.assertIsInstance(v2, jax.core.Literal)
+        self.assertEqual(v1.aval, v2.aval)
+      else:
+        self.assertEqual(v1.aval.shape, v2.aval.shape)
+        self.assertEqual(v1.aval.dtype, v2.aval.dtype)
+        vars_to_vars[v1] = v2
+    return vars_to_vars
 
   @parameterized.parameters(models.NON_LINEAR_MODELS)
   def test_auto_register_tags_jaxpr(
@@ -50,7 +72,8 @@ class TestGraphMatcher(parameterized.TestCase):
         data[name] = jnp.argmax(data[name], axis=-1)
 
     params = init_func(init_key, data)
-    func = tag_graph_matcher.auto_register_tags(model_func, (params, data))
+    func = kfac_jax.tag_graph_matcher.auto_register_tags(
+        model_func, (params, data))
     jaxpr = jax.make_jaxpr(func)(params, data).jaxpr
     tagged_func = functools.partial(
         model_func,
@@ -65,20 +88,44 @@ class TestGraphMatcher(parameterized.TestCase):
     # it will always have the same or less number of equations.
     self.assertLessEqual(len(jaxpr.eqns), len(tagged_jaxpr.eqns))
 
-    for eq, tagged_eq in zip(jaxpr.eqns, tagged_jaxpr.eqns):
-      eq_in_vars = [v for v in eq.invars
-                    if not isinstance(v, jax.core.UnitVar)]
-      tagged_in_vars = [v for v in tagged_eq.invars
-                        if not isinstance(v, jax.core.UnitVar)]
-      self.assertEqual(len(eq_in_vars), len(tagged_in_vars))
-      self.assertEqual(len(eq.outvars), len(tagged_eq.outvars))
-      self.assertEqual(eq.primitive, tagged_eq.primitive)
-      for variable, t_variable in zip(eq_in_vars + eq.outvars,
-                                      tagged_in_vars + tagged_eq.outvars):
-        if isinstance(variable, jax.core.Literal):
-          self.assertEqual(variable.aval, t_variable.aval)
+    # Extract all loss tags from both jax expressions
+    l1_eqns = []
+    for eqn in jaxpr.eqns:
+      if isinstance(eqn.primitive, kfac_jax.layers_and_loss_tags.LossTag):
+        l1_eqns.append(eqn)
+    l2_eqns = []
+    vars_to_eqn = {}
+    for eqn in tagged_jaxpr.eqns:
+      if isinstance(eqn.primitive, kfac_jax.layers_and_loss_tags.LossTag):
+        l2_eqns.append(eqn)
+      for v in eqn.outvars:
+        vars_to_eqn[v] = eqn
+    self.assertEqual(len(l1_eqns), len(l2_eqns))
+
+    # Match all losses output variables
+    vars_to_vars = {}
+    for eqn1, eqn2 in zip(l1_eqns, l2_eqns):
+      self.assertEqual(len(eqn1.outvars), len(eqn2.outvars))
+      for v1, v2 in zip(eqn1.outvars, eqn2.outvars):
+        if isinstance(v1, jax.core.DropVar):
+          self.assertIsInstance(v2, jax.core.DropVar)
+        elif isinstance(v1, jax.core.Literal):
+          self.assertIsInstance(v2, jax.core.Literal)
+          self.assertEqual(v1.aval, v2.aval)
         else:
-          self.assertEqual(variable.count, t_variable.count)
+          self.assertEqual(v1.aval.shape, v2.aval.shape)
+          self.assertEqual(v1.aval.dtype, v2.aval.dtype)
+          vars_to_vars[v1] = v2
+
+    # Match all other equations
+    for eqn in reversed(jaxpr.eqns):
+      vars_to_vars = self.check_equation_match(eqn, vars_to_vars, vars_to_eqn)
+
+    for v1 in jaxpr.invars:
+      v2 = vars_to_vars[v1]
+      self.assertEqual(v1.aval.shape, v2.aval.shape)
+      self.assertEqual(v1.aval.dtype, v2.aval.dtype)
+      self.assertEqual(v1.count, v2.count)
 
 
 if __name__ == "__main__":

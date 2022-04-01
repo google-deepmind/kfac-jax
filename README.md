@@ -50,16 +50,16 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 import kfac_jax
-import optax
 
 # Hyper parameters
 NUM_CLASSES = 10
 L2_REG = 1e-3
+NUM_BATCHES = 100
 
 
 def make_dataset_iterator(batch_size):
   # Dummy dataset, in practice this should be your dataset pipeline
-  while True:
+  for _ in range(NUM_BATCHES):
     yield jnp.zeros([batch_size, 100]), jnp.ones([batch_size], dtype="int32") 
 
 
@@ -69,10 +69,10 @@ def softmax_cross_entropy(logits: jnp.ndarray, targets: jnp.ndarray):
   assert logits.ndim == targets.ndim + 1
   
   # Tell KFAC-JAX this model represents a classifier
-  # See https://kfac_jax.readthedocs.io/en/latest/overview.html#supported-losses
+  # See https://kfac-jax.readthedocs.io/en/latest/overview.html#supported-losses
   kfac_jax.register_softmax_cross_entropy_loss(logits, targets)
-
-  return optax.softmax_cross_entropy(logits, targets)
+  log_p = jax.nn.log_softmax(logits, axis=-1)
+  return - jax.vmap(lambda x, y: x[y])(log_p, targets)
 
 
 def model_fn(x):
@@ -179,14 +179,17 @@ understood your model.
 For the example above this looks like this:
 
 ```python
-  ==================================================
-  Graph parameter registrations: {'mlp/~/linear_0': {'b':
-  'Auto[dense_with_bias_3]', 'w': 'Auto[dense_with_bias_3]'}, 'mlp/~/linear_1':
-  {'b': 'Auto[dense_with_bias_2]', 'w': 'Auto[dense_with_bias_2]'},
-  'mlp/~/linear_2': {'b': 'Auto[dense_with_bias_1]', 'w':
-  'Auto[dense_with_bias_1]'}, 'mlp/~/linear_3': {'b': 'Auto[dense_with_bias_0]',
-   'w': 'Auto[dense_with_bias_0]'}}
-  ==================================================
+==================================================
+Graph parameter registrations:
+{'mlp/~/linear_0': {'b': 'Auto[dense_with_bias_3]',
+                    'w': 'Auto[dense_with_bias_3]'},
+ 'mlp/~/linear_1': {'b': 'Auto[dense_with_bias_2]',
+                    'w': 'Auto[dense_with_bias_2]'},
+ 'mlp/~/linear_2': {'b': 'Auto[dense_with_bias_1]',
+                    'w': 'Auto[dense_with_bias_1]'},
+ 'mlp/~/linear_3': {'b': 'Auto[dense_with_bias_0]',
+                    'w': 'Auto[dense_with_bias_0]'}}
+==================================================
 ```
 
 As can be seen from this message, the library has correctly detected all

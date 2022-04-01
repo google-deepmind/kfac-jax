@@ -7,21 +7,20 @@ optimizer:
 
 .. code-block:: python
 
-    from typing import Tuple
     import haiku as hk
     import jax
     import jax.numpy as jnp
     import kfac_jax
-    import optax
 
     # Hyper parameters
     NUM_CLASSES = 10
     L2_REG = 1e-3
+    NUM_BATCHES = 100
 
 
-    def make_dataset_iterator(batch_size: int):
+    def make_dataset_iterator(batch_size):
       # Dummy dataset, in practice this should be your dataset pipeline
-      while True:
+      for _ in range(NUM_BATCHES):
         yield jnp.zeros([batch_size, 100]), jnp.ones([batch_size], dtype="int32")
 
 
@@ -31,13 +30,13 @@ optimizer:
       assert logits.ndim == targets.ndim + 1
 
       # Tell KFAC-JAX this model represents a classifier
-      # See https://kfac_jax.readthedocs.io/en/latest/overview.html#supported-losses
+      # See https://kfac-jax.readthedocs.io/en/latest/overview.html#supported-losses
       kfac_jax.register_softmax_cross_entropy_loss(logits, targets)
+      log_p = jax.nn.log_softmax(logits, axis=-1)
+      return - jax.vmap(lambda x, y: x[y])(log_p, targets)
 
-      return optax.softmax_cross_entropy(logits, targets)
 
-
-    def model_fn(x: jnp.ndarray):
+    def model_fn(x):
       """A Haiku MLP model function - three hidden layer network with tanh."""
       return hk.nets.MLP(
         output_sizes=(50, 50, 50, NUM_CLASSES),
@@ -50,15 +49,16 @@ optimizer:
     hk_model = hk.without_apply_rng(hk.transform(model_fn))
 
 
-    def loss_fn(params: hk.Params, batch: Tuple[jnp.ndarray, jnp.ndarray]):
+    def loss_fn(model_params, model_batch):
       """The loss function to optimize."""
-      x, y = batch
-      logits = hk_model.apply(params, x)
+      x, y = model_batch
+      logits = hk_model.apply(model_params, x)
       loss = jnp.mean(softmax_cross_entropy(logits, y))
 
       # The optimizer assumes that the function you provide has already added
       # the L2 regularizer to its gradients.
       return loss + L2_REG * kfac_jax.utils.inner_product(params, params) / 2.0
+
 
     # Create the optimizer
     optimizer = kfac_jax.Optimizer(
@@ -147,14 +147,17 @@ by the automatic registration system, in order to ensure that it has correctly
 understood your model.
 For the example above this looks like this::
 
-  ==================================================
-  Graph parameter registrations: {'mlp/~/linear_0': {'b':
-  'Auto[dense_with_bias_3]', 'w': 'Auto[dense_with_bias_3]'}, 'mlp/~/linear_1':
-  {'b': 'Auto[dense_with_bias_2]', 'w': 'Auto[dense_with_bias_2]'},
-  'mlp/~/linear_2': {'b': 'Auto[dense_with_bias_1]', 'w':
-  'Auto[dense_with_bias_1]'}, 'mlp/~/linear_3': {'b': 'Auto[dense_with_bias_0]',
-   'w': 'Auto[dense_with_bias_0]'}}
-  ==================================================
+    ==================================================
+    Graph parameter registrations:
+    {'mlp/~/linear_0': {'b': 'Auto[dense_with_bias_3]',
+                        'w': 'Auto[dense_with_bias_3]'},
+     'mlp/~/linear_1': {'b': 'Auto[dense_with_bias_2]',
+                        'w': 'Auto[dense_with_bias_2]'},
+     'mlp/~/linear_2': {'b': 'Auto[dense_with_bias_1]',
+                        'w': 'Auto[dense_with_bias_1]'},
+     'mlp/~/linear_3': {'b': 'Auto[dense_with_bias_0]',
+                        'w': 'Auto[dense_with_bias_0]'}}
+    ==================================================
 
 As can be seen from this message, the library has correctly detected all
 parameters of the model to be part of dense layers.
