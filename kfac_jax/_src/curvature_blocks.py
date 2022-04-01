@@ -126,6 +126,18 @@ class CurvatureBlock(utils.Finalizable):
 
   @utils.pytree_dataclass
   class State:
+    """Persistent state of the block.
+
+    Any subclasses of :class:`~CurvatureBlock` should also internally extend
+    this class, with any attributes needed for the curvature estimation.
+
+    Attributes:
+      cache: A dictionary, containing any state data that is updated on
+        irregular intervals, such as inverses, eigenvalues, etc. Elements of
+        this are updated via calls to :func:`~CurvatureBlock.update_cache`, and
+        do not necessarily correspond to the the most up to date curvature
+        estimate.
+    """
     cache: Optional[Dict[str, Union[chex.Array, Dict[str, chex.Array]]]]
 
   def __init__(self, layer_tag_eq: tags.LayerTagEqn, name: str):
@@ -566,6 +578,13 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
   @utils.pytree_dataclass
   class State(CurvatureBlock.State):
+    """Persistent state of the block.
+
+    Attributes:
+      diagonal_factors: A tuple of the moving averages of the estimated
+        diagonals of the curvature for each parameter that is part of the
+        associated layer.
+    """
     diagonal_factors: Tuple[utils.WeightedMovingAverage]
 
   def _init(
@@ -659,6 +678,12 @@ class Full(CurvatureBlock, abc.ABC):
 
   @utils.pytree_dataclass
   class State(CurvatureBlock.State):
+    """Persistent state of the block.
+
+    Attributes:
+      matrix: A moving average of the estimated curvature matrix for all
+        parameters that are part of the associated layer.
+    """
     matrix: utils.WeightedMovingAverage
 
   def __init__(
@@ -836,6 +861,14 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
 
   @utils.pytree_dataclass
   class State(CurvatureBlock.State):
+    """Persistent state of the block.
+
+    Attributes:
+      inputs_factor: A moving average of the estimated second moment matrix of
+        the inputs to the associated layer.
+      outputs_factor: A moving average of the estimated second moment matrix of
+        the gradients of w.r.t. the outputs of the associated layer.
+    """
     inputs_factor: utils.WeightedMovingAverage
     outputs_factor: utils.WeightedMovingAverage
 

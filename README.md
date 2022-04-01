@@ -1,10 +1,10 @@
-# KFAC JAX - Second Order Optimization with Approximate Curvature in JAX
+# KFAC-JAX - Second Order Optimization with Approximate Curvature in JAX
 
 [**Installation**](#installation)
 | [**Quickstart**](#quickstart)
 | [**Documentation**](https://kfac-jax.readthedocs.io/)
 | [**Examples**](https://github.com/deepmind/kfac_jax/tree/main/examples/)
-| [**Citing KFAC JAX**](#citing-kfac-jax)
+| [**Citing KFAC-JAX**](#citing-kfac-jax)
 
 ![CI status](https://github.com/deepmind/kfac_jax/workflows/ci/badge.svg)
 ![docs](https://readthedocs.org/projects/kfac_jax/badge/?version=latest)
@@ -196,14 +196,14 @@ parameters of the model to be part of dense layers.
 For a high level overview of the optimizer, the different curvature 
 approximations, and the supported layers, please see the [documentation].
 
-## Citing KFAC JAX<a id="citing-kfac-jax"></a>
+## Citing KFAC-JAX<a id="citing-kfac-jax"></a>
 
 To cite this repository:
 
 ```
 @software{kfac_jax2022github,
   author = {Aleksandar Botev and James Martens},
-  title = {{KFAC JAX}},
+  title = {{KFAC-JAX}},
   url = {http://github.com/deepmind/kfac_jax},
   version = {0.0.1},
   year = {2022},

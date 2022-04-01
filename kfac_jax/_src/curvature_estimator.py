@@ -727,6 +727,12 @@ class BlockDiagonalCurvature(CurvatureEstimator):
 
   @utils.pytree_dataclass
   class State:
+    """Persistent state of the estimator.
+
+    Attributes:
+      blocks_states: A tuple of the state of the estimator corresponding to each
+        block.
+    """
     blocks_states: Tuple[curvature_blocks.CurvatureBlock.State, ...]
 
   def __init__(

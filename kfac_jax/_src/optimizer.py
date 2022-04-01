@@ -65,6 +65,17 @@ class Optimizer(utils.WithStagedMethods):
 
   @utils.pytree_dataclass
   class State:
+    r"""Persistent state of the optimizer.
+
+    Attributes:
+      velocities: The update to the parameters from the previous step -
+        :math:`\theta_t - \theta_{t-1}`.
+      estimator_state: The persistent state for the curvature estimator.
+      damping: When using damping adaptation, this will contain the current
+        value.
+      data_seen: The number of training cases that the optimizer has processed.
+      step_counter: An integer giving the current step number :math:`t`.
+    """
     velocities: utils.Params
     estimator_state: curvature_estimator.BlockDiagonalCurvature.State
     damping: Optional[chex.Array]

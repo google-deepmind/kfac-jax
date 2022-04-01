@@ -73,11 +73,12 @@ Supported layers
 Currently, the library only includes support for the three most common types of
 layers used in practice:
 
-1. Dense layers, corresponding to ``y = Wx + b``.
-2. 2D convolution layers, corresponding to ``y = W * x + b``.
-3. Scale and shift layers, corresponding to ``y = w . x + b``.
+1. Dense layers, corresponding to :math:`y = Wx + b`.
+2. 2D convolution layers, corresponding to :math:`y = W \star x + b`.
+3. Scale and shift layers, corresponding to :math:`y = w \odot x + b`.
 
-Here ``*`` corresponds to convolution and ``.`` to elementwise product.
+Here :math:`\star` corresponds to convolution and :math:`\odot` to elementwise
+product.
 Parameter reuse, such as in recurrent networks and attention layers, is
 not currently supported.
 
@@ -118,68 +119,111 @@ checkout the relevant section in :doc:`advanced<advanced>` on how to do this.
 Optimizer
 =========
 
-The optimization algorithm implement in :class:`kfac_jax.Optimizer` follows the
-`K-FAC paper <https://arxiv.org/abs/1503.05671>`_.
-Throughout optimization the optimizer instance keeps the following state::
+The optimization algorithm implemented in :class:`kfac_jax.Optimizer` follows
+the `K-FAC paper <https://arxiv.org/abs/1503.05671>`_.
+Throughout optimization the Optimizer instance keeps the following persistent
+state:
 
-    C - the curvature estimator state.
-    velocity - velocity vectors of the parameters.
-    damping - weight of the additional damping added for inverting C.
-    counter - a step counter.
-
-If we denote the current minibatch of data by ``x``, the current parameters by
-``theta`` and  the function that computes the value and gradient of the loss
-by ``f``, a high level pseudocode for a single step of the optimizer
-is::
-
-    1 loss, gradient = f(theta, x)
-    2 C = update_curvature_estimate(C, theta, x)
-    3 preconditioned_gradient = compute_inverse(C) @ gradient
-    4 c1, c2 = compute_update_coefficients(theta, x, preconditioned_gradient, velocity)
-    5 velocity_new = c1 * preconditioned_gradient + c2 * velocity
-    6 theta_new = theta + velocity_new
-    7 damping = update_damping(loss, theta_new, C)
+.. math::
+    \begin{aligned}
+        & \bm{v}_t - \text{velocity vector, representing the last parameter update.
+        } \\
+        & \bm{C}_t - \text{The state of the curvature estimator on step } t .\\
+        & \lambda_t - \text{ weight of the additional damping added for
+        inverting } \bm{C}. \\
+        & t - \text{the step counter.}
+    \end{aligned}
 
 
-Amortizing expensive computations
----------------------------------
+If we denote the current minibatch of data by :math:`\bm{x}_t`, the current
+parameters by :math:`\bm{\theta}_t`, the L2 regularizer by :math:`\gamma` and the
+loss function (which includes the L2 regularizer) by :math:`\mathcal{L}`, a
+high level pseudocode for a single step of the optimizer is:
 
-When running the optimizer, several of the steps involved can have
-a somewhat significant computational overhead.
-For this reason, the optimizer class allows these to be performed every `K`
-steps, and to cache these values across iterations.
-This has been found to work well in practice without significant drawbacks in
-training performance.
-Specifically, this is applied to computing the inverse of the estimated
-approximate curvature (step 3), and to the updates to the damping (step 7).
+.. math::
+    \begin{aligned}
+        &(1) \quad l_t, \bm{g}_t  = \mathcal{L}(\bm{\theta}_t, \bm{x}_t),
+        \nabla_\theta \mathcal{L}(\bm{\theta}_t, \bm{x}_t)
+        \\
+        &(2) \quad \bm{C}_{t+1} = \text{update curvature}(\bm{C}_t,
+        \bm{\theta}_t, \bm{x}_t) \\
+        &(3) \quad \hat{\bm{g}}_t = (\bm{C}_{t+1} + (\lambda_t + \gamma) \bm{I}
+        )^{-1} \bm{g}_t \\
+        &(4) \quad \alpha_t, \beta_t = \text{update coefficients}(
+        \hat{\bm{g}}_t, \bm{x}_t, \bm{\theta}_t, \bm{v}_t) \\
+        &(5) \quad \bm{v}_{t+1} = \alpha_t \hat{\bm{g}}_t + \beta_t \bm{v}_t \\
+        &(6) \quad \bm{\theta}_{t+1} = \bm{\theta}_t + \bm{v}_{t+1} \\
+        &(7) \quad \lambda_{t+1} = \text{update damping}(l_t, \bm{\theta}_{t+1},
+        \bm{C}_{t+1})
+    \end{aligned}
 
-Computing the update coefficients
----------------------------------
+Steps 1, 2, 3, 5 and 6 are standard for any second order optimization algorithm.
+Step 4 and 7 are described in more details below.
 
-The update coefficients ``c1`` and ``c2`` in step 4 can either be provided
-manually by the user at each step, or can be computed automatically using the
-procedure described in Section 7 of the original
-`K-FAC paper <https://arxiv.org/abs/1503.05671>`_.
+
+Computing the update coefficients (4)
+-------------------------------------
+
+The update coefficients :math:`\alpha_t` and :math:`\beta_t` in step 4 can
+either be provided manually by the user at each step, or can be computed
+automatically from the local quadratic model.
 This is controlled by the optimizer arguments ``use_adaptive_learning_rate``
 and ``use_adaptive_momentum``.
 Note that these features don't currently work very well unless you use a very
 large batch size, and/or increase the batch size dynamically during training
 (as was done in the original K-FAC paper).
 
-Updating the damping
---------------------
+Automatic selection of update coefficients
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The procedure to automatically select the update coefficients uses the local
+quadratic model defined as:
+
+.. math::
+    q(\bm{\delta}) = l_t + \bm{g}_t^T \bm{\delta} + \frac{1}{2} \bm{\delta}^T
+    (\bm{C} + (\lambda_t + \gamma) \bm{I}) \bm{\delta},
+
+where :math:`\bm{C}` is usually the exact curvature matrix.
+To compute :math:`\alpha_t` and :math:`\beta_t`, we minimize
+:math:`q(\alpha_t \hat{\bm{g}}_t + \beta_t \bm{v}_t)` with respect to the two
+scalars, treating :math:`\hat{\bm{g}}_t` and :math:`\bm{v}_t` as fixed vectors.
+Since this is a simple two dimensional quadratic problem, and it requires only
+matrix-vector products with :math:`\bm{C}`, it can be solved efficiently.
+For further details see Section 7 of the original
+`K-FAC paper <https://arxiv.org/abs/1503.05671>`_.
+
+
+Updating the damping (7)
+------------------------
 
 The damping update is done via the Levenberg-Marquardt heuristic.
-This is done by computing the reduction ratio
-``(f(theta_new) - f(theta)) / (q(theta_new) - q_theta)``, where ``q`` is the
-quadratic model value induced by either the exact or approximate curvature
-matrix.
+This is done by computing the reduction ratio:
+
+.. math::
+    \rho = \frac{\mathcal{L}(\bm{\theta}_{t+1}) - \mathcal{L}(\bm{\theta}_{t})}
+    {q(\bm{v}_{t+1}) - q(\bm{0})}
+
+where :math:`q` is the quadratic model value induced by either the exact or
+approximate curvature matrix.
 If the optimizer uses either learning rate or momentum adaptation, or
 ``always_use_exact_qmodel_for_damping_adjustment`` is set to ``True``, the
 optimizer will use the exact curvature matrix; otherwise it will use the
 approximate curvature.
-If this value deviates too much from ``1`` we either increase or decrease the
-damping as described in Section 6.5 from the original
+If the value of :math:`\rho` deviates too much from 1 we either increase or
+decrease the damping :math:`\lambda` as described in Section 6.5 of the original
 `K-FAC paper <https://arxiv.org/abs/1503.05671>`_.
 Whether the damping is adapted, or provided by the user at each single step, is
 controlled by the optimizer argument ``use_adaptive_damping``.
+
+
+Amortizing expensive computations
+---------------------------------
+
+When running the optimizer, several of the steps involved can have
+a noticeable computational overhead.
+For this reason, the optimizer class allows these to be performed every `K`
+steps, and to cache the values across iterations.
+This has been found to work well in practice without significant drawbacks in
+training performance.
+This is applied to computing the inverse of the estimated approximate curvature
+(step 3), and to the updates of the damping (step 7).

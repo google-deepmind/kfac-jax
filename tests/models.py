@@ -475,31 +475,31 @@ NON_LINEAR_MODELS = [
         functools.partial(
             autoencoder_with_two_losses,
             layer_widths=[20, 10, 20]),
-        dict(images=(32,)),
+        dict(images=(8,)),
         1231987,
     ),
-    # (
-    #     conv_classifier(
-    #         num_classes=10,
-    #         layer_channels=[8, 16, 32]
-    #     ).init,
-    #     functools.partial(
-    #         conv_classifier_loss,
-    #         num_classes=10,
-    #         layer_channels=[8, 16, 32]),
-    #     dict(images=(32, 32, 3), labels=(10,)),
-    #     354649831,
-    # ),
+    (
+        conv_classifier(
+            num_classes=10,
+            layer_channels=[8, 16]
+        ).init,
+        functools.partial(
+            conv_classifier_loss,
+            num_classes=10,
+            layer_channels=[8, 16]),
+        dict(images=(8, 8, 3), labels=(10,)),
+        354649831,
+    ),
 ]
 
 
 LINEAR_MODELS = [
     (
-        autoencoder([100, 50, 100]).init,
+        autoencoder([20, 10, 20]).init,
         functools.partial(
             linear_squared_error_autoencoder_loss,
-            layer_widths=[100, 50, 100]),
-        dict(images=(64,)),
+            layer_widths=[20, 10, 20]),
+        dict(images=(8,)),
         1240982837,
     ),
 ]
@@ -507,13 +507,13 @@ LINEAR_MODELS = [
 
 PIECEWISE_LINEAR_MODELS = [
     (
-        autoencoder([100, 50, 100]).init,
+        autoencoder([20, 10, 20]).init,
         functools.partial(
             autoencoder_with_two_losses,
-            layer_widths=[100, 50, 100],
+            layer_widths=[20, 10, 20],
             activation=_special_relu,
         ),
-        dict(images=(64,)),
+        dict(images=(8,)),
         1231987,
     ),
 ]
