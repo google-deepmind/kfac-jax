@@ -504,8 +504,8 @@ class CurvatureEstimator(utils.Finalizable):
       self,
       rng: chex.Array,
       func_args: utils.FuncArgs,
-      exact_powers_to_cache: Optional[curvature_blocks.RealOrSequence],
-      approx_powers_to_cache: Optional[curvature_blocks.RealOrSequence],
+      exact_powers_to_cache: Optional[curvature_blocks.ScalarOrSequence],
+      approx_powers_to_cache: Optional[curvature_blocks.ScalarOrSequence],
       cache_eigenvalues: bool = False,
   ) -> StateType:
     """Initializes the state for the estimator.
@@ -690,8 +690,8 @@ class CurvatureEstimator(utils.Finalizable):
       self,
       state: StateType,
       identity_weight: chex.Numeric,
-      exact_powers: Optional[curvature_blocks.RealOrSequence],
-      approx_powers: Optional[curvature_blocks.RealOrSequence],
+      exact_powers: Optional[curvature_blocks.ScalarOrSequence],
+      approx_powers: Optional[curvature_blocks.ScalarOrSequence],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> StateType:
@@ -908,8 +908,8 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       self,
       rng: chex.Array,
       func_args: utils.FuncArgs,
-      exact_powers_to_cache: Optional[curvature_blocks.RealOrSequence],
-      approx_powers_to_cache: Optional[curvature_blocks.RealOrSequence],
+      exact_powers_to_cache: Optional[curvature_blocks.ScalarOrSequence],
+      approx_powers_to_cache: Optional[curvature_blocks.ScalarOrSequence],
       cache_eigenvalues: bool = False,
   ) -> "BlockDiagonalCurvature.State":
     if not self.finalized:
@@ -1095,8 +1095,8 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       self,
       state: "BlockDiagonalCurvature.State",
       identity_weight: Union[Sequence[chex.Numeric], chex.Numeric],
-      exact_powers: Optional[curvature_blocks.RealOrSequence],
-      approx_powers: Optional[curvature_blocks.RealOrSequence],
+      exact_powers: Optional[curvature_blocks.ScalarOrSequence],
+      approx_powers: Optional[curvature_blocks.ScalarOrSequence],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> "BlockDiagonalCurvature.State":
@@ -1283,8 +1283,8 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       self,
       state: curvature_blocks.Full.State,
       identity_weight: chex.Numeric,
-      exact_powers: Optional[curvature_blocks.RealOrSequence],
-      approx_powers: Optional[curvature_blocks.RealOrSequence],
+      exact_powers: Optional[curvature_blocks.ScalarOrSequence],
+      approx_powers: Optional[curvature_blocks.ScalarOrSequence],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> curvature_blocks.Full.State:

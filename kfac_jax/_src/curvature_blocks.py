@@ -27,9 +27,7 @@ from kfac_jax._src import utils
 import numpy as np
 
 # Types for annotation
-# This is used because pytype currently does not recognize int as numbers.Real
-Real = Union[float, int]
-RealOrSequence = Union[Real, Sequence[Real]]
+ScalarOrSequence = Union[chex.Scalar, Sequence[chex.Scalar]]
 
 # Special global variables
 # The default value that would be used for the argument
@@ -99,15 +97,15 @@ def get_default_eigen_decomposition_threshold() -> int:
 
 
 def _to_real_set(
-    number_or_sequence: Optional[RealOrSequence]
-) -> Set[Real]:
+    number_or_sequence: Optional[ScalarOrSequence]
+) -> Set[chex.Scalar]:
   """Converts the optional number or sequence to a set."""
   if number_or_sequence is None:
     return set()
   elif isinstance(number_or_sequence, (float, int)):
     return {number_or_sequence}  # pytype: disable=bad-return-type
   elif (isinstance(number_or_sequence, collections.abc.Sequence) and
-        all(isinstance(x, Real) for x in number_or_sequence)):
+        all(isinstance(x, (int, float)) for x in number_or_sequence)):
     return set(number_or_sequence)
   else:
     raise ValueError(f"Expecting a real-number or a sequence of reals, but got "
@@ -223,8 +221,8 @@ class CurvatureBlock(utils.Finalizable):
   def init(
       self,
       rng: chex.PRNGKey,
-      exact_powers_to_cache: Optional[RealOrSequence],
-      approx_powers_to_cache: Optional[RealOrSequence],
+      exact_powers_to_cache: Optional[ScalarOrSequence],
+      approx_powers_to_cache: Optional[ScalarOrSequence],
       cache_eigenvalues: bool,
   ) -> "CurvatureBlock.State":
     """Initializes the state for this block.
@@ -260,8 +258,8 @@ class CurvatureBlock(utils.Finalizable):
   def _init(
       self,
       rng: chex.PRNGKey,
-      exact_powers_to_cache: Set[Real],
-      approx_powers_to_cache: Set[Real],
+      exact_powers_to_cache: Set[chex.Scalar],
+      approx_powers_to_cache: Set[chex.Scalar],
       cache_eigenvalues: bool,
   ) -> "CurvatureBlock.State":
     """The non-public interface of ``init``."""
@@ -271,7 +269,7 @@ class CurvatureBlock(utils.Finalizable):
       state: "CurvatureBlock.State",
       vector: Sequence[chex.Array],
       identity_weight: chex.Numeric,
-      power: Real,
+      power: chex.Scalar,
       exact_power: bool,
       use_cached: bool,
   ) -> Tuple[chex.Array, ...]:
@@ -323,7 +321,7 @@ class CurvatureBlock(utils.Finalizable):
       state: "CurvatureBlock.State",
       vector: Sequence[chex.Array],
       identity_weight: chex.Numeric,
-      power: Real,
+      power: chex.Scalar,
       exact_power: bool,
       use_cached: bool,
   ) -> Tuple[chex.Array, ...]:
@@ -431,8 +429,8 @@ class CurvatureBlock(utils.Finalizable):
       self,
       state: "CurvatureBlock.State",
       identity_weight: chex.Numeric,
-      exact_powers: Optional[RealOrSequence],
-      approx_powers: Optional[RealOrSequence],
+      exact_powers: Optional[ScalarOrSequence],
+      approx_powers: Optional[ScalarOrSequence],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> "CurvatureBlock.State":
@@ -468,8 +466,8 @@ class CurvatureBlock(utils.Finalizable):
       self,
       state: "CurvatureBlock.State",
       identity_weight: chex.Numeric,
-      exact_powers: Set[Real],
-      approx_powers: Set[Real],
+      exact_powers: Set[chex.Scalar],
+      approx_powers: Set[chex.Scalar],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> "CurvatureBlock.State":
@@ -511,8 +509,8 @@ class ScaledIdentity(CurvatureBlock):
   def _init(
       self,
       rng: chex.PRNGKey,
-      exact_powers_to_cache: Set[Real],
-      approx_powers_to_cache: Set[Real],
+      exact_powers_to_cache: Set[chex.Scalar],
+      approx_powers_to_cache: Set[chex.Scalar],
       cache_eigenvalues: bool,
   ) -> CurvatureBlock.State:
     del rng, exact_powers_to_cache, approx_powers_to_cache  # Unused
@@ -525,7 +523,7 @@ class ScaledIdentity(CurvatureBlock):
       state: CurvatureBlock.State,
       vector: Sequence[chex.Array],
       identity_weight: chex.Numeric,
-      power: Real,
+      power: chex.Scalar,
       exact_power: bool,
       use_cached: bool,
   ) -> Tuple[chex.Array, ...]:
@@ -561,8 +559,8 @@ class ScaledIdentity(CurvatureBlock):
       self,
       state: CurvatureBlock.State,
       identity_weight: chex.Numeric,
-      exact_powers: Set[Real],
-      approx_powers: Set[Real],
+      exact_powers: Set[chex.Scalar],
+      approx_powers: Set[chex.Scalar],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> CurvatureBlock.State:
@@ -590,8 +588,8 @@ class Diagonal(CurvatureBlock, abc.ABC):
   def _init(
       self,
       rng: chex.PRNGKey,
-      exact_powers_to_cache: Set[Real],
-      approx_powers_to_cache: Set[Real],
+      exact_powers_to_cache: Set[chex.Scalar],
+      approx_powers_to_cache: Set[chex.Scalar],
       cache_eigenvalues: bool,
   ) -> "Diagonal.State":
     del rng
@@ -606,7 +604,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
       state: "Diagonal.State",
       vector: Sequence[chex.Array],
       identity_weight: chex.Numeric,
-      power: Real,
+      power: chex.Scalar,
       exact_power: bool,
       use_cached: bool,
   ) -> Tuple[chex.Array, ...]:
@@ -748,8 +746,8 @@ class Full(CurvatureBlock, abc.ABC):
   def _init(
       self,
       rng: chex.PRNGKey,
-      exact_powers_to_cache: Set[Real],
-      approx_powers_to_cache: Set[Real],
+      exact_powers_to_cache: Set[chex.Scalar],
+      approx_powers_to_cache: Set[chex.Scalar],
       cache_eigenvalues: bool,
   ) -> "Full.State":
     del rng
@@ -774,7 +772,7 @@ class Full(CurvatureBlock, abc.ABC):
       state: "Full.State",
       vector: Sequence[chex.Array],
       identity_weight: chex.Numeric,
-      power: Real,
+      power: chex.Scalar,
       exact_power: bool,
       use_cached: bool,
   ) -> Tuple[chex.Array, ...]:
@@ -824,8 +822,8 @@ class Full(CurvatureBlock, abc.ABC):
       self,
       state: "Full.State",
       identity_weight: chex.Numeric,
-      exact_powers: Set[Real],
-      approx_powers: Set[Real],
+      exact_powers: Set[chex.Scalar],
+      approx_powers: Set[chex.Scalar],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> "Full.State":
@@ -914,8 +912,8 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
   def _init(
       self,
       rng: chex.PRNGKey,
-      exact_powers_to_cache: Set[Real],
-      approx_powers_to_cache: Set[Real],
+      exact_powers_to_cache: Set[chex.Scalar],
+      approx_powers_to_cache: Set[chex.Scalar],
       cache_eigenvalues: bool,
   ) -> "TwoKroneckerFactored.State":
     # The extra scale is technically a constant, but in general it could be
@@ -949,7 +947,7 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       state: "TwoKroneckerFactored.State",
       vector: Sequence[chex.Array],
       identity_weight: chex.Numeric,
-      power: Real,
+      power: chex.Scalar,
       exact_power: bool,
       use_cached: bool,
   ) -> Tuple[chex.Array, ...]:
