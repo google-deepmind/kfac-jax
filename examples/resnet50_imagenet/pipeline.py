@@ -42,7 +42,7 @@ def get_config() -> config_dict.ConfigDict:
   config.experiment_kwargs = config_dict.ConfigDict(
       dict(
           config=dict(
-              l2_reg=0.0,
+              l2_reg=1e-5,
               training=dict(
                   steps=200_000,
                   epochs=None,

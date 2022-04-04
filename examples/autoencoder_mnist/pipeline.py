@@ -38,6 +38,7 @@ def get_config() -> config_dict.ConfigDict:
   config.checkpoint_dir = "/tmp/kfac_jax_jaxline/"
   config.train_checkpoint_all_hosts = False
 
+  # Experiment config.
   config.experiment_kwargs = config_dict.ConfigDict(
       dict(
           config=dict(
