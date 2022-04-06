@@ -678,7 +678,7 @@ def write_env(
   if isinstance(var, list):
     if not isinstance(val, list):
       val = [val]
-    return jax.tree_multimap(lambda x, y: write_env(env, x, y), var, val)
+    return jax.tree_map(lambda x, y: write_env(env, x, y), var, val)
   elif isinstance(var, (core.Literal, core.Var)):
     env[var] = val
   else:

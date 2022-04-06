@@ -164,16 +164,16 @@ def tf1_rmsprop(
   def tf1_scale_by_rms(decay_=0.9, epsilon_=1e-8):
     """Same as optax.scale_by_rms, but initializes second moment to one."""
     def init_fn(params):
-      nu = jax.tree_multimap(jnp.ones_like, params)  # second moment
+      nu = jax.tree_map(jnp.ones_like, params)  # second moment
       return optax.ScaleByRmsState(nu=nu)
     def _update_moment(updates, moments, decay, order):
-      return jax.tree_multimap(
+      return jax.tree_map(
           lambda g, t: (1 - decay) * (g ** order) + decay * t, updates, moments)
     def update_fn(updates, state, params=None):
       del params
       nu = _update_moment(updates, state.nu, decay_, 2)
-      updates = jax.tree_multimap(lambda g, n: g / (jnp.sqrt(n + epsilon_)),
-                                  updates, nu)
+      updates = jax.tree_map(lambda g, n: g / (jnp.sqrt(n + epsilon_)),
+                             updates, nu)
       return updates, optax.ScaleByRmsState(nu=nu)
     return optax.GradientTransformation(init_fn, update_fn)
 

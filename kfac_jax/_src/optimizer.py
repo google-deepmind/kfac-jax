@@ -805,7 +805,7 @@ class Optimizer(utils.WithStagedMethods):
       update_norm = utils.norm(delta)
 
     # Update parameters
-    params = jax.tree_multimap(jnp.add, params, delta)
+    params = jax.tree_map(jnp.add, params, delta)
 
     # Optionally compute the reduction ratio and update the damping
     if self._use_adaptive_damping:

@@ -160,7 +160,7 @@ def loop_and_parallelize_average(
       def scan_fn(accumulator, args_):
         vmap_value = vmap_fn(*args_)
         avg_value = jax.tree_map(lambda x: jnp.mean(x, axis=0), vmap_value)
-        return jax.tree_multimap(jnp.add, accumulator, avg_value), None
+        return jax.tree_map(jnp.add, accumulator, avg_value), None
 
       loop_shape = (num_parallel_chunks, parallel_size)
       loop_args = jax.tree_map(
@@ -435,7 +435,7 @@ def weighted_sum_of_objects(
     if not abstract_objects_equal(accumulator, o_i):
       raise ValueError("One or more objects do not have equivalent abstract "
                        "structure.")
-    accumulator = jax.tree_multimap(jnp.add, accumulator, scalar_mul(o_i, c_i))
+    accumulator = jax.tree_map(jnp.add, accumulator, scalar_mul(o_i, c_i))
   return accumulator
 
 
@@ -448,7 +448,7 @@ def _inner_product_float64(obj1: PyTree, obj2: PyTree) -> chex.Array:
     return jnp.dot(x, y, precision=lax.Precision.HIGHEST)
 
   with jax.experimental.enable_x64():
-    elements_inner_products = jax.tree_multimap(array_ip, obj1, obj2)
+    elements_inner_products = jax.tree_map(array_ip, obj1, obj2)
     flat_list = jax.tree_leaves(elements_inner_products)
     result = flat_list[0]
     for element_ip in flat_list[1:]:
@@ -484,7 +484,7 @@ def inner_product(
     raise ValueError("The objects do not have identical abstract structure.")
   if in_float64:
     return _inner_product_float64(obj1, obj2)
-  elements_product = jax.tree_multimap(lambda x, y: jnp.sum(x * y), obj1, obj2)
+  elements_product = jax.tree_map(lambda x, y: jnp.sum(x * y), obj1, obj2)
   return sum(jax.tree_leaves(elements_product))
 
 
@@ -587,7 +587,7 @@ def block_permuted(
 
 def norm(obj: PyTree) -> chex.Array:
   """Computes the Euclidean norm of the provided PyTree object."""
-  elements_squared_norm = jax.tree_multimap(
+  elements_squared_norm = jax.tree_map(
       lambda x: jnp.sum(jnp.square(x)), obj)
   return jnp.sqrt(sum(jax.tree_flatten(elements_squared_norm)[0]))
 
@@ -985,7 +985,7 @@ class MultiChunkAccumulator(Generic[PyTree]):
         raise ValueError("The provided `value_obj` has an empty PyTree "
                          "structure, but the accumulator has been initialized "
                          "with a non-empty PyTree object.")
-      self._accumulator = jax.tree_multimap(
+      self._accumulator = jax.tree_map(
           jnp.add, self._accumulator, value_obj)
     elif not tree_is_empty(value_obj):
       raise ValueError("The provided `value_obj` has a non-empty PyTree "
@@ -1261,7 +1261,7 @@ def staged(
           ]
           outs.append(method(instance, *args_i))
 
-        outs = jax.tree_multimap(jnp.stack, *outs)
+        outs = jax.tree_map(jnp.stack, *outs)
 
       elif instance.debug:
         outs = method(instance, *args)

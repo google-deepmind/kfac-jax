@@ -102,10 +102,10 @@ class TestTracer(parameterized.TestCase):
     for d in (data1, data2):
       outputs.append(func(d))
     if combine == "concatenate":
-      outputs = jax.tree_multimap(
+      outputs = jax.tree_map(
           lambda x, y: jnp.concatenate([x, y], axis=0), *outputs)
     elif combine == "sum":
-      outputs = jax.tree_multimap(lambda x, y: x + y, *outputs)
+      outputs = jax.tree_map(lambda x, y: x + y, *outputs)
     else:
       raise NotImplementedError()
 
