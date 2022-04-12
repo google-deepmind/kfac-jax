@@ -99,6 +99,11 @@ class LossTag(core.Primitive, Generic[T]):
     return self.get_outputs(*operands)
 
   def abstract_eval(self, *operands: chex.Array, **_) -> Tuple[chex.Array, ...]:
+    jax_version = (
+        jax.__version_info__ if hasattr(jax, "__version_info__")
+        else tuple(map(int, jax.__version__.split("."))))
+    if jax_version > (0, 3, 4):
+      return self.get_outputs(*operands), jax.core.no_effects
     return self.get_outputs(*operands)
 
   def _xla_translation(
@@ -239,6 +244,11 @@ class LayerTag(core.Primitive):
     return self.get_outputs(*operands)
 
   def abstract_eval(self, *operands: chex.Array, **_: Any) -> chex.Array:
+    jax_version = (
+        jax.__version_info__ if hasattr(jax, "__version_info__")
+        else tuple(map(int, jax.__version__.split("."))))
+    if jax_version > (0, 3, 4):
+      return self.get_outputs(*operands), jax.core.no_effects
     return self.get_outputs(*operands)
 
   def _batching(

@@ -1200,16 +1200,32 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
   def _create_blocks(self):
     # Here in order to be able to have a block together for all parameters, we
     # create a non-existing (in the original graph) generic layer tag equation.
-    self._blocks = (curvature_blocks.NaiveFull(
-        layer_tag_eq=tags.LayerTagEqn(
-            primitive=tags.generic,
-            invars=list(self._jaxpr.params_vars_flat),
-            outvars=list(self._jaxpr.params_vars_flat),
-            params={},
-            source_info=jax.core.source_info_util.new_source_info()
-        ),
-        name="ExactCurvature"
-    ),)
+    jax_version = (
+        jax.__version_info__ if hasattr(jax, "__version_info__")
+        else tuple(map(int, jax.__version__.split("."))))
+    if jax_version > (0, 3, 4):
+      self._blocks = (curvature_blocks.NaiveFull(
+          layer_tag_eq=tags.LayerTagEqn(
+              primitive=tags.generic,
+              invars=list(self._jaxpr.params_vars_flat),
+              outvars=list(self._jaxpr.params_vars_flat),
+              params={},
+              effects=jax.core.no_effects,
+              source_info=jax.core.source_info_util.new_source_info()
+          ),
+          name="ExactCurvature"
+      ),)
+    else:
+      self._blocks = (curvature_blocks.NaiveFull(
+          layer_tag_eq=tags.LayerTagEqn(
+              primitive=tags.generic,
+              invars=list(self._jaxpr.params_vars_flat),
+              outvars=list(self._jaxpr.params_vars_flat),
+              params={},
+              source_info=jax.core.source_info_util.new_source_info()  # pytype: disable=missing-parameter
+          ),
+          name="ExactCurvature"
+      ),)
 
   def _compute_losses_vjp(self, func_args):
     # For some reason pytype can't detect that this attribute exists from the
