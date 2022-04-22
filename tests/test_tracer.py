@@ -65,7 +65,7 @@ class TestTracer(parameterized.TestCase):
     data = {}
     for name, shape in data_point_shapes.items():
       rng, key = jax.random.split(rng)
-      data[name] = jax.random.uniform(key, (data_size,) + shape)
+      data[name] = jax.random.uniform(key, (data_size, *shape))
       if name == "labels":
         data[name] = jnp.argmax(data[name], axis=-1)
 
