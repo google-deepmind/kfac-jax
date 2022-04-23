@@ -548,7 +548,7 @@ class MnistExperiment(SupervisedExperiment):
         device_batch_size=device_batch_size,
         repeat=True,
         shuffle=True,
-        drop_reminder=True,
+        drop_remainder=True,
         seed=seed,
         reshuffle_each_iteration=True,
     )
@@ -568,7 +568,7 @@ class MnistExperiment(SupervisedExperiment):
         device_batch_size=device_batch_size,
         repeat=False,
         shuffle=False,
-        drop_reminder=False,
+        drop_remainder=False,
         seed=seed
     )
 

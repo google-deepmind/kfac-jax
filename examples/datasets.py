@@ -51,7 +51,7 @@ def mnist_dataset(
     device_batch_size: int,
     repeat: bool,
     shuffle: bool,
-    drop_reminder: bool,
+    drop_remainder: bool,
     seed: Optional[int] = None,
     multi_device: bool = True,
     reshuffle_each_iteration: bool = True,
@@ -66,7 +66,7 @@ def mnist_dataset(
     device_batch_size: The per-device batch size to use.
     repeat: Whether to repeat the dataset.
     shuffle: Whether to shuffle the dataset.
-    drop_reminder: Whether to drop the remainder of the dataset if the number
+    drop_remainder: Whether to drop the remainder of the dataset if the number
       of data points is not divisible by the total batch size.
     seed: Any seed to use for random pre-processing.
     multi_device: If the returned batch should take into account the number of
@@ -118,7 +118,7 @@ def mnist_dataset(
                     reshuffle_each_iteration=reshuffle_each_iteration)
   if repeat:
     ds = ds.repeat()
-  ds = ds.batch(host_batch_size, drop_remainder=drop_reminder)
+  ds = ds.batch(host_batch_size, drop_remainder=drop_remainder)
   ds = ds.map(preprocess_batch,
               num_parallel_calls=tf.data.experimental.AUTOTUNE)
   ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
