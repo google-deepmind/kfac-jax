@@ -282,6 +282,7 @@ def cached_transformation(
     auto_register_tags: bool = True,
     allow_left_out_params: bool = False,
     allow_no_losses: bool = False,
+    raise_error_on_diff_jaxpr: bool = True,
     **auto_registration_kwargs: Any,
 ) -> TransformedFunction[T, T]:
   """Caches ``transformation(preprocessed_jaxpr, func_args, *args)``.
@@ -302,6 +303,9 @@ def cached_transformation(
       tag.
     allow_no_losses: If this is set to ``False`` an error would be raised if no
       registered losses have been found when tracing the function.
+    raise_error_on_diff_jaxpr: Whether to raise an exception if the function has
+      been traced before, with different arguments, and the new Jaxpr graph
+      differs in more than just the shapes and dtypes of the Jaxpr equations.
     **auto_registration_kwargs: Any additional keyword arguments, to be passed
       to the automatic registration pass.
 
@@ -341,8 +345,8 @@ def cached_transformation(
     if not allow_no_losses and not processed_jaxpr.loss_tags:
       raise ValueError("No registered losses have been found during tracing.")
 
-    # If any previous `ProcessedJaxpr` exits verify that they are equivalent
-    if cache:
+    if cache and raise_error_on_diff_jaxpr:
+      # If any previous `ProcessedJaxpr` exists verify that they are equivalent
       ref_jaxpr, _ = cache[next(iter(cache))]
       if ref_jaxpr != processed_jaxpr:
         raise ValueError("The consecutive tracing of the provided function "
@@ -889,6 +893,7 @@ def layer_tags_vjp(
     func: utils.Func,
     params_index: int = 0,
     auto_register_tags: bool = True,
+    raise_error_on_diff_jaxpr: bool = True,
     **auto_registration_kwargs,
 ) -> ...:
   """Creates a function for primal values and tangents w.r.t. all layer tags.
@@ -910,6 +915,8 @@ def layer_tags_vjp(
       parameters.
     auto_register_tags: Whether to run an automatic layer registration on the
       function (e.g. :func:`~auto_register_tags`).
+    raise_error_on_diff_jaxpr: When tracing with different arguments, if the
+      returned jaxpr has a different graph will raise an exception.
     **auto_registration_kwargs: Any additional keyword arguments, to be passed
       to the automatic registration pass.
 
@@ -924,5 +931,6 @@ def layer_tags_vjp(
       params_index=params_index,
       auto_register_tags=auto_register_tags,
       allow_left_out_params=False,
+      raise_error_on_diff_jaxpr=raise_error_on_diff_jaxpr,
       **auto_registration_kwargs
   )

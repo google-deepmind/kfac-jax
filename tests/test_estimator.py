@@ -106,7 +106,7 @@ class TestEstimator(parameterized.TestCase):
     data = {}
     for name, shape in data_point_shapes.items():
       data_key, key = jax.random.split(data_key)
-      data[name] = jax.random.uniform(key, (data_size,) + shape)
+      data[name] = jax.random.uniform(key, (data_size, *shape))
       if name == "labels":
         data[name] = jnp.argmax(data[name], axis=-1)
 
@@ -167,7 +167,7 @@ class TestEstimator(parameterized.TestCase):
     data = {}
     for name, shape in data_point_shapes.items():
       data_key, key = jax.random.split(data_key)
-      data[name] = jax.random.uniform(key, (data_size,) + shape)
+      data[name] = jax.random.uniform(key, (data_size, *shape))
       if name == "labels":
         data[name] = jnp.argmax(data[name], axis=-1)
 
@@ -231,7 +231,7 @@ class TestEstimator(parameterized.TestCase):
     data = {}
     for name, shape in data_point_shapes.items():
       data_key, key = jax.random.split(data_key)
-      data[name] = jax.random.uniform(key, (data_size,) + shape)
+      data[name] = jax.random.uniform(key, (data_size, *shape))
       if name == "labels":
         data[name] = jnp.argmax(data[name], axis=-1)
 
@@ -300,7 +300,7 @@ class TestEstimator(parameterized.TestCase):
     data = {}
     for name, shape in data_point_shapes.items():
       data_key, key = jax.random.split(data_key)
-      data[name] = jax.random.uniform(key, (data_size,) + shape)
+      data[name] = jax.random.uniform(key, (data_size, *shape))
       if name == "labels":
         data[name] = jnp.argmax(data[name], axis=-1)
 
@@ -366,7 +366,7 @@ class TestEstimator(parameterized.TestCase):
     data = {}
     for name, shape in data_point_shapes.items():
       data_key, key = jax.random.split(data_key)
-      data[name] = jax.random.uniform(key, (data_size,) + shape)
+      data[name] = jax.random.uniform(key, (data_size, *shape))
       if name == "labels":
         data[name] = jnp.argmax(data[name], axis=-1)
 
@@ -446,7 +446,7 @@ class TestEstimator(parameterized.TestCase):
     data = {}
     for name, shape in data_point_shapes.items():
       data_key, key = jax.random.split(data_key)
-      data[name] = jax.random.uniform(key, (data_size,) + shape)
+      data[name] = jax.random.uniform(key, (data_size, *shape))
       if name == "labels":
         data[name] = jnp.argmax(data[name], axis=-1)
 
@@ -534,7 +534,7 @@ class TestEstimator(parameterized.TestCase):
     data = {}
     for name, shape in data_point_shapes.items():
       data_key, key = jax.random.split(data_key)
-      data[name] = jax.random.uniform(key, (data_size,) + shape)
+      data[name] = jax.random.uniform(key, (data_size, *shape))
       if name == "labels":
         data[name] = jnp.argmax(data[name], axis=-1)
 

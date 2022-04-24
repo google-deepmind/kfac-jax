@@ -80,10 +80,12 @@ _DEFAULT_TAG_TO_BLOCK_CTOR: MutableMapping[str, CurvatureBlockCtor] = dict(
 )
 
 
-def get_default_tag_to_block_ctor(tag_name: str) -> CurvatureBlockCtor:
+def get_default_tag_to_block_ctor(
+    tag_name: str
+) -> Optional[CurvatureBlockCtor]:
   """Returns the default curvature block constructor for the give tag name."""
   global _DEFAULT_TAG_TO_BLOCK_CTOR
-  return _DEFAULT_TAG_TO_BLOCK_CTOR[tag_name]
+  return _DEFAULT_TAG_TO_BLOCK_CTOR.get(tag_name)
 
 
 def set_default_tag_to_block_ctor(
@@ -1262,7 +1264,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
 
   def update_curvature_matrix_estimate(
       self,
-      state: curvature_blocks.Full.State,
+      state: BlockDiagonalCurvature.State,
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
       batch_size: int,
@@ -1297,18 +1299,19 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
 
   def update_cache(
       self,
-      state: curvature_blocks.Full.State,
+      state: BlockDiagonalCurvature.State,
       identity_weight: chex.Numeric,
       exact_powers: Optional[curvature_blocks.ScalarOrSequence],
       approx_powers: Optional[curvature_blocks.ScalarOrSequence],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> curvature_blocks.Full.State:
-    return self.blocks[0].update_cache(
-        state=state,
+    block_state = self.blocks[0].update_cache(
+        state=state.blocks_states[0],
         identity_weight=identity_weight,
         exact_powers=exact_powers,
         approx_powers=approx_powers,
         eigenvalues=eigenvalues,
         pmap_axis_name=pmap_axis_name,
     )
+    return BlockDiagonalCurvature.State(blocks_states=(block_state,))

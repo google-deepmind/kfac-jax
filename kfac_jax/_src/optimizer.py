@@ -101,6 +101,8 @@ class Optimizer(utils.WithStagedMethods):
       include_damping_in_quad_change: bool = False,
       damping_adaptation_interval: int = 5,
       damping_adaptation_decay: chex.Numeric = 0.9,
+      damping_lower_threshold: chex.Numeric = 0.25,
+      damping_upper_threshold: chex.Numeric = 0.75,
       always_use_exact_qmodel_for_damping_adjustment: bool = False,
       norm_constraint: Optional[chex.Numeric] = None,
       num_burnin_steps: int = 10,
@@ -200,6 +202,10 @@ class Optimizer(utils.WithStagedMethods):
       damping_adaptation_decay: Scalar. The ``damping`` parameter is multiplied
         by the ``damping_adaptation_decay`` every
         ``damping_adaptation_interval`` number of iterations. (Default: ``0.9``)
+      damping_lower_threshold: Scalar. The ``damping`` parameter is increased if
+        the reduction ratio is below this threshold. (Default: ``0.25``)
+      damping_upper_threshold: Scalar. The ``damping`` parameter is decreased if
+        the reduction ratio is below this threshold. (Default: ``0.75``)
       always_use_exact_qmodel_for_damping_adjustment: Boolean. When using
         learning rate and/or momentum adaptation, the quadratic model change
         used for damping adaption is always computed using the exact curvature
@@ -314,6 +320,8 @@ class Optimizer(utils.WithStagedMethods):
     self._include_damping_in_quad_change = include_damping_in_quad_change
     self._damping_adaptation_decay = damping_adaptation_decay
     self._damping_adaptation_interval = damping_adaptation_interval
+    self._damping_lower_threshold = damping_lower_threshold
+    self._damping_upper_threshold = damping_upper_threshold
     self._always_use_exact_qmodel_for_damping_adjustment = (
         always_use_exact_qmodel_for_damping_adjustment)
     self._norm_constraint = norm_constraint
@@ -1111,10 +1119,10 @@ class Optimizer(utils.WithStagedMethods):
     rho = (new_loss - old_loss) / quad_change
 
     # Update damping
-    should_decrease = rho > 0.75
-    decreased_damping = current_damping * self.damping_decay_factor
-    should_increase = rho < 0.25
+    should_increase = rho < self._damping_lower_threshold
     increased_damping = current_damping / self.damping_decay_factor
+    should_decrease = rho > self._damping_upper_threshold
+    decreased_damping = current_damping * self.damping_decay_factor
 
     # This is basically an if-else statement
     damping = (should_decrease * decreased_damping +
