@@ -271,9 +271,10 @@ class SupervisedExperiment(experiment.AbstractExperiment):
 
   def initialize_state(self):
     """Initializes all of the experiment's state variables."""
-    init_rng, preprocess_rng = jax.random.split(self.init_rng)
+    init_rng, seed_rng = jax.random.split(self.init_rng)
     init_rng = kfac_jax.utils.replicate_all_local_devices(init_rng)
-    preprocess_rng = jax.random.fold_in(preprocess_rng, jax.process_index())
+    seed_rng = jax.random.fold_in(seed_rng, jax.process_index())
+    seed = int(seed_rng[0])
 
     # Initialize and load dataset
     if self.mode == "train":
@@ -281,7 +282,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
           datasets.dataset_as_generator(
               self._build_train_input,
               split="train",
-              seed=int(preprocess_rng[0]),
+              seed=seed,
               device_batch_size=self.train_per_device_batch_size,
           )
       )
@@ -293,12 +294,12 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       self._eval_input = dict(
           train=self._build_eval_input(
               split="train",
-              seed=int(preprocess_rng[0]),
+              seed=seed,
               device_batch_size=self.eval_per_device_batch_size
           ),
           test=self._build_eval_input(
               split="test",
-              seed=int(preprocess_rng[0]),
+              seed=seed,
               device_batch_size=self.eval_per_device_batch_size
           ),
       )

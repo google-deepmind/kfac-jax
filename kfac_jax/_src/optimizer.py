@@ -121,6 +121,7 @@ class Optimizer(utils.WithStagedMethods):
       default_batch_size_extractor,
       pmap_axis_name: str = "kfac_axis",
       forbid_setting_attributes_after_finalize: bool = True,
+      modifiable_attribute_exceptions: Sequence[str] = (),
       include_norms_in_stats: bool = False,
   ):
     """Initializes the K-FAC optimizer with the provided settings.
@@ -266,6 +267,10 @@ class Optimizer(utils.WithStagedMethods):
         they have been compiled. However, if you are extending this class, and
         clearly understand the risks of modifying attributes, setting this to
         ``False`` will remove the restriction. (Default: ``True``)
+      modifiable_attribute_exceptions: Sequence of strings. Gives a list
+        of names for attributes that can be modified after finalization even
+        when ``forbid_setting_attributes_after_finalize`` is ``True``.
+        (Default: ``()``)
       include_norms_in_stats: Boolean. It True, the vector norms of the
         gradient, preconditioned gradient, and parameter update are included in
         the statistics returned by the step function. (Default: ``False``)
@@ -276,6 +281,7 @@ class Optimizer(utils.WithStagedMethods):
         debug=debug,
         forbid_setting_attributes_after_finalize=
         forbid_setting_attributes_after_finalize,
+        excluded_attribute_names=modifiable_attribute_exceptions,
     )
     if use_adaptive_damping and initial_damping is None:
       raise ValueError("When use_adaptive_damping is True you must provide a "
