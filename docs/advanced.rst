@@ -11,8 +11,8 @@ optimizing, as this determines the exact form of the curvature matrix.
 Additionally, it needs to know which parameters are grouped together into the
 same block, and what type of layer that is, in order to select
 appropriate block approximation.
-As demonstrated in the quickstart section in :doc:<guides>_ one must explicitly
-register their loss function via library calls.
+As demonstrated in the quickstart section in :doc:`guides <guides>` one must
+explicitly register their loss function via library calls.
 Layers are detected and registered automatically by default, however there is a
 mechanism to do it manually for particular layers.
 
