@@ -277,14 +277,14 @@ class ProcessedJaxpr(utils.Finalizable):
 
 def cached_transformation(
     func: utils.Func,
-    transformation: FunctionTransformation[T, T],
+    transformation: FunctionTransformation[T],
     params_index: int = 0,
     auto_register_tags: bool = True,
     allow_left_out_params: bool = False,
     allow_no_losses: bool = False,
     raise_error_on_diff_jaxpr: bool = True,
     **auto_registration_kwargs: Any,
-) -> TransformedFunction[T, T]:
+) -> TransformedFunction[T]:
   """Caches ``transformation(preprocessed_jaxpr, func_args, *args)``.
 
   The caching mechanism uses the ``func_args`` PyTree, dtypes and shapes for

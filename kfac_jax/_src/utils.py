@@ -17,7 +17,7 @@ import dataclasses
 import functools
 import numbers
 import operator
-from typing import Any, Callable, Generic, Iterable, Iterator, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 import chex
 import jax
@@ -36,9 +36,9 @@ Params = Any
 Batch = Any
 FuncState = Any
 FuncAux = Any
-PyTreeDef = Any
+PyTreeDef = chex.PyTreeDef
 PyTreeType = Any
-PyTree = TypeVar("PyTree", bound=PyTreeType)
+PyTree = chex.ArrayTree
 FuncArgs = Sequence[PyTree]
 Func = Callable[..., Any]
 ValueFunc = Callable[..., chex.Array]
@@ -861,27 +861,26 @@ def pytree_dataclass(class_type: Type[Any]) -> Type[Any]:
 class WeightedMovingAverage:
   """A wrapped class for an arbitrary weighted moving average."""
   weight: chex.Array
-  raw_value: chex.Array
+  raw_value: PyTree
 
   @property
-  def value(self) -> chex.Array:
-    """The value of the underlying array."""
-    return self.raw_value / self.weight
-
-  @property
-  def shape(self) -> chex.Shape:
-    """The shape of the underlying array."""
-    return self.raw_value.shape
+  def value(self) -> PyTree:
+    """The value of the underlying arrays data structure."""
+    return jax.tree_map(lambda x: x / self.weight, self.raw_value)
 
   def update(
       self,
-      value: chex.Array,
+      value: PyTree,
       old_weight_multiplier: chex.Numeric,
       new_weight: chex.Numeric,
   ) -> None:
     """Updates the underlying array and weight accordingly."""
     self.weight = self.weight * old_weight_multiplier + new_weight
-    self.raw_value = self.raw_value * old_weight_multiplier + value * new_weight
+    self.raw_value = jax.tree_map(
+        lambda x, y: x * old_weight_multiplier + y * new_weight,
+        self.raw_value,
+        value,
+    )
 
   def sync(self, pmap_axis_name: Optional[str]) -> None:
     """Syncs the underlying array across devices."""
@@ -889,12 +888,18 @@ class WeightedMovingAverage:
 
   @classmethod
   def zero(cls, shape: chex.Shape) -> "WeightedMovingAverage":
-    """Initializes a `WeightedMovingAverage` object with zeros."""
+    """Initializes a `WeightedMovingAverage` with a single array of zeros."""
     return WeightedMovingAverage(
-        weight=jnp.zeros([]), raw_value=jnp.zeros(shape))  # pytype: disable=wrong-keyword-args
+        weight=jnp.zeros([]), raw_value=jnp.zeros(shape))
+
+  @classmethod
+  def zeros_like(cls, value: PyTree) -> "WeightedMovingAverage":
+    """Initializes a `WeightedMovingAverage` with zeros structure like `value`."""
+    return WeightedMovingAverage(
+        weight=jnp.zeros([]), raw_value=jax.tree_map(jnp.zeros_like, value))
 
 
-class MultiChunkAccumulator(Generic[PyTree]):
+class MultiChunkAccumulator:
   """Statistics accumulation, abstracted over multiple chunks."""
 
   def __init__(
@@ -998,7 +1003,7 @@ class MultiChunkAccumulator(Generic[PyTree]):
       cls,
       obj: PyTree,
       multi_device: bool
-  ) -> "MultiChunkAccumulator[PyTree]":
+  ) -> "MultiChunkAccumulator":
     """Creates a zero initialized accumulator as `obj`."""
     if multi_device:
       value_obj = pmap_zeros_like(obj) if not tree_is_empty(obj) else obj
@@ -1009,7 +1014,7 @@ class MultiChunkAccumulator(Generic[PyTree]):
     return cls(value_obj, weight, multi_device)
 
   @classmethod
-  def empty(cls, multi_device: bool) -> "MultiChunkAccumulator[PyTree]":
+  def empty(cls, multi_device: bool) -> "MultiChunkAccumulator":
     """Creates an empty accumulator."""
     weight = jnp.zeros([], dtype=jnp.int32)
     if multi_device:

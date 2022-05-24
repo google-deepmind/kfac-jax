@@ -1042,7 +1042,7 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       if self.parameters_canonical_order[0] != 0:
         inputs_factor = utils.block_permuted(
             state.inputs_factor.value,
-            block_sizes=[state.inputs_factor.shape[0] - 1, 1],
+            block_sizes=[state.inputs_factor.raw_value.shape[0] - 1, 1],
             block_order=(1, 0),
         )
       else:
@@ -1536,7 +1536,8 @@ class ScaleAndShiftDiagonal(Diagonal):
     assert utils.first_dim_is_size(batch_size, x, dy)
 
     if self.has_scale:
-      assert state.diagonal_factors[0].shape == self.parameters_shapes[0]
+      assert (state.diagonal_factors[0].raw_value.shape ==
+              self.parameters_shapes[0])
       scale_shape = estimation_data["params"][0].shape
       full_scale_shape = (1,) * (len(x.shape) - len(scale_shape)) + scale_shape
       axis = [i for i, s in enumerate(full_scale_shape) if s == 1 and i != 0]
@@ -1545,7 +1546,8 @@ class ScaleAndShiftDiagonal(Diagonal):
       state.diagonal_factors[0].update(scale_diag_update, ema_old, ema_new)
 
     if self.has_shift:
-      assert state.diagonal_factors[-1].shape == self.parameters_shapes[-1]
+      assert (state.diagonal_factors[-1].raw_value.shape ==
+              self.parameters_shapes[-1])
       shift_shape = estimation_data["params"][-1].shape
       full_shift_shape = (1,) * (len(x.shape) - len(shift_shape)) + shift_shape
       axis = [i for i, s in enumerate(full_shift_shape) if s == 1 and i != 0]
