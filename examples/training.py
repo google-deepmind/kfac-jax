@@ -270,7 +270,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     )
 
   def initialize_state(self):
-    """Initializes all of the experiment's state variables."""
+    """Initializes all the experiment's state variables."""
     init_rng, seed_rng = jax.random.split(self.init_rng)
     init_rng = kfac_jax.utils.replicate_all_local_devices(init_rng)
     seed_rng = jax.random.fold_in(seed_rng, jax.process_index())
@@ -349,7 +349,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       rng: jnp.ndarray,
       **unused_args: Any
   ) -> Dict[str, jnp.ndarray]:
-    del global_step  # Instead we use the self._python_step
+    del global_step  # Instead, we use the self._python_step
 
     # Perform optimizer step
     result = self.optimizer.step(
