@@ -752,7 +752,7 @@ class Optimizer(utils.WithStagedMethods):
 
     return state, func_state
 
-  @functools.partial(utils.staged, donate_argnums=tuple(range(5)))
+  @functools.partial(utils.staged, donate_argnums=(0, 1, 4))
   def _step(
       self,
       params: utils.Params,
