@@ -690,6 +690,15 @@ class Optimizer(utils.WithStagedMethods):
         step_counter=jnp.asarray(0, dtype=jnp.int32)
     )
 
+  def _finalize(
+      self,
+      params: utils.Params,
+      rng: chex.PRNGKey,
+      batch: utils.Batch,
+      func_state: Optional[utils.FuncState] = None,
+  ):
+    return jax.make_jaxpr(self._init)(params, rng, batch, func_state)
+
   def init(
       self,
       params: utils.Params,
@@ -921,11 +930,9 @@ class Optimizer(utils.WithStagedMethods):
       if batch is not None:
         fake_batch = jax.tree_map(jnp.zeros_like, batch)
       else:
-        assert data_iterator is not None
         fake_batch, data_iterator = utils.fake_element_from_iterator(
             data_iterator)
-      rng, finalize_rng = self._rng_split(rng, 2)
-      self.finalize(params, finalize_rng, fake_batch, func_state)
+      self.finalize(params, rng, fake_batch, func_state)
 
     step_counter_int = self.verify_args_and_get_step_counter(
         step_counter=state.step_counter,
