@@ -410,7 +410,8 @@ class SupervisedExperiment(experiment.AbstractExperiment):
         has_state=self.has_func_state,
         has_rng=self.has_rng
     )
-    _, stats = self.eval_model_func(*func_args)
+    loss, stats = self.eval_model_func(*func_args)
+    stats["loss"] = loss
     stats["progress"] = self.progress(global_step, opt_state)
     return kfac_jax.utils.pmean_if_pmap(stats, "eval_axis")
 
