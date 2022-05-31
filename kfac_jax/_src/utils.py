@@ -91,7 +91,10 @@ def fake_element_from_iterator(
   fake_element = jax.tree_map(np.zeros_like, init_element)
   def equivalent_iterator() -> Iterator[PyTree]:
     yield init_element
-    yield from iterator
+    # For some reason unknown to us, "yield from" can fail in certain
+    # circumstances
+    while True:
+      yield next(iterator)
   return fake_element, equivalent_iterator()
 
 
