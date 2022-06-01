@@ -13,7 +13,7 @@
 # limitations under the License.
 """Utilities for setting up different optimizers."""
 import functools
-from typing import Any, Callable, Iterator, Mapping, Optional, Tuple, Type, Union
+from typing import Any, Callable, Iterator, Mapping, Optional, Sequence, Tuple, Type, Union
 
 from absl import logging
 import chex
@@ -266,16 +266,61 @@ def cosine_schedule(
   """A cosine schedule described in the TAT paper."""
   if (steps is None) == (epochs is None):
     raise ValueError("Only one of `steps` and `epochs` can be set.")
+
   warmup_steps = warmup_epochs * dataset_size / train_total_batch_size
+
   if epochs is not None:
     total_steps = epochs * dataset_size / train_total_batch_size
   else:
     total_steps = steps
+
   scaled_step = (jnp.maximum(global_step - warmup_steps, 0) /
                  (total_steps - warmup_steps))
+
   warmup_factor = jnp.minimum(1., global_step / warmup_steps)
   factor = (1.0 + jnp.cos(jnp.pi * scaled_step)) / 2
+
   return initial_learning_rate * warmup_factor * factor
+
+
+def stepwise_schedule(
+    global_step: chex.Numeric,
+    dataset_size: int,
+    train_total_batch_size: int,
+    lr_decay_factors: Sequence[float],
+    initial_learning_rate: float,
+    epoch_boundaries: Optional[Sequence[float]] = None,
+    warmup_epochs: Optional[int] = None,
+    step_boundaries: Optional[Sequence[float]] = None,
+    warmup_steps: Optional[int] = None,
+    **_: Any,
+) -> chex.Array:
+  """A basic stepwise schedule."""
+
+  if (epoch_boundaries is None) == (step_boundaries is None):
+    raise ValueError("Only one of `epoch_boundaries` and `step_boundaries` can "
+                     "be set.")
+
+  if (warmup_epochs is None) == (warmup_steps is None):
+    raise ValueError("Only one of `warmup_epochs` and `warmup_steps` can be "
+                     "set.")
+
+  steps_per_epoch = dataset_size / train_total_batch_size
+  current_epoch = global_step / steps_per_epoch
+
+  if step_boundaries is None:
+    step_boundaries = jnp.array(epoch_boundaries) * steps_per_epoch
+  else:
+    step_boundaries = jnp.array(step_boundaries)
+
+  values = jnp.array(lr_decay_factors) * initial_learning_rate
+  index = jnp.sum(step_boundaries <= global_step)
+  lr = jnp.take(values, index)
+
+  if warmup_steps is None:
+    return lr * jnp.minimum(1., current_epoch / warmup_epochs)
+  else:
+    return lr * jnp.minimum(1., global_step / warmup_steps)
 
 
 def construct_schedule(
@@ -291,6 +336,8 @@ def construct_schedule(
     return functools.partial(kfac_resnet50_schedule, **kwargs)
   elif name == "cosine":
     return functools.partial(cosine_schedule, **kwargs)
+  elif name == "stepwise":
+    return functools.partial(stepwise_schedule, **kwargs)
   else:
     raise NotImplementedError(name)
 
