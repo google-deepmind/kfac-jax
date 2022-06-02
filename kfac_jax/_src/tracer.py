@@ -410,7 +410,6 @@ def construct_compute_losses_inputs(
     write = functools.partial(tgm.write_env, env)
 
     # Bind args and consts to environment
-    write(jax.core.unitvar, jax.core.unit)
     write(jaxpr.invars, flat_args)
     write(jaxpr.constvars, consts)
 
@@ -639,7 +638,6 @@ def _layer_tag_vjp(
     write = functools.partial(tgm.write_env, env)
 
     # Bind args and consts to environment
-    write(jax.core.unitvar, jax.core.unit)
     write(processed_jaxpr.jaxpr.invars, jax.tree_leaves(own_func_args))
     write(processed_jaxpr.jaxpr.constvars, processed_jaxpr.consts)
 
@@ -683,12 +681,10 @@ def _layer_tag_vjp(
         var = [var]
       assert isinstance(var, list)
       for v in var:
-        if (not isinstance(v, (jax.core.Literal, jax.core.UnitVar)) and
-            v in aux):
+        if not isinstance(v, jax.core.Literal) and v in aux:
           env[v] = env[v] + aux[v]
 
     # Bind args and consts to environment
-    write(jax.core.unitvar, jax.core.unit)
     write(processed_jaxpr.jaxpr.invars, jax.tree_leaves(own_func_args))
     write(processed_jaxpr.jaxpr.constvars, processed_jaxpr.consts)
 

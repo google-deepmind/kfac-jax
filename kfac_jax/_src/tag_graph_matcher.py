@@ -749,12 +749,10 @@ def broadcast_merger(f: utils.Func) -> utils.Func:
 
     # Bind args and consts to environment
     flat_args = jax.tree_flatten(func_args)[0]
-    write(core.unitvar, core.unit)
     write(jaxpr.invars, flat_args)
     write(jaxpr.constvars, consts)
 
     # Bind args and consts to environment
-    write(core.unitvar, core.unit)
     write(jaxpr.invars, flat_args)
     write(jaxpr.constvars, consts)
 
@@ -1161,7 +1159,6 @@ def auto_register_tags(
         env[var] = val
 
     # Bind args and consts to environment
-    write(core.unitvar, core.unit)
     write(graph.jaxpr.invars, flat_args)
     write(graph.jaxpr.constvars, graph.consts)
 
