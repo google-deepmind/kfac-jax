@@ -161,7 +161,7 @@ class ImplicitExactCurvature:
   def _multiply_loss_fisher_factor(
       cls,
       losses: Sequence[loss_functions.NegativeLogProbLoss],
-      loss_inner_vectors: Sequence[Sequence[chex.Array]]
+      loss_inner_vectors: Sequence[chex.Array],
   ) -> Tuple[Tuple[chex.Array, ...], ...]:
     """Multiplies the vectors with the Fisher factors of each loss.
 
@@ -175,14 +175,14 @@ class ImplicitExactCurvature:
       losses.
     """
     assert len(losses) == len(loss_inner_vectors)
-    return tuple(loss.multiply_fisher_factor(*vec)
+    return tuple(loss.multiply_fisher_factor(vec)
                  for loss, vec in zip(losses, loss_inner_vectors))
 
   @classmethod
   def _multiply_loss_ggn_factor(
       cls,
       losses: Sequence[loss_functions.LossFunction],
-      loss_inner_vectors: Sequence[Sequence[chex.Array]]
+      loss_inner_vectors: Sequence[chex.Array],
   ) -> Tuple[Tuple[chex.Array, ...], ...]:
     """Multiplies the vectors with the GGN factors of each loss.
 
@@ -195,7 +195,7 @@ class ImplicitExactCurvature:
       The product of all vectors with the factors of the GGN of each the
       losses.
     """
-    return tuple(loss.multiply_ggn_factor(*vec)
+    return tuple(loss.multiply_ggn_factor(vec)
                  for loss, vec in zip(losses, loss_inner_vectors))
 
   @classmethod
@@ -396,7 +396,7 @@ class ImplicitExactCurvature:
   def multiply_fisher_factor(
       self,
       func_args: utils.FuncArgs,
-      loss_inner_vectors: Sequence[Sequence[chex.Array]],
+      loss_inner_vectors: Sequence[chex.Array],
   ) -> utils.Params:
     """Multiplies the vector with the factor of the Fisher matrix.
 
@@ -410,7 +410,7 @@ class ImplicitExactCurvature:
       The product ``Bv``, where ``F = BB^T``.
     """
     losses: Sequence[loss_functions.NegativeLogProbLoss]
-    losses, vjp = self._loss_tags_vjp(*func_args)
+    losses, vjp = self._loss_tags_vjp(func_args)
     if any(not isinstance(l, loss_functions.NegativeLogProbLoss)
            for l in losses):
       raise ValueError("To use `multiply_fisher` all registered losses must "
@@ -437,7 +437,7 @@ class ImplicitExactCurvature:
     Returns:
       The product ``Bv``, where ``G = BB^T``.
     """
-    losses, vjp = self._loss_tags_vjp(*func_args)
+    losses, vjp = self._loss_tags_vjp(func_args)
     fisher_factor_transpose_vectors = self._multiply_loss_ggn_factor(
         losses, loss_inner_vectors)
     vectors = vjp(fisher_factor_transpose_vectors)
@@ -504,7 +504,7 @@ class CurvatureEstimator(utils.Finalizable):
   @abc.abstractmethod
   def init(
       self,
-      rng: chex.Array,
+      rng: chex.PRNGKey,
       func_args: utils.FuncArgs,
       exact_powers_to_cache: Optional[curvature_blocks.ScalarOrSequence],
       approx_powers_to_cache: Optional[curvature_blocks.ScalarOrSequence],

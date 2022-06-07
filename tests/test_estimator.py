@@ -32,6 +32,13 @@ NON_LINEAR_MODELS_AND_CURVATURE_TYPE = [
 ]
 
 
+LINEAR_MODELS_AND_CURVATURE_TYPE = [
+    model + ("ggn",) for model in models.LINEAR_MODELS
+] + [
+    model + ("fisher",) for model in models.LINEAR_MODELS
+]
+
+
 PIECEWISE_LINEAR_MODELS_AND_CURVATURE = [
     model + ("ggn",) for model in models.PIECEWISE_LINEAR_MODELS
 ] + [
@@ -149,14 +156,14 @@ class TestEstimator(parameterized.TestCase):
     # Compare
     self.assertAllClose(matrix, explicit_exact_matrix)
 
-  @parameterized.parameters(models.NON_LINEAR_MODELS)
+  @parameterized.parameters(NON_LINEAR_MODELS_AND_CURVATURE_TYPE)
   def test_block_diagonal_full(
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., chex.Array],
       data_point_shapes: Mapping[str, chex.Shape],
       seed: int,
-      curvature_type: str = "fisher",
+      curvature_type: str,
       data_size: int = 4,
   ):
     """Tests that the block diagonal full is equal to the explicit curvature."""
@@ -282,14 +289,14 @@ class TestEstimator(parameterized.TestCase):
       d = d + block.shape[0]
     self.assertEqual(d, hessian.shape[0])
 
-  @parameterized.parameters(models.NON_LINEAR_MODELS)
+  @parameterized.parameters(NON_LINEAR_MODELS_AND_CURVATURE_TYPE)
   def test_diagonal(
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., chex.Array],
       data_point_shapes: Mapping[str, chex.Shape],
       seed: int,
-      curvature_type: str = "fisher",
+      curvature_type: str,
       data_size: int = 4,
   ):
     """Tests that the diagonal estimation is the diagonal of the full."""
@@ -348,7 +355,7 @@ class TestEstimator(parameterized.TestCase):
     for diagonal, block in zip(diagonals, blocks):
       self.assertAllClose(diagonal, jnp.diag(jnp.diag(block)))
 
-  @parameterized.parameters(models.LINEAR_MODELS)
+  @parameterized.parameters(LINEAR_MODELS_AND_CURVATURE_TYPE)
   def test_kronecker_factored(
       self,
       init_func: Callable[..., models.hk.Params],
@@ -421,6 +428,12 @@ class TestEstimator(parameterized.TestCase):
       (
           dict(images=(32, 32, 3), labels=(10,)),
           1230971,
+          "ggn",
+      ),
+      (
+          dict(images=(32, 32, 3), labels=(10,)),
+          1230971,
+          "fisher",
       ),
   ])
   def test_eigenvalues(
@@ -508,13 +521,19 @@ class TestEstimator(parameterized.TestCase):
       (
           dict(images=(32, 32, 3), labels=(10,)),
           1230971,
+          "ggn",
+      ),
+      (
+          dict(images=(32, 32, 3), labels=(10,)),
+          1230971,
+          "fisher",
       ),
   ])
   def test_matmul(
       self,
       data_point_shapes: Mapping[str, chex.Shape],
       seed: int,
-      curvature_type: str = "fisher",
+      curvature_type: str,
       data_size: int = 4,
       e: float = 1.0,
   ):
@@ -596,6 +615,63 @@ class TestEstimator(parameterized.TestCase):
       m_i_plus_eye = block_matrices[i] + e * jnp.eye(block_matrices[i].shape[0])
       computed2 = jnp.linalg.solve(m_i_plus_eye, v_i_flat)
       self.assertAllClose(computed2, r2_i_flat, atol=1e-5, rtol=1e-4)
+
+  @parameterized.parameters([
+      (
+          dict(images=(32, 32, 3), labels=(10,)),
+          1230971,
+          "ggn",
+      ),
+      (
+          dict(images=(32, 32, 3), labels=(10,)),
+          1230971,
+          "fisher",
+      ),
+  ])
+  def test_implicit_factor_products(
+      self,
+      data_point_shapes: Mapping[str, chex.Shape],
+      seed: int,
+      curvature_type: str,
+      data_size: int = 4,
+  ):
+    """Tests that the products of the curvature factors are correct."""
+    num_classes = data_point_shapes["labels"][0]
+    init_func = models.conv_classifier(
+        num_classes=num_classes, layer_channels=[8, 16, 32]).init
+    model_func = functools.partial(
+        models.conv_classifier_loss,
+        num_classes=num_classes,
+        layer_channels=[8, 16, 32])
+
+    rng_key = jax.random.PRNGKey(seed)
+    init_key1, init_key2, data_key = jax.random.split(rng_key, 3)
+
+    # Generate data
+    data = {}
+    for name, shape in data_point_shapes.items():
+      data_key, key = jax.random.split(data_key)
+      data[name] = jax.random.uniform(key, (data_size, *shape))
+      if name == "labels":
+        data[name] = jnp.argmax(data[name], axis=-1)
+
+    params = init_func(init_key1, data)
+    func_args = (params, data)
+    estimator = kfac_jax.ImplicitExactCurvature(model_func)
+
+    v = init_func(init_key2, data)
+    if curvature_type == "fisher":
+      c_factor_v = estimator.multiply_fisher_factor_transpose(func_args, v)
+      c_v_1 = estimator.multiply_fisher_factor(func_args, c_factor_v)
+      c_v_2 = estimator.multiply_fisher(func_args, v)
+    elif curvature_type == "ggn":
+      c_factor_v = estimator.multiply_ggn_factor_transpose(func_args, v)
+      c_v_1 = estimator.multiply_ggn_factor(func_args, c_factor_v)
+      c_v_2 = estimator.multiply_ggn(func_args, v)
+    else:
+      raise NotImplementedError()
+
+    self.assertAllClose(c_v_1, c_v_2, atol=1e-6, rtol=1e-6)
 
 
 if __name__ == "__main__":

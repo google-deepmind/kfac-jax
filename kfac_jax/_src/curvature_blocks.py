@@ -1539,8 +1539,7 @@ class ScaleAndShiftDiagonal(Diagonal):
       assert (state.diagonal_factors[0].raw_value.shape ==
               self.parameters_shapes[0])
       scale_shape = estimation_data["params"][0].shape
-      full_scale_shape = (1,) * (len(x.shape) - len(scale_shape)) + scale_shape
-      axis = [i for i, s in enumerate(full_scale_shape) if s == 1 and i != 0]
+      axis = range(x.ndim)[1:(x.ndim - len(scale_shape))]
       d_scale = jnp.sum(x * dy, axis=tuple(axis))
       scale_diag_update = jnp.sum(d_scale * d_scale, axis=0) / batch_size
       state.diagonal_factors[0].update(scale_diag_update, ema_old, ema_new)
@@ -1549,8 +1548,7 @@ class ScaleAndShiftDiagonal(Diagonal):
       assert (state.diagonal_factors[-1].raw_value.shape ==
               self.parameters_shapes[-1])
       shift_shape = estimation_data["params"][-1].shape
-      full_shift_shape = (1,) * (len(x.shape) - len(shift_shape)) + shift_shape
-      axis = [i for i, s in enumerate(full_shift_shape) if s == 1 and i != 0]
+      axis = range(x.ndim)[1:(x.ndim - len(shift_shape))]
       d_shift = jnp.sum(dy, axis=tuple(axis))
       shift_diag_update = jnp.sum(d_shift * d_shift, axis=0) / batch_size
       state.diagonal_factors[-1].update(shift_diag_update, ema_old, ema_new)
@@ -1589,8 +1587,7 @@ class ScaleAndShiftFull(Full):
     if self._has_scale:
       # Scale tangent
       scale_shape = estimation_data["params"][0].shape
-      full_scale_shape = (1,) * (len(x.shape) - len(scale_shape)) + scale_shape
-      axis = [i for i, s in enumerate(full_scale_shape) if s == 1 and i != 0]
+      axis = range(x.ndim)[1:(x.ndim - len(scale_shape))]
       d_scale = jnp.sum(x * dy, axis=tuple(axis))
       d_scale = d_scale.reshape([batch_size, -1])
       tangents.append(d_scale)
@@ -1598,8 +1595,7 @@ class ScaleAndShiftFull(Full):
     if self._has_shift:
       # Shift tangent
       shift_shape = estimation_data["params"][-1].shape
-      full_shift_shape = (1,) * (len(x.shape) - len(shift_shape)) + shift_shape
-      axis = [i for i, s in enumerate(full_shift_shape) if s == 1 and i != 0]
+      axis = range(x.ndim)[1:(x.ndim - len(shift_shape))]
       d_shift = jnp.sum(dy, axis=tuple(axis))
       d_shift = d_shift.reshape([batch_size, -1])
       tangents.append(d_shift)
