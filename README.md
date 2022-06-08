@@ -208,7 +208,7 @@ To cite this repository:
   author = {Aleksandar Botev and James Martens},
   title = {{KFAC-JAX}},
   url = {http://github.com/deepmind/kfac-jax},
-  version = {0.0.1},
+  version = {0.0.2},
   year = {2022},
 }
 ```
