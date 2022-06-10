@@ -76,6 +76,7 @@ class Optimizer(utils.WithStagedMethods):
       data_seen: The number of training cases that the optimizer has processed.
       step_counter: An integer giving the current step number :math:`t`.
     """
+    optax_state: chex.ArrayTree
     velocities: utils.Params
     estimator_state: curvature_estimator.BlockDiagonalCurvature.State
     damping: Optional[chex.Array]
@@ -89,6 +90,7 @@ class Optimizer(utils.WithStagedMethods):
       value_func_has_aux: bool = False,
       value_func_has_state: bool = False,
       value_func_has_rng: bool = False,
+      internal_optimizer = None,
       use_adaptive_learning_rate: bool = False,
       learning_rate_schedule: Optional[ScheduleType] = None,
       use_adaptive_momentum: bool = False,
@@ -298,6 +300,8 @@ class Optimizer(utils.WithStagedMethods):
     if use_adaptive_damping and damping_schedule is not None:
       raise ValueError("If you are using adaptive damping than "
                        "`damping_schedule` should be None.")
+    # Flip input gradients to internal optimizer, because kfac will return param-deltas (~= -gradient)
+    self._internal_optimizer = optax.chain(optax.scale(-1), internal_optimizer or optax.sgd(learning_rate_schedule))
     self._value_and_grad_func = value_and_grad_func
     self._value_func_has_aux = value_func_has_aux
     self._value_func_has_state = value_func_has_state
@@ -669,6 +673,7 @@ class Optimizer(utils.WithStagedMethods):
   ) -> "Optimizer.State":
     """A staged function to initialize the optimizer state ."""
     return Optimizer.State(
+        optax_state=self._internal_optimizer.init(params),
         velocities=jax.tree_map(jnp.zeros_like, params),
         estimator_state=self._estimator.init(
             rng=rng,
@@ -828,7 +833,9 @@ class Optimizer(utils.WithStagedMethods):
       update_norm = utils.norm(delta)
 
     # Update parameters
-    params = jax.tree_map(jnp.add, params, delta)
+    # params = jax.tree_map(jnp.add, params, delta)
+    state.optax_state = self._internal_optimizer.update(delta, state.optax_state, params)
+    params = self._internal_optimizer.apply_updates(params, delta)
 
     # Optionally compute the reduction ratio and update the damping
     if self._use_adaptive_damping:
