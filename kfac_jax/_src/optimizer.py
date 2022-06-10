@@ -19,6 +19,7 @@ import chex
 import jax
 from jax import lax
 import jax.numpy as jnp
+import optax
 
 from kfac_jax._src import curvature_estimator
 from kfac_jax._src import utils
@@ -833,9 +834,8 @@ class Optimizer(utils.WithStagedMethods):
       update_norm = utils.norm(delta)
 
     # Update parameters
-    # params = jax.tree_map(jnp.add, params, delta)
-    state.optax_state = self._internal_optimizer.update(delta, state.optax_state, params)
-    params = self._internal_optimizer.apply_updates(params, delta)
+    delta, state.optax_state = self._internal_optimizer.update(delta, state.optax_state, params)
+    params = jax.tree_map(jnp.add, params, delta)
 
     # Optionally compute the reduction ratio and update the damping
     if self._use_adaptive_damping:
