@@ -41,11 +41,11 @@ def sigmoid_cross_entropy(
     logits: chex.Array,
     labels: chex.Array,
     weight: float = 1.0,
-    # register_loss: bool = True,
+    register_loss: bool = True,
 ) -> chex.Array:
   """Sigmoid cross-entropy loss."""
-  # if register_loss:
-  kfac_jax.register_sigmoid_cross_entropy_loss(logits, labels, weight)
+  if register_loss:
+    kfac_jax.register_sigmoid_cross_entropy_loss(logits, labels, weight)
   # Code is copied from Tensorflow.
   zeros = jnp.zeros_like(logits)
   relu_logits = jnp.where(logits >= zeros, logits, zeros)
@@ -58,11 +58,11 @@ def softmax_cross_entropy(
     logits: chex.Array,
     labels: chex.Array,
     weight: float = 1.0,
-    # register_loss: bool = True,
+    register_loss: bool = True,
 ) -> chex.Array:
   """Softmax cross entropy loss."""
-  # if register_loss:
-  kfac_jax.register_softmax_cross_entropy_loss(logits, labels, weight)
+  if register_loss:
+    kfac_jax.register_softmax_cross_entropy_loss(logits, labels, weight)
   max_logits = jnp.max(logits, keepdims=True, axis=-1)
   logits = logits - max_logits
   log_z = special.logsumexp(logits, axis=-1)
@@ -83,13 +83,13 @@ def squared_error(
     prediction: chex.Array,
     targets: chex.Array,
     weight: float = 1.0,
-    # register_loss: bool = True,
+    register_loss: bool = True,
 ) -> chex.Array:
   """Squared error loss."""
   if prediction.shape != targets.shape:
     raise ValueError("prediction and targets should have the same shape.")
-  # if register_loss:
-  kfac_jax.register_squared_error_loss(prediction, targets, weight)
+  if register_loss:
+    kfac_jax.register_squared_error_loss(prediction, targets, weight)
   return weight * jnp.sum(jnp.square(prediction - targets), axis=-1)
 
 
@@ -146,12 +146,14 @@ def classifier_loss_and_stats(
     label_smoothing: float = 0.0,
     top_k_stats: Sequence[int] = (1, 5),
     average_loss: bool = True,
+    register_loss: bool = True,
 ) -> Tuple[chex.Array, Dict[str, chex.Array]]:
   """Softmax cross-entropy with regularizer and accuracy statistics."""
 
   labels = add_label_smoothing(labels_as_int, label_smoothing, logits.shape[-1])
 
-  softmax_loss = softmax_cross_entropy(logits, labels)
+  softmax_loss = softmax_cross_entropy(logits, labels,
+                                       register_loss=register_loss)
   averaged_raw_loss = jnp.mean(softmax_loss, axis=0)
   loss = averaged_raw_loss if average_loss else softmax_loss
 
