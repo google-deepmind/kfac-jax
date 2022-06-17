@@ -424,7 +424,7 @@ class ImplicitExactCurvature:
   def multiply_ggn_factor(
       self,
       func_args: utils.FuncArgs,
-      loss_inner_vectors: Sequence[Sequence[chex.Array]],
+      loss_inner_vectors: Sequence[chex.Array],
   ) -> utils.Params:
     """Multiplies the vector with the factor of the GGN matrix.
 
@@ -443,6 +443,72 @@ class ImplicitExactCurvature:
     vectors = vjp(fisher_factor_transpose_vectors)
     batch_size = self.batch_size(losses)
     return utils.scalar_div(vectors, jnp.sqrt(batch_size))
+
+  def multiply_jacobian_transpose(
+      self,
+      func_args: utils.FuncArgs,
+      loss_input_vectors: Sequence[Sequence[chex.Array]],
+  ) -> utils.Params:
+    """Multiplies a vector by the model's transposed Jacobian.
+
+    Args:
+      func_args: The inputs to the model function.
+      loss_input_vectors: A sequence over losses of sequences of arrays that
+        are the size of the loss's inputs. This represents the vector to be
+        multiplied.
+
+    Returns:
+      The product ``J^T v``, where ``J`` is the model's Jacobian and ``v`` is
+      is given by ``loss_inner_vectors``.
+    """
+    _, vjp = self._loss_tags_vjp(func_args)
+    return vjp(loss_input_vectors)
+
+  def get_loss_inner_vector_shapes_and_batch_size(
+      self,
+      func_args: utils.FuncArgs,
+      mode: str
+  ) -> Tuple[Tuple[chex.Shape, ...], int]:
+    """Get shapes of loss inner vectors, and the batch size.
+
+    Args:
+      func_args: The inputs to the model function.
+      mode: A string representing the type of curvature matrix for the loss
+       inner vectors. Can be "fisher" or "ggn".
+
+    Returns:
+      Shapes of loss inner vectors in a tuple, and the batch size as an int.
+    """
+    losses, _ = self._loss_tags_vjp(func_args)
+    batch_size = self.batch_size(losses)
+
+    if mode == "fisher":
+      return (tuple(loss.fisher_factor_inner_shape for loss in losses),
+              batch_size)
+    elif mode == "ggn":
+      return tuple(loss.ggn_factor_inner_shape for loss in losses), batch_size
+    else:
+      raise ValueError(f"Unrecognized mode: {mode}")
+
+  def get_loss_input_shapes_and_batch_size(
+      self,
+      func_args: utils.FuncArgs
+  ) -> Tuple[Tuple[Tuple[chex.Shape, ...], ...], int]:
+    """Get shapes of loss input vectors, and the batch size.
+
+    Args:
+      func_args: The inputs to the model function.
+
+    Returns:
+      A tuple over losses of tuples containing the shapes of their different
+      inputs, and the batch size (as an int).
+    """
+    losses, _ = self._loss_tags_vjp(func_args)
+    batch_size = self.batch_size(losses)
+
+    return (tuple(tuple(input.shape for input in loss.inputs)
+                  for loss in losses),
+            batch_size)
 
 
 class CurvatureEstimator(utils.Finalizable):
@@ -986,6 +1052,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       state: "BlockDiagonalCurvature.State",
       use_cached: bool,
   ) -> chex.Array:
+
     blocks_eigenvalues = self.block_eigenvalues(state, use_cached)
     return jnp.concatenate(blocks_eigenvalues, axis=0)
 
@@ -1000,6 +1067,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
   ) -> "BlockDiagonalCurvature.State":
+
     estimation_mode = estimation_mode or self.default_estimation_mode
 
     # Compute the losses and the VJP function from the function inputs

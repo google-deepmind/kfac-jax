@@ -821,7 +821,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   @property
   def params(self) -> Tuple[chex.Array]:
-    return self._logits,
+    return (self._logits,)
 
   def copy_with_different_inputs(
       self,
@@ -913,7 +913,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   @property
   def params(self) -> Tuple[chex.Array]:
-    return self._logits,
+    return (self._logits,)
 
   @property
   def fisher_factor_inner_shape(self) -> chex.Shape:

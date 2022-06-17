@@ -1169,7 +1169,6 @@ def convert_value_and_grad_to_value_func(
   Returns:
     A function that returns only the loss value.
   """
-
   def value_func(*args) -> chex.Array:
     out, _ = value_and_grad_func(*args)
     return out[0] if has_aux else out
