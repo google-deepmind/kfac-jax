@@ -133,7 +133,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     if self.mode == "train":
       logging.info("Training device batch size[%d]: (%d x %d)/%d",
                    jax.process_index(),
-                   jax.local_device_count(),
+                   self.train_num_devices,
                    self.train_per_device_batch_size,
                    self.train_total_batch_size)
     else:
@@ -170,13 +170,25 @@ class SupervisedExperiment(experiment.AbstractExperiment):
 
   @property
   @functools.lru_cache(maxsize=1)
+  def train_num_local_devices(self) -> int:
+    """The number of training local devices."""
+    return jax.local_device_count()
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def train_num_devices(self) -> int:
+    """The number of training devices."""
+    return jax.device_count()
+
+  @property
+  @functools.lru_cache(maxsize=1)
   def train_per_device_batch_size(self) -> int:
     """The training per-device batch size."""
     if self.config.batch_size.train.per_device is None:
-      if self.config.batch_size.train.total % jax.device_count() != 0:
+      if self.config.batch_size.train.total % self.train_num_devices != 0:
         raise ValueError("The total batch size must be divisible by the number "
                          "of devices.")
-      return self.config.batch_size.train.total // jax.device_count()
+      return self.config.batch_size.train.total // self.train_num_devices
     else:
       return self.config.batch_size.train.per_device
 
@@ -185,13 +197,25 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   def train_host_batch_size(self) -> int:
     """The training per-host batch size."""
     assert self.mode == "train"
-    return self.train_per_device_batch_size * jax.local_device_count()
+    return self.train_per_device_batch_size * self.train_num_local_devices
 
   @property
   @functools.lru_cache(maxsize=1)
   def train_total_batch_size(self) -> int:
     """The training total batch size."""
-    return self.train_per_device_batch_size * jax.device_count()
+    return self.train_per_device_batch_size * self.train_num_devices
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def eval_num_local_devices(self) -> int:
+    """The evaluator number of local devices."""
+    return jax.local_device_count()
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def eval_num_devices(self) -> int:
+    """The evaluator number of devices."""
+    return jax.device_count()
 
   @property
   @functools.lru_cache(maxsize=1)
@@ -201,7 +225,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       if self.config.batch_size.eval.total % jax.device_count() != 0:
         raise ValueError("The total batch size must be divisible by the number "
                          "of devices.")
-      return self.config.batch_size.eval.total // jax.device_count()
+      return self.config.batch_size.eval.total // self.num_eval_devices
     else:
       return self.config.batch_size.eval.per_device
 
@@ -210,13 +234,13 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   def eval_host_batch_size(self) -> int:
     """The evaluator per-host batch size."""
     assert self.mode == "eval"
-    return self.eval_per_device_batch_size * jax.local_device_count()
+    return self.eval_per_device_batch_size * self.eval_num_local_devices
 
   @property
   @functools.lru_cache(maxsize=1)
   def eval_total_batch_size(self) -> int:
     """The evaluator total batch size."""
-    return self.eval_per_device_batch_size * jax.device_count()
+    return self.eval_per_device_batch_size * self.num_eval_devices
 
   @property
   @functools.lru_cache(maxsize=1)
@@ -247,7 +271,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       config: config_dict.ConfigDict,
   ) -> bool:
     del config  # not used
-    return self.progress(global_step, self._opt_state) < 1
+    return int(self.progress(global_step, self._opt_state)) < 1
 
   def create_optimizer(self) -> Union[
       optimizers.OptaxWrapper,
@@ -402,6 +426,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       batch: kfac_jax.utils.Batch,
   ) -> Dict[str, chex.Array]:
     """Evaluates a single batch."""
+    del global_step, opt_state  # This might be used in subclasses
     func_args = kfac_jax.optimizer.make_func_args(
         params=params,
         func_state=func_state,
@@ -412,7 +437,6 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     )
     loss, stats = self.eval_model_func(*func_args)
     stats["loss"] = loss
-    stats["progress"] = self.progress(global_step, opt_state)
     return kfac_jax.utils.pmean_if_pmap(stats, "eval_axis")
 
   def evaluate(
@@ -442,6 +466,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       logging.info("Evaluation for %s is completed with %d number of batches.",
                    name, int(averaged_stats.weight[0]))
 
+    all_stats["progress"] = self.progress(self._python_step, self._opt_state)
     return jax.tree_map(np.array, all_stats)
 
 
