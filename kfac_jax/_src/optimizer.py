@@ -587,7 +587,7 @@ class Optimizer(utils.WithStagedMethods):
       coefficient = jnp.minimum(max_coefficient, 1)
       preconditioned_grads = utils.scalar_mul(preconditioned_grads, coefficient)
 
-    return preconditioned_grads
+    return preconditioned_grads, max_coefficient
 
   def _compute_quad_change_for_damping(
       self,
@@ -810,7 +810,7 @@ class Optimizer(utils.WithStagedMethods):
     state = self._maybe_update_inverse_cache(state)
 
     # Compute proposed directions
-    preconditioned_gradient = self._compute_preconditioned_gradient(
+    preconditioned_gradient, norm_constraint_factor = self._compute_preconditioned_gradient(
         state, grads, learning_rate)
     vectors = (preconditioned_gradient, state.velocities)
 
@@ -878,6 +878,7 @@ class Optimizer(utils.WithStagedMethods):
       stats["grad_norm"] = grad_norm
       stats["precon_grad_norm"] = precon_grad_norm
       stats["update_norm"] = update_norm
+      stats["norm_constraint_factor"] = norm_constraint_factor
 
     if not self._use_adaptive_damping:
       state.damping = None
