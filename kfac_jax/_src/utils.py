@@ -32,15 +32,15 @@ _CHEX_SCALAR_TYPES = (float, int)
 
 # Types for annotation
 T = TypeVar("T")
-Params = Any
-Batch = Any
-FuncState = Any
-FuncAux = Any
+Params = chex.ArrayTree
+Batch = chex.ArrayTree
+FuncState = chex.ArrayTree
+FuncAux = chex.ArrayTree
 PyTreeDef = chex.PyTreeDef
 PyTreeType = Any
 PyTree = chex.ArrayTree
 FuncArgs = Sequence[PyTree]
-Func = Callable[..., Any]
+Func = Callable[..., Union[chex.Array, Tuple[chex.Array, FuncAux]]]
 ValueFunc = Callable[..., chex.Array]
 ValueAndGradFunc = Callable[..., Tuple[chex.Array, Params]]
 
@@ -1261,7 +1261,7 @@ def staged(
       if instance.multi_device and instance.debug:
         # In this case we want to call `method` once for each device index.
         # Note that this might not always produce sensible behavior, and will
-        # depend on the details of the method and if it has side-effects on the
+        # depend on the details of the method and if it has side effects on the
         # state of the class.
 
         outs = []
