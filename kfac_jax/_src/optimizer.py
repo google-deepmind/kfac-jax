@@ -828,13 +828,13 @@ class Optimizer(utils.WithStagedMethods):
 
     # Compute delta and update velocities
     delta = self.weighted_sum_of_objects(vectors, coefficients)
+    delta, state.optax_state = self._internal_optimizer.update(delta, state.optax_state, params)
     state.velocities = delta
 
     if self._include_norms_in_stats:
       update_norm = utils.norm(delta)
 
     # Update parameters
-    delta, state.optax_state = self._internal_optimizer.update(delta, state.optax_state, params)
     params = jax.tree_map(jnp.add, params, delta)
 
     # Optionally compute the reduction ratio and update the damping
