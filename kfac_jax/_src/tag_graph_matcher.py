@@ -337,7 +337,6 @@ class GraphPattern:
       self,
       name: str,
       tag_primitive: tags.LayerTag,
-      precedence: int,
       compute_func: PatternComputeFunc,
       parameters_extractor_func: ParameterExtractorFunc,
       example_args: utils.FuncArgs,
@@ -357,13 +356,6 @@ class GraphPattern:
     Args:
       name: The name of the pattern that is being registered to.
       tag_primitive: The primitive tag to bind.
-      precedence: This specifies what precedence the graph matcher is going to
-        assign to the provided pattern. The graph matcher will go from lowest
-        to highest precedence, randomly breaking ties, when matching. Note that
-        the pattern that matches a parameter with the lowest precedence will get
-        registered and no other will. Specifically useful when there is a
-        pattern for a layer with and without bias, in which case the with bias
-        registration always should go with lower precedence.
       compute_func: The function that performs the computation.
       parameters_extractor_func: A function that extracts from the traced Jaxpr
         any parameters that are passed into the tag.
@@ -374,7 +366,6 @@ class GraphPattern:
     """
     self._name = name
     self._tag_primitive = tag_primitive
-    self._precedence = precedence
     self._compute_func = compute_func
     self._parameters_extractor_func = parameters_extractor_func
     self._example_args = example_args
@@ -596,7 +587,7 @@ def find_layer_tags_and_patterns(
   The method returns a pair of ``(manual_registrations, matches)``, where
   ``manual_registrations`` is a tuple of all layer tags that are already
   present in the graph and ``matches`` contains all newly discovered matches
-  of any of the patterns. Each entry has as a key the variable of the graph
+  of any pattern. Each entry has as a key the variable of the graph
   corresponding to the output of the pattern, while each value is a triple
   ``(pattern, match_map, eqns)`` where ``pattern`` is the :class:`~JaxprGraph`
   of the pattern that has been matched, ``match_map`` is mapping the pattern
@@ -814,23 +805,21 @@ def _dense_parameter_extractor(
   assert False
 
 
-dense_with_bias_pattern = GraphPattern(
-    name="dense_with_bias",
-    tag_primitive=tags.dense,
-    precedence=0,
-    compute_func=_dense,
-    parameters_extractor_func=_dense_parameter_extractor,
-    example_args=[np.zeros([11, 13]), [np.zeros([13, 7]), np.zeros([7])]],
-)
-
-dense_no_bias_pattern = GraphPattern(
-    name="dense_no_bias",
-    tag_primitive=tags.dense,
-    precedence=1,
-    compute_func=_dense,
-    parameters_extractor_func=_dense_parameter_extractor,
-    example_args=[np.zeros([11, 13]), [np.zeros([13, 7])]],
-)
+def _make_dense_pattern(
+    with_bias: bool,
+    in_dim: int = 13,
+    out_dim: int = 7,
+) -> GraphPattern:
+  x_shape = [2, in_dim]
+  p_shapes = ([[in_dim, out_dim], [out_dim]] if with_bias else
+              [[in_dim, out_dim]])
+  return GraphPattern(
+      name="dense_with_bias" if with_bias else "dense_no_bias",
+      tag_primitive=tags.dense,
+      compute_func=_dense,
+      parameters_extractor_func=_dense_parameter_extractor,
+      example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
+  )
 
 
 def _conv2d(x: chex.Array, params: Sequence[chex.Array]) -> chex.Array:
@@ -859,24 +848,19 @@ def _conv2d_parameter_extractor(
   assert False
 
 
-conv2d_with_bias_pattern = GraphPattern(
-    name="conv2d_with_bias",
-    tag_primitive=tags.conv2d,
-    precedence=0,
-    compute_func=_conv2d,
-    parameters_extractor_func=_conv2d_parameter_extractor,
-    example_args=[np.zeros([2, 8, 8, 5]),
-                  [np.zeros([3, 3, 5, 4]), np.zeros([4])]],
-)
-
-conv2d_no_bias_pattern = GraphPattern(
-    name="conv2d_no_bias",
-    tag_primitive=tags.conv2d,
-    precedence=1,
-    compute_func=_conv2d,
-    parameters_extractor_func=_conv2d_parameter_extractor,
-    example_args=[np.zeros([2, 8, 8, 5]), [np.zeros([3, 3, 5, 4])]],
-)
+def _make_conv2d_pattern(
+    with_bias: bool,
+) -> GraphPattern:
+  x_shape = [2, 8, 8, 5]
+  p_shapes = ([[3, 3, 5, 4], [4]] if with_bias else
+              [[3, 3, 5, 4]])
+  return GraphPattern(
+      name="conv2d_with_bias" if with_bias else "conv2d_no_bias",
+      tag_primitive=tags.conv2d,
+      compute_func=_conv2d,
+      parameters_extractor_func=_conv2d_parameter_extractor,
+      example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
+  )
 
 
 def _scale_and_shift(
@@ -890,60 +874,44 @@ def _scale_and_shift(
     scale, shift = params
     return x * scale + shift
   elif has_scale:
-    assert len(params) == 1
-    return x * params[0]
+    [scale] = params
+    return x * scale
   elif has_shift:
-    assert len(params) == 1
-    return x + params[0]
+    [shift] = params
+    return x + shift
   else:
     raise ValueError("You must have either `has_scale` or `has_shift` set "
                      "to True.")
 
 
-scale_and_shift_with_broadcast_pattern = GraphPattern(
-    name="scale_and_shift_with_broadcast",
-    tag_primitive=tags.scale_and_shift,
-    precedence=0,
-    compute_func=functools.partial(_scale_and_shift,
-                                   has_scale=True, has_shift=True),
-    parameters_extractor_func=
-    lambda jaxpr: dict(has_scale=True, has_shift=True),
-    example_args=[np.zeros([2, 13]), [np.zeros([13]), np.zeros([13])]],
-)
-
-
-scale_and_shift_no_broadcast_pattern = GraphPattern(
-    name="scale_and_shift_no_broadcast",
-    tag_primitive=tags.scale_and_shift,
-    precedence=0,
-    compute_func=functools.partial(_scale_and_shift,
-                                   has_scale=True, has_shift=True),
-    parameters_extractor_func=
-    lambda jaxpr: dict(has_scale=True, has_shift=True),
-    example_args=[np.zeros([13]), [np.zeros([13]), np.zeros([13])]],
-)
-
-scale_only_pattern = GraphPattern(
-    name="scale_only",
-    tag_primitive=tags.scale_and_shift,
-    precedence=1,
-    compute_func=functools.partial(_scale_and_shift,
-                                   has_scale=True, has_shift=False),
-    parameters_extractor_func=
-    lambda jaxpr: dict(has_scale=True, has_shift=False),
-    example_args=[np.zeros([2, 13]), [np.zeros([13])]],
-)
-
-shift_only_pattern = GraphPattern(
-    name="shift_only",
-    tag_primitive=tags.scale_and_shift,
-    precedence=2,
-    compute_func=functools.partial(_scale_and_shift,
-                                   has_scale=False, has_shift=True),
-    parameters_extractor_func=
-    lambda jaxpr: dict(has_scale=False, has_shift=True),
-    example_args=[np.zeros([2, 13]), [np.zeros([13])]],
-)
+def _make_scale_and_shift_pattern(
+    broadcast_ndim: int,
+    has_scale: bool,
+    has_shift: bool,
+    p_dim: int = 13,
+) -> GraphPattern:
+  """Creates a scale and shift graph pattern."""
+  assert broadcast_ndim >= 0
+  assert has_scale or has_shift
+  x_shape = [i + 2 for i in range(broadcast_ndim)] + [p_dim]
+  p_shapes = [[p_dim], [p_dim]] if (has_scale and has_shift) else [[p_dim]]
+  if has_scale and has_shift:
+    name = f"scale_and_shift_broadcast_{broadcast_ndim}"
+  elif has_scale:
+    name = f"scale_only_broadcast_{broadcast_ndim}"
+  elif has_shift:
+    name = f"shift_only_broadcast_{broadcast_ndim}"
+  else:
+    raise ValueError("Unreachable.")
+  return GraphPattern(
+      name=name,
+      tag_primitive=tags.scale_and_shift,
+      compute_func=functools.partial(
+          _scale_and_shift, has_scale=has_scale, has_shift=has_shift),
+      parameters_extractor_func=
+      lambda jaxpr: dict(has_scale=has_scale, has_shift=has_shift),
+      example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
+  )
 
 
 def _normalization_haiku(
@@ -996,58 +964,38 @@ def _normalization_haiku_preprocessor(
   return (normalized_inputs,) + tuple(params)
 
 
-normalization_haiku_with_broadcast_pattern = GraphPattern(
-    name="normalization_haiku_with_broadcast",
-    tag_primitive=tags.scale_and_shift,
-    precedence=0,
-    compute_func=functools.partial(_normalization_haiku,
-                                   has_scale=True, has_shift=True),
-    parameters_extractor_func=
-    lambda jaxpr: dict(has_scale=True, has_shift=True),
-    example_args=[[np.zeros([2, 13]), np.zeros([2, 13])],
-                  [np.zeros([13]), np.zeros([13])]],
-    in_values_preprocessor=_normalization_haiku_preprocessor
-)
-
-
-normalization_haiku_no_broadcast_pattern = GraphPattern(
-    name="normalization_haiku_no_broadcast",
-    tag_primitive=tags.scale_and_shift,
-    precedence=0,
-    compute_func=functools.partial(_normalization_haiku,
-                                   has_scale=True, has_shift=True),
-    parameters_extractor_func=
-    lambda jaxpr: dict(has_scale=True, has_shift=True),
-    example_args=[[np.zeros([13]), np.zeros([13])],
-                  [np.zeros([13]), np.zeros([13])]],
-    in_values_preprocessor=_normalization_haiku_preprocessor
-)
-
-
-normalization_haiku_scale_only_pattern = GraphPattern(
-    name="normalization_haiku_scale_only",
-    tag_primitive=tags.scale_and_shift,
-    precedence=1,
-    compute_func=functools.partial(_normalization_haiku,
-                                   has_scale=True, has_shift=False),
-    parameters_extractor_func=
-    lambda jaxpr: dict(has_scale=True, has_shift=False),
-    example_args=[[np.zeros([2, 13]), np.zeros([2, 13])], [np.zeros([13])]],
-)
+def _make_normalization_haiku_pattern(
+    broadcast_ndim: int,
+    p_dim: int = 13,
+):
+  assert broadcast_ndim >= 0
+  x_shape = [i + 2 for i in range(broadcast_ndim)] + [p_dim]
+  return GraphPattern(
+      name=f"normalization_haiku_broadcast_{broadcast_ndim}",
+      tag_primitive=tags.scale_and_shift,
+      compute_func=functools.partial(_normalization_haiku,
+                                     has_scale=True, has_shift=True),
+      parameters_extractor_func=
+      lambda jaxpr: dict(has_scale=True, has_shift=True),
+      example_args=[[np.zeros(x_shape), np.zeros(x_shape)],
+                    [np.zeros([p_dim]), np.zeros([p_dim])]],
+      in_values_preprocessor=_normalization_haiku_preprocessor
+  )
 
 
 DEFAULT_GRAPH_PATTERNS = (
-    dense_with_bias_pattern,
-    dense_no_bias_pattern,
-    conv2d_with_bias_pattern,
-    conv2d_no_bias_pattern,
-    scale_and_shift_with_broadcast_pattern,
-    scale_and_shift_no_broadcast_pattern,
-    normalization_haiku_with_broadcast_pattern,
-    normalization_haiku_no_broadcast_pattern,
-    scale_only_pattern,
-    normalization_haiku_scale_only_pattern,
-    shift_only_pattern,
+    _make_dense_pattern(True),
+    _make_dense_pattern(False),
+    _make_conv2d_pattern(True),
+    _make_conv2d_pattern(False),
+    _make_scale_and_shift_pattern(1, True, True),
+    _make_scale_and_shift_pattern(0, True, True),
+    _make_normalization_haiku_pattern(1),
+    _make_normalization_haiku_pattern(0),
+    _make_scale_and_shift_pattern(1, True, False),
+    _make_scale_and_shift_pattern(0, True, False),
+    _make_scale_and_shift_pattern(1, False, True),
+    _make_scale_and_shift_pattern(0, False, True),
 )
 
 
