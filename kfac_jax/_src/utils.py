@@ -64,7 +64,6 @@ def set_special_case_zero_inv(value: bool):
 
 def get_special_case_zero_inv() -> bool:
   """Returns whether `pi_adjusted_inverse` handles zero and nan matrices."""
-  global _SPECIAL_CASE_ZERO_INV
   return _SPECIAL_CASE_ZERO_INV
 
 
@@ -88,7 +87,7 @@ def fake_element_from_iterator(
     equivalent iterator to the input one.
   """
   init_element = next(iterator)
-  fake_element = jax.tree_map(np.zeros_like, init_element)
+  fake_element = jax.tree_util.tree_map(np.zeros_like, init_element)
   def equivalent_iterator() -> Iterator[PyTree]:
     yield init_element
     # For some reason unknown to us, "yield from" can fail in certain
@@ -126,7 +125,7 @@ def loop_and_parallelize_average(
 
   @functools.wraps(func)
   def average_func(*args) -> PyTree:
-    lead_axis_sizes = set(x.shape[0] for x in jax.tree_leaves(args))
+    lead_axis_sizes = set(x.shape[0] for x in jax.tree_util.tree_leaves(args))
     if not lead_axis_sizes:
       raise ValueError("You must pass in at least one argument with a PyTree "
                        "leaf node.")
@@ -134,9 +133,9 @@ def loop_and_parallelize_average(
       raise ValueError(f"Inconsistent leading axis sizes seen: "
                        f"{lead_axis_sizes!r}.")
     leading_size = next(iter(lead_axis_sizes))
-    singleton_args = jax.tree_map(lambda _x: _x[0], args)
+    singleton_args = jax.tree_util.tree_map(lambda _x: _x[0], args)
     _, output_tree = jax.make_jaxpr(func, return_shape=True)(*singleton_args)
-    singleton_size = sum(x.size for x in jax.tree_leaves(output_tree))
+    singleton_size = sum(x.size for x in jax.tree_util.tree_leaves(output_tree))
     output_size = singleton_size * leading_size
 
     # Compute the loop size and any remainder size
@@ -155,24 +154,26 @@ def loop_and_parallelize_average(
     all_chunks_size = leading_size - remainder_size
 
     # Index to get the loop arguments
-    loop_args = jax.tree_map(lambda x: x[:all_chunks_size], args)
+    loop_args = jax.tree_util.tree_map(lambda x: x[:all_chunks_size], args)
 
     if num_parallel_chunks == 1:
       averaged_value = jnp.mean(vmap_fn(*loop_args), axis=0)
     else:
       def scan_fn(accumulator, args_):
         vmap_value = vmap_fn(*args_)
-        avg_value = jax.tree_map(lambda x: jnp.mean(x, axis=0), vmap_value)
-        return jax.tree_map(jnp.add, accumulator, avg_value), None
+        avg_value = jax.tree_util.tree_map(
+            lambda x: jnp.mean(x, axis=0), vmap_value)
+        return jax.tree_util.tree_map(jnp.add, accumulator, avg_value), None
 
       loop_shape = (num_parallel_chunks, parallel_size)
-      loop_args = jax.tree_map(
+      loop_args = jax.tree_util.tree_map(
           lambda x: x.reshape(loop_shape + x.shape[1:]),
           loop_args)
 
       summed_value, _ = jax.lax.scan(
           scan_fn,
-          init=jax.tree_map(lambda x: jnp.zeros(x.shape), output_tree),
+          init=jax.tree_util.tree_map(
+              lambda x: jnp.zeros(x.shape), output_tree),
           xs=loop_args)
       averaged_value = scalar_div(summed_value, num_parallel_chunks)
 
@@ -180,7 +181,7 @@ def loop_and_parallelize_average(
       return averaged_value
 
     # Index to get the remainder arguments
-    remainder_args = jax.tree_map(lambda x: x[all_chunks_size:], args)
+    remainder_args = jax.tree_util.tree_map(lambda x: x[all_chunks_size:], args)
     remainder_value = jnp.mean(vmap_fn(*remainder_args), axis=0)
 
     avg_weight = all_chunks_size / leading_size
@@ -245,7 +246,7 @@ def index_if_not_scalar(value: chex.Numeric, index: int = 0) -> chex.Numeric:
 @jax.jit
 def get_first(obj: PyTree) -> PyTree:
   """Index the PyTree leaves `x` of `obj` by `x[0]` if they are not scalars."""
-  return jax.tree_map(index_if_not_scalar, obj)
+  return jax.tree_util.tree_map(index_if_not_scalar, obj)
 
 
 @jax.jit
@@ -261,14 +262,15 @@ def get_sum(obj: PyTree) -> PyTree:
 
 
 broadcast_all_local_devices = jax.pmap(lambda x: x)
-pmap_zeros_like = jax.pmap(lambda x: jax.tree_map(jnp.zeros_like, x))
-jit_zeros_like = jax.jit(lambda x: jax.tree_map(jnp.zeros_like, x))
+pmap_zeros_like = jax.pmap(lambda x: jax.tree_util.tree_map(jnp.zeros_like, x))
+jit_zeros_like = jax.jit(lambda x: jax.tree_util.tree_map(jnp.zeros_like, x))
 
 
 def replicate_all_local_devices(obj: PyTree) -> PyTree:
   """Replicates `obj` to all local Jax devices."""
   n = jax.local_device_count()
-  obj_stacked = jax.tree_map(lambda x: jnp.stack([x] * n, axis=0), obj)
+  obj_stacked = jax.tree_util.tree_map(
+      lambda x: jnp.stack([x] * n, axis=0), obj)
   return broadcast_all_local_devices(obj_stacked)
 
 
@@ -297,7 +299,7 @@ def check_and_fix_format_for_pmap(obj: PyTree) -> PyTree:
     assert x.shape[0] == device_count
     return x
 
-  return jax.tree_map(check_and_fix, obj)
+  return jax.tree_util.tree_map(check_and_fix, obj)
 
 
 default_device_sync = None
@@ -328,7 +330,7 @@ def host_sync(
                                      axis_name="i",
                                      static_broadcasted_argnums=1)
 
-    obj = jax.tree_map(lambda x: jnp.expand_dims(x, axis=0), obj)
+    obj = jax.tree_util.tree_map(lambda x: jnp.expand_dims(x, axis=0), obj)
 
     return get_first(default_device_sync(obj, sync_op))
 
@@ -351,7 +353,7 @@ def sync_and_divide_value(
     axis_name: Optional[str] = None,
 ) -> PyTree:
   """Computes the mean of `value` over all hosts and divides it by `counter`."""
-  value = jax.tree_map(lambda x: x / counter, value)
+  value = jax.tree_util.tree_map(lambda x: x / counter, value)
   return pmean_if_pmap(value, axis_name)
 
 
@@ -368,7 +370,7 @@ def copy_array(x: chex.Array) -> chex.Array:
   return x + jnp.zeros_like(x)
 
 
-copy_obj = jax.jit(lambda x: jax.tree_map(copy_array, x))
+copy_obj = jax.jit(lambda x: jax.tree_util.tree_map(copy_array, x))
 pmap_copy_obj = jax.pmap(copy_obj)
 
 
@@ -396,7 +398,7 @@ def scalar_mul(obj: PyTree, scalar: chex.Numeric) -> PyTree:
   # if/while/for constructs.
   if isinstance(scalar, _CHEX_SCALAR_TYPES) and scalar == 1.0:
     return obj
-  return jax.tree_map(lambda x: x * scalar, obj)
+  return jax.tree_util.tree_map(lambda x: x * scalar, obj)
 
 
 def scalar_div(obj: PyTree, scalar: chex.Numeric) -> PyTree:
@@ -408,7 +410,7 @@ def scalar_div(obj: PyTree, scalar: chex.Numeric) -> PyTree:
   # if/while/for constructs.
   if isinstance(scalar, _CHEX_SCALAR_TYPES) and scalar == 1.0:
     return obj
-  return jax.tree_map(lambda x: x / scalar, obj)
+  return jax.tree_util.tree_map(lambda x: x / scalar, obj)
 
 
 def weighted_sum_of_objects(
@@ -438,7 +440,8 @@ def weighted_sum_of_objects(
     if not abstract_objects_equal(accumulator, o_i):
       raise ValueError("One or more objects do not have equivalent abstract "
                        "structure.")
-    accumulator = jax.tree_map(jnp.add, accumulator, scalar_mul(o_i, c_i))
+    accumulator = jax.tree_util.tree_map(
+        jnp.add, accumulator, scalar_mul(o_i, c_i))
   return accumulator
 
 
@@ -451,8 +454,8 @@ def _inner_product_float64(obj1: PyTree, obj2: PyTree) -> chex.Array:
     return jnp.dot(x, y, precision=lax.Precision.HIGHEST)
 
   with jax.experimental.enable_x64():
-    elements_inner_products = jax.tree_map(array_ip, obj1, obj2)
-    flat_list = jax.tree_leaves(elements_inner_products)
+    elements_inner_products = jax.tree_util.tree_map(array_ip, obj1, obj2)
+    flat_list = jax.tree_util.tree_leaves(elements_inner_products)
     result = flat_list[0]
     for element_ip in flat_list[1:]:
       result = result + element_ip
@@ -487,8 +490,9 @@ def inner_product(
     raise ValueError("The objects do not have identical abstract structure.")
   if in_float64:
     return _inner_product_float64(obj1, obj2)
-  elements_product = jax.tree_map(lambda x, y: jnp.sum(x * y), obj1, obj2)
-  return sum(jax.tree_leaves(elements_product))
+  elements_product = jax.tree_util.tree_map(
+      lambda x, y: jnp.sum(x * y), obj1, obj2)
+  return sum(jax.tree_util.tree_leaves(elements_product))
 
 
 def symmetric_matrix_inner_products(
@@ -590,9 +594,9 @@ def block_permuted(
 
 def norm(obj: PyTree) -> chex.Array:
   """Computes the Euclidean norm of the provided PyTree object."""
-  elements_squared_norm = jax.tree_map(
+  elements_squared_norm = jax.tree_util.tree_map(
       lambda x: jnp.sum(jnp.square(x)), obj)
-  return jnp.sqrt(sum(jax.tree_flatten(elements_squared_norm)[0]))
+  return jnp.sqrt(sum(jax.tree_util.tree_leaves(elements_squared_norm)))
 
 
 def psd_inv_cholesky(matrix: chex.Array, damping: chex.Array) -> chex.Array:
@@ -787,7 +791,7 @@ def safe_psd_eigh(x: chex.Array) -> Tuple[chex.Array, chex.Array]:
 
 def tree_is_empty(obj: PyTree) -> bool:
   """Returns whether the given PyTree is empty."""
-  return not jax.tree_leaves(obj)
+  return not jax.tree_util.tree_leaves(obj)
 
 
 def abstract_objects_equal(
@@ -796,9 +800,11 @@ def abstract_objects_equal(
     check_dtype: bool = True
 ) -> bool:
   """`True` if the objects have the same PyTree structure, shapes and dtypes."""
-  return (jax.tree_structure(obj1) == jax.tree_structure(obj2) and
+  return (jax.tree_util.tree_structure(obj1) ==
+          jax.tree_util.tree_structure(obj2) and
           all(e1.shape == e2.shape and (e1.dtype == e2.dtype or not check_dtype)
-              for e1, e2 in zip(jax.tree_leaves(obj1), jax.tree_leaves(obj2))))
+              for e1, e2 in zip(jax.tree_util.tree_leaves(obj1),
+                                jax.tree_util.tree_leaves(obj2))))
 
 
 def to_tuple_or_repeat(
@@ -869,7 +875,7 @@ class WeightedMovingAverage:
   @property
   def value(self) -> PyTree:
     """The value of the underlying arrays data structure."""
-    return jax.tree_map(lambda x: x / self.weight, self.raw_value)
+    return jax.tree_util.tree_map(lambda x: x / self.weight, self.raw_value)
 
   def update(
       self,
@@ -879,7 +885,7 @@ class WeightedMovingAverage:
   ) -> None:
     """Updates the underlying array and weight accordingly."""
     self.weight = self.weight * old_weight_multiplier + new_weight
-    self.raw_value = jax.tree_map(
+    self.raw_value = jax.tree_util.tree_map(
         lambda x, y: x * old_weight_multiplier + y * new_weight,
         self.raw_value,
         value,
@@ -899,7 +905,9 @@ class WeightedMovingAverage:
   def zeros_like(cls, value: PyTree) -> "WeightedMovingAverage":
     """Initializes a `WeightedMovingAverage` with zeros structure like `value`."""
     return WeightedMovingAverage(
-        weight=jnp.zeros([]), raw_value=jax.tree_map(jnp.zeros_like, value))
+        weight=jnp.zeros([]),
+        raw_value=jax.tree_util.tree_map(jnp.zeros_like, value)
+    )
 
 
 class MultiChunkAccumulator:
@@ -972,7 +980,7 @@ class MultiChunkAccumulator:
         to the accumulator.
       weight: The relative weight of the `value_obj`.
     """
-    value_obj = jax.tree_map(lambda x: x * weight, value_obj)
+    value_obj = jax.tree_util.tree_map(lambda x: x * weight, value_obj)
 
     if self._accumulator is None:
       self._accumulator = value_obj
@@ -993,7 +1001,7 @@ class MultiChunkAccumulator:
         raise ValueError("The provided `value_obj` has an empty PyTree "
                          "structure, but the accumulator has been initialized "
                          "with a non-empty PyTree object.")
-      self._accumulator = jax.tree_map(
+      self._accumulator = jax.tree_util.tree_map(
           jnp.add, self._accumulator, value_obj)
     elif not tree_is_empty(value_obj):
       raise ValueError("The provided `value_obj` has a non-empty PyTree "
@@ -1261,7 +1269,7 @@ def staged(
                           for i in range(len(args))]
 
         for i in range(jax.local_device_count()):
-          non_bcast_args_i = jax.tree_map(
+          non_bcast_args_i = jax.tree_util.tree_map(
               operator.itemgetter(i), non_bcast_args)
           args_i = [
               non_bcast_args_i[j] if j not in bcast_argnums else args[j]
@@ -1269,7 +1277,7 @@ def staged(
           ]
           outs.append(method(instance, *args_i))
 
-        outs = jax.tree_map(jnp.stack, *outs)
+        outs = jax.tree_util.tree_map(jnp.stack, *outs)
 
       elif instance.debug:
         outs = method(instance, *args)

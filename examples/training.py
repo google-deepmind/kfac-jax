@@ -467,7 +467,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
                    name, int(averaged_stats.weight[0]))
 
     all_stats["progress"] = self.progress(self._python_step, self._opt_state)
-    return jax.tree_map(np.array, all_stats)
+    return jax.tree_util.tree_map(np.array, all_stats)
 
 
 def train_standalone_supervised(
@@ -498,8 +498,10 @@ def train_standalone_supervised(
     if (i % full_config.save_checkpoint_interval == 0 and
         storage_folder is not None):
       # Optional save to file
-      jnp.savez(f"{storage_folder}/snapshot_{i}.npz",
-                *jax.tree_leaves(experiment_instance.snapshot_state()))
+      jnp.savez(
+          f"{storage_folder}/snapshot_{i}.npz",
+          *jax.tree_util.tree_leaves(experiment_instance.snapshot_state())
+      )
     # Run a step
     rng, step_rng = kfac_jax.utils.p_split(rng)
     scalars = experiment_instance.step(global_step, step_rng)
@@ -520,7 +522,7 @@ def train_standalone_supervised(
 
   if storage_folder is not None:
     jnp.savez(f"{storage_folder}/snapshot_final.npz",
-              *jax.tree_leaves(experiment_instance.snapshot_state()))
+              *jax.tree_util.tree_leaves(experiment_instance.snapshot_state()))
     jnp.savez(f"{storage_folder}/stats.npz", **stats)
   return stats
 

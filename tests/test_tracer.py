@@ -39,8 +39,8 @@ class TestTracer(parameterized.TestCase):
       rtol: float = 1e-6,
   ):
     """Asserts that the two PyTrees are close up to the provided tolerances."""
-    x_v, x_tree = jax.tree_flatten(x)
-    y_v, y_tree = jax.tree_flatten(y)
+    x_v, x_tree = jax.tree_util.tree_flatten(x)
+    y_v, y_tree = jax.tree_util.tree_flatten(y)
     self.assertEqual(x_tree, y_tree)
     for xi, yi in zip(x_v, y_v):
       self.assertEqual(xi.shape, yi.shape)
@@ -96,16 +96,16 @@ class TestTracer(parameterized.TestCase):
     single_output = func(data)
 
     # Different batch computation
-    data1 = jax.tree_map(lambda x: x[:data_size // 2], data)
-    data2 = jax.tree_map(lambda x: x[data_size // 2:], data)
+    data1 = jax.tree_util.tree_map(lambda x: x[:data_size // 2], data)
+    data2 = jax.tree_util.tree_map(lambda x: x[data_size // 2:], data)
     outputs = list()
     for d in (data1, data2):
       outputs.append(func(d))
     if combine == "concatenate":
-      outputs = jax.tree_map(
+      outputs = jax.tree_util.tree_map(
           lambda x, y: jnp.concatenate([x, y], axis=0), *outputs)
     elif combine == "sum":
-      outputs = jax.tree_map(lambda x, y: x + y, *outputs)
+      outputs = jax.tree_util.tree_map(lambda x, y: x + y, *outputs)
     else:
       raise NotImplementedError()
 
@@ -190,8 +190,8 @@ class TestTracer(parameterized.TestCase):
 
     # True computation
     (loss_values, _), vjp_func = jax.vjp(no_data_func, params)
-    loss_tangents = jax.tree_map(jnp.zeros_like, loss_values)
-    summed_output_tangents = sum(jax.tree_leaves(output_tangents))
+    loss_tangents = jax.tree_util.tree_map(jnp.zeros_like, loss_values)
+    summed_output_tangents = sum(jax.tree_util.tree_leaves(output_tangents))
     p_tangents, = vjp_func((loss_tangents, summed_output_tangents))
 
     # Tracer computation
@@ -252,7 +252,7 @@ class TestTracer(parameterized.TestCase):
         init_func, model_func, data_point_shape, rng, dataset_size,
     )
     def no_data_func(p):
-      return sum(jax.tree_map(jnp.sum, model_func(p, data)))
+      return sum(jax.tree_util.tree_map(jnp.sum, model_func(p, data)))
 
     # True computation
     grad_func = jax.grad(no_data_func)
@@ -316,9 +316,9 @@ class TestTracer(parameterized.TestCase):
     loss_values, layer_values = model_func(
         params, data, return_layer_values=True)
     layer_outputs = tuple(v[1] for v in layer_values)
-    aux_values = jax.tree_map(jnp.zeros_like, layer_outputs)
+    aux_values = jax.tree_util.tree_map(jnp.zeros_like, layer_outputs)
     _, vjp = jax.vjp(aux_no_data_func, aux_values, params)
-    summed_output_tangents = sum(jax.tree_leaves(output_tangents))
+    summed_output_tangents = sum(jax.tree_util.tree_leaves(output_tangents))
     aux_tangents, p_tangents = vjp(summed_output_tangents)
     self.assertEqual(len(layer_values), len(params))
     self.assertEqual(len(aux_tangents), len(p_tangents))

@@ -117,7 +117,7 @@ class OptaxWrapper:
     new_params = optax.apply_updates(params, updates)
 
     # Add batch size
-    batch_size = jax.tree_leaves(batch)[0].shape[0]
+    batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
     stats["batch_size"] = batch_size * jax.device_count()
 
     if self._value_func_has_state:
@@ -164,16 +164,16 @@ def tf1_rmsprop(
   def tf1_scale_by_rms(decay_=0.9, epsilon_=1e-8):
     """Same as optax.scale_by_rms, but initializes second moment to one."""
     def init_fn(params):
-      nu = jax.tree_map(jnp.ones_like, params)  # second moment
+      nu = jax.tree_util.tree_map(jnp.ones_like, params)  # second moment
       return optax.ScaleByRmsState(nu=nu)
     def _update_moment(updates, moments, decay, order):
-      return jax.tree_map(
+      return jax.tree_util.tree_map(
           lambda g, t: (1 - decay) * (g ** order) + decay * t, updates, moments)
     def update_fn(updates, state, params=None):
       del params
       nu = _update_moment(updates, state.nu, decay_, 2)
-      updates = jax.tree_map(lambda g, n: g / (jnp.sqrt(n + epsilon_)),
-                             updates, nu)
+      updates = jax.tree_util.tree_map(
+          lambda g, n: g / (jnp.sqrt(n + epsilon_)), updates, nu)
       return updates, optax.ScaleByRmsState(nu=nu)
     return optax.GradientTransformation(init_fn, update_fn)
 

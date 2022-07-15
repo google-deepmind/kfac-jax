@@ -65,7 +65,7 @@ def make_cache_key(
     *args: Any
 ) -> Tuple[utils.PyTreeDef, Tuple[Tuple[chex.Shape, chex.ArrayDType], ...]]:
   """Creates a key for caching Jax function arguments."""
-  args_flat, tree_structure = jax.tree_flatten((func_args, args))
+  args_flat, tree_structure = jax.tree_util.tree_flatten((func_args, args))
   return tree_structure, tuple(map(shape_and_type, args_flat))
 
 
@@ -95,7 +95,7 @@ def order_layer_tags(
   Returns:
     A pair of tuples ``(layer_tags, tags_indices)``, where ``layer_tags`` has
     the ordered sequence of the input ``layer_tags`` and ``tags_indices``
-    contains the a sequence of tuples, where each tuple has the indices of the
+    contains a sequence of tuples, where each tuple has the indices of the
     parameters associated with the corresponding layer tag.
   """
   tags_param_indices = []
@@ -180,7 +180,7 @@ class ProcessedJaxpr(utils.Finalizable):
   @property
   def in_vars(self) -> utils.PyTree:
     """The abstract input variables, as an un-flatten structure."""
-    return jax.tree_unflatten(self.in_tree, self.in_vars_flat)
+    return jax.tree_util.tree_unflatten(self.in_tree, self.in_vars_flat)
 
   @property
   def params_vars(self) -> utils.PyTree:
@@ -189,13 +189,13 @@ class ProcessedJaxpr(utils.Finalizable):
 
   @property
   def params_vars_flat(self) -> List[core.Var]:
-    """A flat list of all of the abstract parameter variables."""
-    return jax.tree_leaves(self.params_vars)
+    """A flat list of all abstract parameter variables."""
+    return jax.tree_util.tree_leaves(self.params_vars)
 
   @property
   def params_tree(self) -> utils.PyTreeDef:
     """The PyTree structure of the parameter variables."""
-    return jax.tree_structure(self.params_vars)
+    return jax.tree_util.tree_structure(self.params_vars)
 
   @classmethod
   def make_from_func(
@@ -235,7 +235,7 @@ class ProcessedJaxpr(utils.Finalizable):
           **auto_registration_kwargs)
     typed_jaxpr = jax.make_jaxpr(func)(*func_args)
     jaxpr, consts = typed_jaxpr.jaxpr, typed_jaxpr.literals
-    in_tree = jax.tree_structure(func_args)
+    in_tree = jax.tree_util.tree_structure(func_args)
 
     return ProcessedJaxpr(
         jaxpr=jaxpr,
@@ -403,7 +403,7 @@ def construct_compute_losses_inputs(
                        "structure as the original parameters passed in to the "
                        "function.")
     local_func_args[params_index] = primal_params
-    flat_args = jax.tree_leaves(local_func_args)
+    flat_args = jax.tree_util.tree_leaves(local_func_args)
     # Mapping from variable -> value
     env = {}
     read = functools.partial(tgm.read_env, env)
@@ -482,17 +482,19 @@ def _loss_tags_vjp(
         raise ValueError("Each element of the argument `tangents` must be "
                          f"a sequence, but tangents[{i}] has type "
                          f"{type(loss_tangents)}.")
-    flat_tangents = jax.tree_leaves(losses_tangents)
-    tree = jax.tree_structure([tuple(tag.invars[:tag.primitive.num_inputs])
-                               for tag in p_jaxpr.loss_tags])
-    losses_tangents = jax.tree_unflatten(tree, flat_tangents)
+    flat_tangents = jax.tree_util.tree_leaves(losses_tangents)
+    tree = jax.tree_util.tree_structure([
+        tuple(tag.invars[:tag.primitive.num_inputs])
+        for tag in p_jaxpr.loss_tags
+    ])
+    losses_tangents = jax.tree_util.tree_unflatten(tree, flat_tangents)
     # Since the losses could also take and targets as inputs and we don't want
     # this function to computes vjp w.r.t to those (e.g. the user should not
     # be providing tangent vectors for the targets, only for inputs) we have
     # to manually fill in these "extra" tangents with zeros.
     losses_targets = [inputs[tag.primitive.num_inputs:]
                       for tag, inputs in zip(p_jaxpr.loss_tags, losses_inputs)]
-    targets_tangents = jax.tree_map(jnp.zeros_like, losses_targets)
+    targets_tangents = jax.tree_util.tree_map(jnp.zeros_like, losses_targets)
     losses_tangents = tuple(ti + tti for ti, tti in
                             zip(losses_tangents, targets_tangents))
     params_tangents, = full_vjp_func(losses_tangents)
@@ -625,7 +627,7 @@ def _layer_tag_vjp(
   Returns:
     The computed ``losses`` and ``vjp_func`` pair.
   """
-  layer_vars_flat = jax.tree_leaves(
+  layer_vars_flat = jax.tree_util.tree_leaves(
       [tag.invars for tag in processed_jaxpr.layer_tags])
   layer_input_vars = tuple(set(layer_vars_flat))
 
@@ -638,7 +640,8 @@ def _layer_tag_vjp(
     write = functools.partial(tgm.write_env, env)
 
     # Bind args and consts to environment
-    write(processed_jaxpr.jaxpr.invars, jax.tree_leaves(own_func_args))
+    write(processed_jaxpr.jaxpr.invars,
+          jax.tree_util.tree_leaves(own_func_args))
     write(processed_jaxpr.jaxpr.constvars, processed_jaxpr.consts)
 
     # Loop through equations and evaluate them
@@ -685,7 +688,8 @@ def _layer_tag_vjp(
           env[v] = env[v] + aux[v]
 
     # Bind args and consts to environment
-    write(processed_jaxpr.jaxpr.invars, jax.tree_leaves(own_func_args))
+    write(processed_jaxpr.jaxpr.invars,
+          jax.tree_util.tree_leaves(own_func_args))
     write(processed_jaxpr.jaxpr.constvars, processed_jaxpr.consts)
 
     # Loop through equations and evaluate primitives using `bind`
@@ -715,9 +719,9 @@ def _layer_tag_vjp(
   primals_dict = dict(zip(layer_input_vars, layer_input_values))
   # Update with the values of all parameters, which are inputs to the function
   primals_dict.update(zip(processed_jaxpr.jaxpr.invars,
-                          jax.tree_leaves(primal_func_args)))
+                          jax.tree_util.tree_leaves(primal_func_args)))
   # Create auxiliary values all equal to zero.
-  aux_values = jax.tree_map(jnp.zeros_like, layer_input_values)
+  aux_values = jax.tree_util.tree_map(jnp.zeros_like, layer_input_values)
   # Create a mapping from all layer tag inputs to the zero values
   aux_dict = dict(zip(layer_input_vars, aux_values))
   # These values would now allow us to compute gradients wrt the layer tags
@@ -745,7 +749,7 @@ def _layer_tag_vjp(
     """
     all_tangents = aux_vjp(tangents)
     tangents_dict, inputs_tangents = all_tangents[0], all_tangents[1:]
-    inputs_tangents = jax.tree_leaves(inputs_tangents)
+    inputs_tangents = jax.tree_util.tree_leaves(inputs_tangents)
     tangents_dict.update(zip(processed_jaxpr.jaxpr.invars, inputs_tangents))
 
     read_primals = functools.partial(tgm.read_env, primals_dict)
