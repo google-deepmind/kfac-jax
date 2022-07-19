@@ -482,7 +482,7 @@ def match_equations(
     first_output_var = current_variables_map[eqn.outvars[0]]
     graph_eqn = graph.var_to_creation_op.get(first_output_var)
     if graph_eqn is None:
-      assert first_output_var in graph.jaxpr.invars
+      assert first_output_var in (graph.jaxpr.invars + graph.jaxpr.constvars)
       # Clearly the pattern equation is not an input or parameter
       return None
 
