@@ -24,7 +24,6 @@ from ml_collections import config_dict
 import optax
 
 
-# Types for annotation
 OptaxState = Any
 
 
@@ -69,8 +68,16 @@ class OptaxWrapper:
     self._value_func_has_rng = value_func_has_rng
     self._optax_optimizer = optax_optimizer
     self._batch_process_func = batch_process_func or (lambda x: x)
+    self.pmap_axis_name = "optax_axs"
     self._jit_step = jax.pmap(
-        self._step, axis_name="optax_axis", donate_argnums=[0, 1, 2, 3, 5])
+        self._step,
+        axis_name=self.pmap_axis_name,
+        donate_argnums=list(range(5))
+    )
+    self._jit_init = jax.pmap(
+        lambda p, *_: self._optax_optimizer.init(p),
+        axis_name=self.pmap_axis_name,
+    )
 
   def init(
       self,
@@ -80,8 +87,7 @@ class OptaxWrapper:
       func_state: Optional[kfac_jax.utils.FuncState] = None
   ) -> OptaxState:
     """Initializes the optimizer and returns the appropriate optimizer state."""
-    del rng, batch, func_state
-    return jax.pmap(self._optax_optimizer.init)(params)
+    return self._jit_init(params, rng, batch, func_state)
 
   def _step(
       self,
@@ -90,7 +96,7 @@ class OptaxWrapper:
       rng: chex.PRNGKey,
       batch: kfac_jax.utils.Batch,
       func_state: Optional[kfac_jax.utils.FuncState] = None,
-  ) -> kfac_jax.optimizer.FuncOutputs:
+  ) -> kfac_jax.optimizer.ReturnEither:
     """A single step of optax."""
     batch = self._batch_process_func(batch)
     func_args = kfac_jax.optimizer.make_func_args(
@@ -99,19 +105,14 @@ class OptaxWrapper:
         has_rng=self._value_func_has_rng
     )
     out, grads = self._value_and_grad_func(*func_args)
-
-    if not self._value_func_has_aux and not self._value_func_has_state:
-      loss, new_func_state, stats = out, None, {}
-    else:
-      loss, other = out
-      if self._value_func_has_aux and self._value_func_has_state:
-        new_func_state, stats = other
-      elif self._value_func_has_aux:
-        new_func_state, stats = None, other
-      else:
-        new_func_state, stats = other, {}
+    loss, new_func_state, stats = kfac_jax.optimizer.extract_func_outputs(
+        out,
+        has_aux=self._value_func_has_aux,
+        has_state=self._value_func_has_state,
+    )
     stats["loss"] = loss
     stats, grads = jax.lax.pmean((stats, grads), axis_name="optax_axis")
+
     # Compute and apply updates via our optimizer.
     updates, new_state = self._optax_optimizer.update(grads, state, params)
     new_params = optax.apply_updates(params, updates)

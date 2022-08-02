@@ -368,6 +368,11 @@ class Optimizer(utils.WithStagedMethods):
     return self._l2_reg
 
   @property
+  def estimator(self) -> curvature_estimator.BlockDiagonalCurvature:
+    """The underlying curvature estimator used by the optimizer."""
+    return self._estimator
+
+  @property
   def damping_decay_factor(self) -> chex.Numeric:
     """How fast to decay the damping, when using damping adaptation."""
     return self._damping_adaptation_decay ** self._damping_adaptation_interval
@@ -506,7 +511,7 @@ class Optimizer(utils.WithStagedMethods):
       ema_new: chex.Numeric,
   ) -> "Optimizer.State":
     """Updates the curvature estimator state from ``state``."""
-    state.estimator_state = self._estimator.update_curvature_matrix_estimate(
+    state.estimator_state = self.estimator.update_curvature_matrix_estimate(
         state=state.estimator_state,
         ema_old=ema_old,
         ema_new=ema_new,
@@ -536,7 +541,7 @@ class Optimizer(utils.WithStagedMethods):
     state.estimator_state = lax.cond(
         state.step_counter % self._inverse_update_period == 0,
         functools.partial(
-            self._estimator.update_cache,
+            self.estimator.update_cache,
             identity_weight=self.l2_reg + state.damping,
             exact_powers=None,
             approx_powers=-1,
@@ -556,7 +561,7 @@ class Optimizer(utils.WithStagedMethods):
       coefficient: Optional[chex.Array],
   ) -> utils.Params:
     """Computes the preconditioned gradient, maybe applying norm-constraint."""
-    preconditioned_grads = self._estimator.multiply_inverse(
+    preconditioned_grads = self.estimator.multiply_inverse(
         state=state.estimator_state,
         parameter_structured_vector=grads,
         identity_weight=self.l2_reg + state.damping,
@@ -670,7 +675,7 @@ class Optimizer(utils.WithStagedMethods):
     """A staged function to initialize the optimizer state ."""
     return Optimizer.State(
         velocities=jax.tree_util.tree_map(jnp.zeros_like, params),
-        estimator_state=self._estimator.init(
+        estimator_state=self.estimator.init(
             rng=rng,
             func_args=make_func_args(
                 params=params,
@@ -985,15 +990,15 @@ class Optimizer(utils.WithStagedMethods):
     if func_args is None:
       raise ValueError("When you have not provided `c_factor_v` you must "
                        "provide `func_args`.")
-    if self._estimator.default_mat_type == "fisher":
+    if self.estimator.default_mat_type == "fisher":
       c_factor_v = tuple(self._implicit.multiply_fisher_factor_transpose
                          (func_args, vi) for vi in vectors)
-    elif self._estimator.default_mat_type == "ggn":
+    elif self.estimator.default_mat_type == "ggn":
       c_factor_v = tuple(self._implicit.multiply_ggn_factor_transpose
                          (func_args, vi) for vi in vectors)
     else:
       raise ValueError(f"Unrecognized estimator.mat_type="
-                       f"{self._estimator.default_mat_type}.")
+                       f"{self.estimator.default_mat_type}.")
 
     return (utils.matrix_of_inner_products(c_factor_v),
             utils.matrix_of_inner_products(vectors),
@@ -1009,7 +1014,7 @@ class Optimizer(utils.WithStagedMethods):
     """Computes the components of the approximate quadratic model."""
     # v_i^T C v_j
     def c_times_v(v):
-      return self._estimator.multiply(
+      return self.estimator.multiply(
           state=state.estimator_state,
           parameter_structured_vector=v,
           identity_weight=0.0,
@@ -1130,11 +1135,12 @@ class Optimizer(utils.WithStagedMethods):
     """Computes the reduction ratio and the updated value of the damping."""
     # Reduction ratio
     rho = (new_loss - old_loss) / quad_change
+    rho_not_nan = jnp.nan_to_num(rho, nan=-100.0)
 
     # Update damping
-    should_increase = rho < self._damping_lower_threshold
+    should_increase = rho_not_nan < self._damping_lower_threshold
     increased_damping = current_damping / self.damping_decay_factor
-    should_decrease = rho > self._damping_upper_threshold
+    should_decrease = rho_not_nan > self._damping_upper_threshold
     decreased_damping = current_damping * self.damping_decay_factor
 
     # This is basically an if-else statement
