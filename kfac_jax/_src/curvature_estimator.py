@@ -693,7 +693,7 @@ class CurvatureEstimator(utils.Finalizable):
       use_cached: Whether to use a cached versions of the eigenvalues or to use
         the most recent curvature estimates to compute them. The cached version
         are going to be *at least* as fresh as the last time you called
-        ``update_cached_estimate`` with ``eigenvalues=True``.
+        :func:`~CurvatureEstimator.update_cache`  with ``eigenvalues=True``.
 
     Returns:
       A single array containing the eigenvalues of the curvature matrix.
@@ -1045,7 +1045,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       use_cached: Whether to use a cached versions of the eigenvalues or to use
         the most recent curvature estimates to compute them. The cached version
         are going to be *at least* as fresh as the last time you called
-        ``update_cached_estimate`` with ``eigenvalues=True``.
+        :func:`~CurvatureEstimator.update_cache` with ``eigenvalues=True``.
 
     Returns:
       A tuple of arrays containing the eigenvalues for each block. The

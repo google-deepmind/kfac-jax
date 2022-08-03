@@ -131,8 +131,7 @@ class CurvatureBlock(utils.Finalizable):
       cache: A dictionary, containing any state data that is updated on
         irregular intervals, such as inverses, eigenvalues, etc. Elements of
         this are updated via calls to :func:`~CurvatureBlock.update_cache`, and
-        do not necessarily correspond to the the most up to date curvature
-        estimate.
+        do not necessarily correspond to the most up-to-date curvature estimate.
     """
     cache: Optional[Dict[str, Union[chex.Array, Dict[str, chex.Array]]]]
 
@@ -282,9 +281,9 @@ class CurvatureBlock(utils.Finalizable):
         ``use_cached=False`` it is guaranteed that this argument will be used in
         the computation. When returning cached values, this argument *may* be
         ignored in favor whatever value was last passed to
-        :func:`~CurvatureBlock.update_cached_estimate`. The precise semantics
-        of this depend on the concrete subclass and its particular behavior with
-        regards to caching.
+        :func:`~CurvatureBlock.update_cache`. The precise semantics of this
+        depend on the concrete subclass and its particular behavior in regard to
+        caching.
       power: The power to which to raise the matrix.
       exact_power: Specifies whether to compute the exact matrix power of
         ``BlockMatrix + identity_weight I``. When this argument is ``False``
@@ -295,8 +294,8 @@ class CurvatureBlock(utils.Finalizable):
       use_cached: Whether to use a cached version for computing the product or
         to use the most recent curvature estimates. The cached version is
         going to be *at least* as fresh as the value provided to the last call
-        to :func:`~CurvatureBlock.update_cached_estimate` with the same value of
-        `power`.
+        to :func:`~CurvatureBlock.update_cache` with the same value of ``power``
+        .
     Returns:
       A tuple of arrays, representing the result of the matrix-vector product.
     """
@@ -373,8 +372,7 @@ class CurvatureBlock(utils.Finalizable):
       use_cached: Whether to use a cached versions of the eigenvalues or to use
         the most recent curvature estimates to compute them. The cached version
         are going to be *at least* as fresh as the last time you called
-        :func:`~CurvatureBlock.update_cached_estimate` with ``eigenvalues=True``
-        .
+        :func:`~CurvatureBlock.update_cache` with ``eigenvalues=True``.
 
     Returns:
       An array containing the eigenvalues of the block.
