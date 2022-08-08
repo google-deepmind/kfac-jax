@@ -55,7 +55,7 @@ def default_batch_size_extractor(
     multi_device: bool = False,
 ) -> chex.Numeric:
   axis = 1 if multi_device else 0
-  size = jax.tree_leaves(batch)[0].shape[axis]
+  size = jax.tree_util.tree_leaves(batch)[0].shape[axis]
   if multi_device:
     return jnp.asarray([size] * jax.local_device_count(), dtype=jnp.int32)
   return size
@@ -675,7 +675,7 @@ class Optimizer(utils.WithStagedMethods):
     """A staged function to initialize the optimizer state ."""
     return Optimizer.State(
         optax_state=self._internal_optimizer.init(params),
-        velocities=jax.tree_map(jnp.zeros_like, params),
+        velocities=jax.tree_util.tree_map(jnp.zeros_like, params),
         estimator_state=self._estimator.init(
             rng=rng,
             func_args=make_func_args(
@@ -835,7 +835,7 @@ class Optimizer(utils.WithStagedMethods):
       update_norm = utils.norm(delta)
 
     # Update parameters
-    params = jax.tree_map(jnp.add, params, delta)
+    params = jax.tree_util.tree_map(jnp.add, params, delta)
 
     # Optionally compute the reduction ratio and update the damping
     if self._use_adaptive_damping:
@@ -936,7 +936,7 @@ class Optimizer(utils.WithStagedMethods):
 
     if not self.finalized:
       if batch is not None:
-        fake_batch = jax.tree_map(jnp.zeros_like, batch)
+        fake_batch = jax.tree_util.tree_map(jnp.zeros_like, batch)
       else:
         fake_batch, data_iterator = utils.fake_element_from_iterator(
             data_iterator)

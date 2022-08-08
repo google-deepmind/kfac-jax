@@ -175,19 +175,19 @@ class CurvatureBlock(utils.Finalizable):
     """The shapes of the output variables of the block's tag equation."""
     output_vars = self.layer_tag_primitive.split_all_inputs(
         self._layer_tag_eq.invars)[0]
-    return jax.tree_map(lambda x: x.aval.shape, output_vars)
+    return jax.tree_util.tree_map(lambda x: x.aval.shape, output_vars)
 
   @property
   def inputs_shapes(self) -> Tuple[chex.Shape, ...]:
     """The shapes of the input variables of the block's tag equation."""
     input_vars = self.layer_tag_primitive.split_all_inputs(
         self._layer_tag_eq.invars)[1]
-    return jax.tree_map(lambda x: x.aval.shape, input_vars)
+    return jax.tree_util.tree_map(lambda x: x.aval.shape, input_vars)
 
   @property
   def parameters_shapes(self) -> Tuple[chex.Shape, ...]:
     """The shapes of the parameter variables of the block's tag equation."""
-    return tuple(jax.tree_map(lambda x: tuple(x.aval.shape),
+    return tuple(jax.tree_util.tree_map(lambda x: tuple(x.aval.shape),
                               self.parameter_variables))
 
   @property
@@ -530,12 +530,12 @@ class ScaledIdentity(CurvatureBlock):
     del exact_power, use_cached  # Unused
     identity_weight = identity_weight + 1.0
     if power == 1:
-      return jax.tree_map(lambda x: identity_weight * x, vector)
+      return jax.tree_util.tree_map(lambda x: identity_weight * x, vector)
     elif power == -1:
-      return jax.tree_map(lambda x: x / identity_weight, vector)
+      return jax.tree_util.tree_map(lambda x: x / identity_weight, vector)
     else:
       identity_weight = jnp.power(identity_weight, power)
-      return jax.tree_map(lambda x: identity_weight * x, vector)
+      return jax.tree_util.tree_map(lambda x: identity_weight * x, vector)
 
   def _eigenvalues_unscaled(
       self,
@@ -1090,8 +1090,8 @@ class NaiveFull(Full):
       batch_size: int,
       pmap_axis_name: Optional[str],
   ) -> Full.State:
-    params_grads = jax.tree_leaves(estimation_data["params_tangent"])
-    params_grads = jax.tree_map(lambda x: x.flatten(), params_grads)
+    params_grads = jax.tree_util.tree_leaves(estimation_data["params_tangent"])
+    params_grads = jax.tree_util.tree_map(lambda x: x.flatten(), params_grads)
     grads = jnp.concatenate(params_grads, axis=0)
     state.matrix.update(jnp.outer(grads, grads) / batch_size, ema_old, ema_new)
     return state

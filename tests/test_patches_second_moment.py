@@ -39,8 +39,8 @@ class TestPatchesMoments(parameterized.TestCase):
       rtol: float = 1e-6,
   ):
     """Asserts that the two PyTrees are close up to the provided tolerances."""
-    x_v, x_tree = jax.tree_flatten(x)
-    y_v, y_tree = jax.tree_flatten(y)
+    x_v, x_tree = jax.tree_util.tree_flatten(x)
+    y_v, y_tree = jax.tree_util.tree_flatten(y)
     self.assertEqual(x_tree, y_tree)
     for xi, yi in zip(x_v, y_v):
       self.assertEqual(xi.shape, yi.shape)
@@ -147,7 +147,7 @@ class TestPatchesMoments(parameterized.TestCase):
 
       # For accurate results we compare the mean over the batch and locations
       normalizer = n * num_locations
-      matrix, vector, matrix_fast, vector_fast = jax.tree_map(
+      matrix, vector, matrix_fast, vector_fast = jax.tree_util.tree_map(
           lambda x: x / normalizer, (matrix, vector, matrix_fast, vector_fast)  # pylint: disable=cell-var-from-loop
       )
       self.assertAllClose(matrix, matrix_fast)

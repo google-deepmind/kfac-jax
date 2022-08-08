@@ -129,7 +129,7 @@ class ImplicitExactCurvature:
   def batch_size(cls, losses: Sequence[loss_functions.LossFunction]) -> int:
     """The expected batch size given a list of loss instances."""
     del cls  # Unused
-    loss_inputs = jax.tree_leaves([loss.inputs for loss in losses])
+    loss_inputs = jax.tree_util.tree_leaves([loss.inputs for loss in losses])
     batch_size = loss_inputs[0].shape[0]
     if not all(loss_in.shape[0] == batch_size for loss_in in loss_inputs):
       raise ValueError("Not all registered losses have the same first dimension"
@@ -249,8 +249,8 @@ class ImplicitExactCurvature:
     assert len(losses1) == len(losses2)
     for loss1, loss2 in zip(losses1, losses2):
       assert isinstance(loss1, type(loss2))
-      inputs1 = jax.tree_flatten(loss1.inputs)[0]
-      inputs2 = jax.tree_flatten(loss2.inputs)[0]
+      inputs1 = jax.tree_util.tree_flatten(loss1.inputs)[0]
+      inputs2 = jax.tree_util.tree_flatten(loss2.inputs)[0]
       for in1, in2 in zip(inputs1, inputs2):
         assert in1.shape == in2.shape
         assert in1.dtype == in2.dtype
@@ -834,7 +834,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
   @property
   def params_structure_vector_of_indices(self) -> utils.Params:
     """A tree structure with parameters replaced by their indices."""
-    return jax.tree_unflatten(
+    return jax.tree_util.tree_unflatten(
         self._jaxpr.params_tree, range(len(self._jaxpr.params_vars_flat))
     )
 
@@ -860,7 +860,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       for index in block_indices:
         params_block_index[index] = i
     assert all(x is not None for x in params_block_index)
-    return jax.tree_unflatten(self._jaxpr.params_tree, params_block_index)
+    return jax.tree_util.tree_unflatten(self._jaxpr.params_tree, params_block_index)
 
   @property
   def num_params_variables(self) -> int:
@@ -876,7 +876,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       parameter_structured_vector: utils.Params,
   ) -> Tuple[Tuple[chex.Array, ...]]:
     """Splits the parameters to values for each corresponding block."""
-    params_values_flat = jax.tree_flatten(parameter_structured_vector)[0]
+    params_values_flat = jax.tree_util.tree_flatten(parameter_structured_vector)[0]
     blocks_vectors: List[Tuple[chex.Array, ...]] = []
     for indices in self._jaxpr.layer_indices:
       blocks_vectors.append(tuple(params_values_flat[i] for i in indices))
@@ -900,7 +900,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
         assert values_flat[i] is None
         values_flat[i] = v
     assert not any(v is None for v in values_flat)
-    return jax.tree_unflatten(self._jaxpr.params_tree, values_flat)
+    return jax.tree_util.tree_unflatten(self._jaxpr.params_tree, values_flat)
 
   def _finalize(self, func_args: utils.FuncArgs):
     self._jaxpr = self._vjp(func_args, return_only_jaxpr=True)
@@ -1063,7 +1063,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       #     estimate_k = 1.0 * estimate_k-1 + (ema_new/n) * n*estimate_index_k^2
       #     weight_k = 1.0 * weight_k-1 + (ema_new/n)
       # Which is mathematically equivalent to the original version.
-      zero_tangents = jax.tree_map(jnp.zeros_like,
+      zero_tangents = jax.tree_util.tree_map(jnp.zeros_like,
                                    list(loss.inputs for loss in losses))
       if estimation_mode == "fisher_exact":
         shapes = [l.fisher_factor_inner_shape[1:] for l in losses]
@@ -1085,7 +1085,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
             # In the special case of only one parameter, it still needs to be a
             # tuple for the tangents.
             vjp_vec[i] = (vjp_vec[i],)
-          vjp_vec[i] = jax.tree_map(lambda x: x * jnp.sqrt(total_num_indices),
+          vjp_vec[i] = jax.tree_util.tree_map(lambda x: x * jnp.sqrt(total_num_indices),
                                     vjp_vec[i])
           state = update_blocks(tuple(vjp_vec), state, ema_old, ema_new)
           ema_old = 1.0
@@ -1237,12 +1237,12 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
     def modified_losses_jvp(vjp_vec):
       blocks_info = losses_vjp(vjp_vec)
       tangents = [block["params_tangent"] for block in blocks_info]
-      tangents = jax.tree_leaves(tangents)
+      tangents = jax.tree_util.tree_leaves(tangents)
       # Need to reorder all of the block information to follow the canonical
       # order of variables
       params_vars = BlockDiagonalCurvature.params_vector_to_blocks_vectors(
           self, self._jaxpr.params_vars)
-      order = np.argsort([p.count for p in jax.tree_leaves(params_vars)])
+      order = np.argsort([p.count for p in jax.tree_util.tree_leaves(params_vars)])
       return [dict(params_tangent=tuple(tangents[i] for i in order))]
     return losses, modified_losses_jvp
 
@@ -1250,7 +1250,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       self,
       parameter_structured_vector: utils.Params,
   ) -> Tuple[Tuple[chex.Array, ...]]:
-    return jax.tree_leaves(parameter_structured_vector),
+    return jax.tree_util.tree_leaves(parameter_structured_vector),
 
   def blocks_vectors_to_params_vector(
       self,
@@ -1258,7 +1258,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
   ) -> utils.Params:
     assert len(blocks_vectors) == self.num_blocks
     if self._jaxpr is not None:
-      return jax.tree_unflatten(self._jaxpr.params_tree, blocks_vectors[0])
+      return jax.tree_util.tree_unflatten(self._jaxpr.params_tree, blocks_vectors[0])
     else:
       raise ValueError("You must initialize the estimator first.")
 
@@ -1282,7 +1282,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       is_first = index == 0
       args = list(func_args)
       # Index the batch for the `index` arguments.
-      args[self._batch_index] = jax.tree_map(lambda x: x[index][None],
+      args[self._batch_index] = jax.tree_util.tree_map(lambda x: x[index][None],
                                              args[self._batch_index])
       return BlockDiagonalCurvature.update_curvature_matrix_estimate(
           self=self,

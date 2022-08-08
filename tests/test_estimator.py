@@ -86,8 +86,8 @@ class TestEstimator(parameterized.TestCase):
       rtol: float = 1e-6,
   ):
     """Asserts that the two PyTrees are close up to the provided tolerances."""
-    x_v, x_tree = jax.tree_flatten(x)
-    y_v, y_tree = jax.tree_flatten(y)
+    x_v, x_tree = jax.tree_util.tree_flatten(x)
+    y_v, y_tree = jax.tree_util.tree_flatten(y)
     self.assertEqual(x_tree, y_tree)
     for xi, yi in zip(x_v, y_v):
       self.assertEqual(xi.shape, yi.shape)
@@ -139,17 +139,17 @@ class TestEstimator(parameterized.TestCase):
       flat_v_e = zeros_vector.at[index].set(1.0)
       v_e_leaves = []
       i = 0
-      for p in jax.tree_leaves(params):
+      for p in jax.tree_util.tree_leaves(params):
         v_e_leaves.append(flat_v_e[i: i + p.size].reshape(p.shape))
         i += p.size
-      v_e = jax.tree_unflatten(jax.tree_structure(params), v_e_leaves)
+      v_e = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(params), v_e_leaves)
       if curvature_type == "fisher":
         r_e = implicit.multiply_fisher(func_args, v_e)
       elif curvature_type == "ggn":
         r_e = implicit.multiply_ggn(func_args, v_e)
       else:
         raise ValueError(f"Unrecognized curvature_type={curvature_type}.")
-      flat_r_e = jax.tree_leaves(jax.tree_map(lambda x: x.flatten(), r_e))
+      flat_r_e = jax.tree_util.tree_leaves(jax.tree_util.tree_map(lambda x: x.flatten(), r_e))
       return index + 1, jnp.concatenate(flat_r_e, axis=0)
     _, matrix = jax.lax.scan(mul_e_i, 0, None, length=explicit_estimator.dim)
 
@@ -271,12 +271,12 @@ class TestEstimator(parameterized.TestCase):
       flat_v_e = zeros_vector.at[index].set(1.0)
       v_e_leaves = []
       i = 0
-      for p in jax.tree_leaves(params):
+      for p in jax.tree_util.tree_leaves(params):
         v_e_leaves.append(flat_v_e[i: i + p.size].reshape(p.shape))
         i += p.size
-      v_e = jax.tree_unflatten(jax.tree_structure(params), v_e_leaves)
+      v_e = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(params), v_e_leaves)
       r_e = implicit.multiply_hessian(func_args, v_e)
-      flat_r_e = jax.tree_leaves(jax.tree_map(lambda x: x.flatten(), r_e))
+      flat_r_e = jax.tree_util.tree_leaves(jax.tree_util.tree_map(lambda x: x.flatten(), r_e))
       return index + 1, jnp.concatenate(flat_r_e, axis=0)
 
     _, hessian = jax.lax.scan(mul_e_i, 0, None, length=block_estimator.dim)

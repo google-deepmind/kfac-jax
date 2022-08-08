@@ -272,7 +272,7 @@ class JaxprGraph:
         sub_graph_eqns.append(eqn)
         sub_graph_vars.update(
             v for v in eqn.invars if not isinstance(v, core.Literal))
-    outvars, out_tree = jax.tree_flatten(tuple(
+    outvars, out_tree = jax.tree_util.tree_flatten(tuple(
         eqn.outvars for eqn in self.losses_eqns))
     return JaxprGraph(
         name="sub_" + self.name,
@@ -311,21 +311,21 @@ def make_jax_graph(
     tag_ctor: Optional[TagCtor] = None,
 ) -> JaxprGraph:
   """Creates a :class:`~JaxGraph` instance from the provided function and arguments."""
-  in_tree = jax.tree_structure(func_args)
+  in_tree = jax.tree_util.tree_structure(func_args)
   typed_jaxpr, out_shapes = jax.make_jaxpr(func, return_shape=True)(*func_args)
-  in_vars = jax.tree_unflatten(in_tree, typed_jaxpr.jaxpr.invars)
+  in_vars = jax.tree_util.tree_unflatten(in_tree, typed_jaxpr.jaxpr.invars)
   if isinstance(params_index, int):
     params_vars = in_vars[params_index]
   else:
     params_vars = tuple(in_vars[i] for i in params_index)
-  params_vars, params_tree = jax.tree_flatten(params_vars)
+  params_vars, params_tree = jax.tree_util.tree_flatten(params_vars)
   return JaxprGraph(
       name=graph_name,
       jaxpr=typed_jaxpr.jaxpr,
       consts=typed_jaxpr.literals,
       params_vars=params_vars,
       params_tree=params_tree,
-      out_tree=jax.tree_structure(out_shapes),
+      out_tree=jax.tree_util.tree_structure(out_shapes),
       tag_ctor=tag_ctor
   )
 
@@ -395,7 +395,7 @@ class GraphPattern:
   def graph(self) -> JaxprGraph:
     """The Jaxpr graph representing the computation of this pattern."""
     if self._graph is None:
-      jnp_args = jax.tree_map(jnp.asarray, self._example_args)
+      jnp_args = jax.tree_util.tree_map(jnp.asarray, self._example_args)
       self._graph = make_jax_graph(
           broadcast_merger(self._compute_func), jnp_args, 1, self._name)
     return self._graph
@@ -657,7 +657,7 @@ def read_env(
 ) -> Union[float, chex.Array, Sequence[chex.Array]]:
   """Reads from the variable-to-array environment during tracing."""
   if isinstance(var, (list, tuple)):
-    return jax.tree_map(lambda x: read_env(env, x), var)
+    return jax.tree_util.tree_map(lambda x: read_env(env, x), var)
   elif isinstance(var, core.Literal):
     # Literals are values baked into the Jaxpr
     return var.val
@@ -678,7 +678,7 @@ def write_env(
   if isinstance(var, list):
     if not isinstance(val, list):
       val = [val]
-    return jax.tree_map(lambda x, y: write_env(env, x, y), var, val)
+    return jax.tree_util.tree_map(lambda x, y: write_env(env, x, y), var, val)
   elif isinstance(var, (core.Literal, core.Var)):
     env[var] = val
   else:
@@ -718,7 +718,7 @@ def broadcast_merger(f: utils.Func) -> utils.Func:
 
   def read_with_delayed_evaluation(env, var):
     if isinstance(var, (list, tuple)):
-      return jax.tree_map(lambda x: read_with_delayed_evaluation(env, x), var)
+      return jax.tree_util.tree_map(lambda x: read_with_delayed_evaluation(env, x), var)
     elif isinstance(var, core.Literal):
       # Literals are values baked into the Jaxpr
       return var.val
@@ -739,7 +739,7 @@ def broadcast_merger(f: utils.Func) -> utils.Func:
   @functools.wraps(f)
   def merged_func(*func_args: Any) -> Any:
     typed_jaxpr, out_avals = jax.make_jaxpr(f, return_shape=True)(*func_args)
-    out_tree = jax.tree_structure(out_avals)
+    out_tree = jax.tree_util.tree_structure(out_avals)
     jaxpr, consts = typed_jaxpr.jaxpr, typed_jaxpr.literals
 
     # Mapping from variable -> value
@@ -748,7 +748,7 @@ def broadcast_merger(f: utils.Func) -> utils.Func:
     write = functools.partial(write_env, env)
 
     # Bind args and consts to environment
-    flat_args = jax.tree_flatten(func_args)[0]
+    flat_args = jax.tree_util.tree_flatten(func_args)[0]
     write(jaxpr.invars, flat_args)
     write(jaxpr.constvars, consts)
 
@@ -781,7 +781,7 @@ def broadcast_merger(f: utils.Func) -> utils.Func:
               (input_values[0], eqn.params["broadcast_dimensions"]))
       else:
         write(eqn.outvars, eval_jaxpr_eqn(eqn, read(eqn.invars)))
-    return jax.tree_unflatten(out_tree, read(jaxpr.outvars))
+    return jax.tree_util.tree_unflatten(out_tree, read(jaxpr.outvars))
 
   return merged_func
 
@@ -1137,13 +1137,13 @@ def auto_register_tags(
   logging.info("=" * 50)
   logging.info("Graph parameter registrations:")
   logging.info(pprint.pformat(
-      jax.tree_unflatten(graph.params_tree, params_labels)))
+      jax.tree_util.tree_unflatten(graph.params_tree, params_labels)))
   logging.info("=" * 50)
 
   # Construct a function with all of the extra tag registrations
   @functools.wraps(func)
   def wrapped_auto_registered(*args: Any) -> Any:
-    flat_args, _ = jax.tree_flatten(args)
+    flat_args, _ = jax.tree_util.tree_flatten(args)
     # Mapping from variable -> value
     env = {}
 
@@ -1175,7 +1175,7 @@ def auto_register_tags(
         # the same value.
         output_vars.append(
             [v for v in eqn.outvars if not isinstance(v, jax.core.DropVar)])
-      output_vars, out_tree = jax.tree_flatten(output_vars)
+      output_vars, out_tree = jax.tree_util.tree_flatten(output_vars)
     else:
       output_vars = graph.jaxpr.outvars
       out_tree = graph.out_tree
@@ -1194,5 +1194,5 @@ def auto_register_tags(
         break
 
     outputs = read(output_vars)
-    return jax.tree_unflatten(out_tree, outputs)
+    return jax.tree_util.tree_unflatten(out_tree, outputs)
   return wrapped_auto_registered
