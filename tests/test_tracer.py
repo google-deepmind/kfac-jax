@@ -35,7 +35,7 @@ class TestTracer(parameterized.TestCase):
       x: utils.PyTree,
       y: utils.PyTree,
       check_dtypes: bool = True,
-      atol: float = 1e-6,
+      atol: float = 5e-6,
       rtol: float = 1e-6,
   ):
     """Asserts that the two PyTrees are close up to the provided tolerances."""
@@ -116,7 +116,7 @@ class TestTracer(parameterized.TestCase):
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., chex.Array],
-      data_point_shape: chex.Shape,
+      data_point_shape: Mapping[str, chex.Shape],
       seed: int,
       dataset_size: int = 4,
   ):
@@ -149,7 +149,7 @@ class TestTracer(parameterized.TestCase):
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., chex.Array],
-      data_point_shape: chex.Shape,
+      data_point_shape: Mapping[str, chex.Shape],
       seed: int,
       data_size: int = 4,
   ):
@@ -173,7 +173,7 @@ class TestTracer(parameterized.TestCase):
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., chex.Array],
-      data_point_shape: chex.Shape,
+      data_point_shape: Mapping[str, chex.Shape],
       seed: int,
       dataset_size: int = 4,
   ):
@@ -209,7 +209,7 @@ class TestTracer(parameterized.TestCase):
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., chex.Array],
-      data_point_shape: chex.Shape,
+      data_point_shape: Mapping[str, chex.Shape],
       seed: int,
       data_size: int = 4,
   ):
@@ -241,7 +241,7 @@ class TestTracer(parameterized.TestCase):
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., chex.Array],
-      data_point_shape: chex.Shape,
+      data_point_shape: Mapping[str, chex.Shape],
       seed: int,
       dataset_size: int = 4,
   ):
@@ -273,7 +273,7 @@ class TestTracer(parameterized.TestCase):
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., chex.Array],
-      data_point_shape: chex.Shape,
+      data_point_shape: Mapping[str, chex.Shape],
       seed: int,
       data_size: int = 4,
   ):
@@ -296,7 +296,7 @@ class TestTracer(parameterized.TestCase):
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., chex.Array],
-      data_point_shape: chex.Shape,
+      data_point_shape: Mapping[str, chex.Shape],
       seed: int,
       dataset_size: int = 4,
   ):
@@ -355,7 +355,7 @@ class TestTracer(parameterized.TestCase):
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., chex.Array],
-      data_point_shape: chex.Shape,
+      data_point_shape: Mapping[str, chex.Shape],
       seed: int,
       data_size: int = 4,
   ):

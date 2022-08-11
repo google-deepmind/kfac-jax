@@ -82,7 +82,7 @@ class _Linear(hk.Linear):
     y = super().__call__(x, precision=jax.lax.Precision.HIGHEST)
     if aux is not None:
       y, aux = y + aux[0], aux[1:]
-    layer_values.append((x, y))
+
     if self._explicit_tagging:
       params = _extract_params(self, ("w", "b"))
       y = tags.register_dense(
@@ -91,6 +91,8 @@ class _Linear(hk.Linear):
           precision=(jax.lax.Precision.HIGHEST, jax.lax.Precision.HIGHEST),
           preferred_element_type=None,
       )
+    layer_values.append((x, y))
+
     return y, layer_values, aux
 
 
@@ -193,6 +195,40 @@ class _LayerNorm(hk.LayerNorm):
     return y, layer_values, aux
 
 
+class _VanillaRNN(hk.VanillaRNN):
+  """Modified Vanilla RNN to handle layer values and auxiliary inputs."""
+
+  def __init__(
+      self,
+      hidden_size: int,
+      activation: Callable[[LayerInputs], LayerInputs],
+      explicit_tagging: bool = False,
+      double_bias: bool = True,
+      name: Optional[str] = None
+  ):
+    super().__init__(hidden_size, double_bias, name=name)
+    self.activation = activation
+    self.explicit_tagging = explicit_tagging
+
+  def __call__(
+      self,
+      inputs: LayerInputs,
+      prev_state: chex.Array,
+      *_,
+  ) -> Tuple[Tuple[chex.Array, LayerValues], chex.Array]:
+    x, layer_values, aux = inputs
+    input_to_hidden = _Linear(
+        self.hidden_size, explicit_tagging=self.explicit_tagging)
+    hidden_to_hidden = _Linear(
+        self.hidden_size, explicit_tagging=self.explicit_tagging,
+        with_bias=self.double_bias)
+    ih, layer_values, aux = input_to_hidden((x, layer_values, aux))
+    hh, layer_values, aux = hidden_to_hidden((x, layer_values, aux))
+    out, layer_values, aux = self.activation((ih + hh, layer_values, aux))
+    assert aux is None or not aux
+    return (out, layer_values), out
+
+
 def _modify_func(
     func: Callable[[chex.Array], chex.Array]
 ) -> Callable[[LayerInputs], LayerInputs]:
@@ -271,8 +307,42 @@ def _register_deterministic_categorical(
       logits, targets, weight=weight)
 
 
+def squared_error_loss(
+    params: utils.Params,
+    batch: utils.Batch,
+    model_func: Callable[..., hk.Transformed],
+    l2_reg: float = 0.0,
+    explicit_tagging: bool = False,
+    return_registered_losses_inputs: bool = False,
+    return_layer_values: bool = False,
+) -> LossOutputs:
+  """A squared error loss computed for the given model function."""
+  x, y = batch["images"], batch["targets"]
+
+  y_hat, layer_values = model_func(
+      explicit_tagging=explicit_tagging, output_dim=y.shape[-1],
+  ).apply(params, x)
+
+  assert y_hat.shape == y.shape
+  y = y.reshape((-1, y.shape[-1]))
+  y_hat = y_hat.reshape((-1, y_hat.shape[-1]))
+
+  y_hat, y = loss_functions.register_squared_error_loss(y_hat, y, weight=0.5)
+
+  if return_registered_losses_inputs:
+    return [[y_hat, y]]
+
+  loss = jnp.mean(jnp.sum((y_hat - y) ** 2, axis=-1)) / 2
+  loss = loss + l2_reg * utils.norm(params)
+  if return_layer_values:
+    return [loss], layer_values
+  else:
+    return [loss]
+
+
 def autoencoder(
     layer_widths: Sequence[int],
+    output_dim: int,
     explicit_tagging: bool = False,
     activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
 ) -> hk.Transformed:
@@ -288,7 +358,7 @@ def autoencoder(
       layers.append(_Linear(output_size=width,
                             explicit_tagging=explicit_tagging))
       layers.append(activation)
-    layers.append(_Linear(output_size=images.shape[-1],
+    layers.append(_Linear(output_size=output_dim,
                           explicit_tagging=explicit_tagging))
     model = hk.Sequential(layers)
     output, layer_values, aux = model((images, list(), aux))
@@ -303,15 +373,23 @@ def linear_squared_error_autoencoder_loss(
     layer_widths: Sequence[int],
     l2_reg: float = 0.0,
     explicit_tagging: bool = False,
-) -> chex.Array:
+    return_registered_losses_inputs: bool = False,
+    return_layer_values: bool = False,
+) -> LossOutputs:
   """A linear autoencoder with squared error."""
-  outputs, _ = autoencoder(
-      layer_widths, explicit_tagging, activation=_special_identity,
-  ).apply(params, batch["images"])
-  outputs, _ = loss_functions.register_squared_error_loss(
-      outputs, batch["images"])
-  loss = jnp.mean(jnp.sum((outputs - batch["images"]) ** 2, axis=-1))
-  return loss + l2_reg * utils.norm(params)
+  batch["images"] = batch["images"].reshape(batch["images"].shape[0], -1)
+  batch["targets"] = batch["images"]
+  model_func = functools.partial(
+      autoencoder, layer_widths=layer_widths, activation=_special_identity)
+  return squared_error_loss(
+      params=params,
+      batch=batch,
+      model_func=model_func,
+      l2_reg=l2_reg,
+      explicit_tagging=explicit_tagging,
+      return_registered_losses_inputs=return_registered_losses_inputs,
+      return_layer_values=return_layer_values,
+  )
 
 
 def autoencoder_deterministic_loss(
@@ -323,11 +401,12 @@ def autoencoder_deterministic_loss(
     activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
 ) -> chex.Array:
   """Evaluate the autoencoder with a deterministic loss."""
+  x = batch["images"].reshape((batch["images"].shape[0], -1))
   logits, _ = autoencoder(
-      layer_widths, explicit_tagging, activation=activation,
-  ).apply(params, batch["images"])
-  logits, _ = _register_deterministic_bernoulli(logits, batch["images"])
-  loss = - distrax.Bernoulli(logits=logits).log_prob(batch["images"])
+      layer_widths, x.shape[-1], explicit_tagging, activation=activation,
+  ).apply(params, x)
+  logits, _ = _register_deterministic_bernoulli(logits, x)
+  loss = - distrax.Bernoulli(logits=logits).log_prob(x)
   loss = jnp.mean(jnp.sum(loss, axis=-1)).astype(logits.dtype)
   return loss + l2_reg * utils.norm(params)
 
@@ -343,28 +422,30 @@ def autoencoder_with_two_losses(
     activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
 ) -> LossOutputs:
   """Evaluate the autoencoder with two losses."""
+  x = batch["images"].reshape((batch["images"].shape[0], -1))
+
   logits, layer_values = autoencoder(
-      layer_widths, explicit_tagging, activation=activation,
-  ).apply(params, batch["images"], aux)
+      layer_widths, x.shape[-1], explicit_tagging, activation=activation,
+  ).apply(params, x, aux)
 
   # Register both losses in KFAC
-  logits1, _ = loss_functions.register_multi_bernoulli_predictive_distribution(
-      logits, batch["images"])
-  logits2, _ = loss_functions.register_normal_predictive_distribution(
-      logits, batch["images"], weight=0.1)
+  logits1, img1 = loss_functions.register_multi_bernoulli_predictive_distribution(
+      logits, x)
+  logits2, img2 = loss_functions.register_normal_predictive_distribution(
+      logits, x, weight=0.1)
 
   if return_registered_losses_inputs:
-    return [[logits1], [logits2]]
-  else:
-    loss_1 = - distrax.Bernoulli(logits=logits1).log_prob(batch["images"])
-    scale_diag = jnp.ones_like(logits2) * jnp.sqrt(0.5)
-    loss_2 = - distrax.MultivariateNormalDiag(
-        loc=logits2, scale_diag=scale_diag).log_prob(batch["images"])
+    return [[logits1, img1], [logits2, img2]]
 
-    if return_layer_values:
-      return [loss_1, 0.1 * loss_2], layer_values
-    else:
-      return [loss_1, 0.1 * loss_2]
+  loss_1 = - distrax.Bernoulli(logits=logits1).log_prob(x)
+  scale_diag = jnp.ones_like(logits2) * jnp.sqrt(0.5)
+  loss_2 = - distrax.MultivariateNormalDiag(
+      loc=logits2, scale_diag=scale_diag).log_prob(x)
+
+  if return_layer_values:
+    return [loss_1, 0.1 * loss_2], layer_values
+  else:
+    return [loss_1, 0.1 * loss_2]
 
 
 def conv_classifier(
@@ -455,23 +536,158 @@ def conv_classifier_loss(
   logits, layer_values = conv_classifier(
       num_classes, layer_channels, explicit_tagging, activation=activation
   ).apply(params, batch["images"], aux=aux)
-  logits, _ = loss_functions.register_categorical_predictive_distribution(
+  logits, labels = loss_functions.register_categorical_predictive_distribution(
       logits, batch["labels"])
-  loss = - distrax.Categorical(logits=logits).log_prob(batch["labels"])
-  loss = loss + l2_reg * utils.norm(params)
 
   if return_registered_losses_inputs:
-    return [[logits]]
-  else:
-    if return_layer_values:
-      return [loss], layer_values
-    else:
-      return [loss]
+    return [[logits, labels]]
 
+  loss = - distrax.Categorical(logits=logits).log_prob(batch["labels"])
+  loss = loss + l2_reg * utils.norm(params)
+  if return_layer_values:
+    return [loss], layer_values
+  else:
+    return [loss]
+
+
+def layer_stack_with_scan_mlp(
+    layer_widths: Sequence[int],
+    output_dim: int,
+    explicit_tagging: bool = False,
+    activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
+) -> hk.Transformed:
+  """A model that uses ``hk.experimental.layer_stack`` with scan."""
+  def scan_fn(
+      x: chex.Array,
+      aux: Optional[Tuple[chex.Array, ...]] = None,
+  ) -> Tuple[chex.Array, LayerValues]:
+    layers = []
+    for w in layer_widths:
+      layers.append(_Linear(w, explicit_tagging=explicit_tagging))
+      layers.append(activation)
+    layers.append(_Linear(x.shape[-1], explicit_tagging=explicit_tagging))
+    model = hk.Sequential(layers)
+
+    output, layer_values, aux = model((x, list(), aux))
+
+    assert aux is None or not aux
+    return output, layer_values
+
+  def func(
+      batch: Union[chex.Array, Mapping[str, chex.Array]],
+      aux: Optional[Tuple[chex.Array, ...]] = None,
+  ) -> Tuple[chex.Array, LayerValues]:
+    x = batch["images"] if isinstance(batch, Mapping) else batch
+
+    stack = hk.experimental.layer_stack(2, with_per_layer_inputs=True)(scan_fn)
+
+    if aux is None:
+      aux = None
+      x, layer_values = stack(x)
+    else:
+      aux_scan, aux = aux
+      x, layer_values = stack(scan_fn)(x, aux_scan)
+
+    y_hat, layer_values, aux = _Linear(
+        output_dim, explicit_tagging=explicit_tagging)((x, layer_values, aux))
+    assert aux is None or not aux
+    return y_hat, layer_values
+
+  return hk.without_apply_rng(hk.transform(func))
+
+
+def layer_stack_mlp_loss(
+    params: utils.Params,
+    batch: utils.Batch,
+    layer_widths: Sequence[int],
+    l2_reg: float = 0.0,
+    explicit_tagging: bool = False,
+    return_registered_losses_inputs: bool = False,
+    return_layer_values: bool = False,
+    activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
+) -> LossOutputs:
+  """A layer stack mlp loss."""
+  return squared_error_loss(
+      params=params,
+      batch=batch,
+      model_func=functools.partial(
+          layer_stack_with_scan_mlp,
+          layer_widths=layer_widths,
+          activation=activation,
+      ),
+      l2_reg=l2_reg,
+      explicit_tagging=explicit_tagging,
+      return_registered_losses_inputs=return_registered_losses_inputs,
+      return_layer_values=return_layer_values,
+  )
+
+
+def vanilla_rnn_with_scan(
+    hidden_size: int,
+    output_dim: int,
+    explicit_tagging: bool = False,
+    activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
+) -> hk.Transformed:
+  """A model that uses an RNN with scan."""
+  def func(
+      batch: Union[chex.Array, Mapping[str, chex.Array]],
+      aux: Optional[Tuple[chex.Array, ...]] = None,
+  ) -> Tuple[chex.Array, LayerValues]:
+    x = batch["images"] if isinstance(batch, Mapping) else batch
+
+    core = _VanillaRNN(
+        hidden_size, activation=activation, explicit_tagging=explicit_tagging)
+    init_state = core.initial_state(x.shape[1])
+
+    if aux is None:
+      aux = None
+      unroll_in = (x, list(), None)
+      (x, layer_values), _ = hk.dynamic_unroll(core, unroll_in, init_state)
+    else:
+      aux_rnn, aux = aux
+      unroll_in = (x, list(), aux_rnn)
+      (x, layer_values), _ = hk.dynamic_unroll(core, unroll_in, init_state)
+
+    layer_values = list()
+    # We need this in order the dense tag to recognize things correctly
+    x_r = x.reshape((-1, x.shape[-1]))
+    y_hat, layer_values, aux = _Linear(
+        output_dim, explicit_tagging=explicit_tagging)((x_r, layer_values, aux))
+    y_hat = y_hat.reshape(x.shape[:2] + (output_dim,))
+    assert aux is None or not aux
+    return y_hat, layer_values
+
+  return hk.without_apply_rng(hk.transform(func))
+
+
+def vanilla_rnn_with_scan_loss(
+    params: utils.Params,
+    batch: utils.Batch,
+    hidden_size: int,
+    l2_reg: float = 0.0,
+    explicit_tagging: bool = False,
+    return_registered_losses_inputs: bool = False,
+    return_layer_values: bool = False,
+    activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
+) -> LossOutputs:
+  """A layer stack mlp loss."""
+  return squared_error_loss(
+      params=params,
+      batch=batch,
+      model_func=functools.partial(
+          vanilla_rnn_with_scan,
+          hidden_size=hidden_size,
+          activation=activation,
+      ),
+      l2_reg=l2_reg,
+      explicit_tagging=explicit_tagging,
+      return_registered_losses_inputs=return_registered_losses_inputs,
+      return_layer_values=return_layer_values,
+  )
 
 NON_LINEAR_MODELS = [
     (
-        autoencoder([20, 10, 20]).init,
+        autoencoder([20, 10, 20], output_dim=8).init,
         functools.partial(
             autoencoder_with_two_losses,
             layer_widths=[20, 10, 20]),
@@ -495,7 +711,7 @@ NON_LINEAR_MODELS = [
 
 LINEAR_MODELS = [
     (
-        autoencoder([20, 10, 20]).init,
+        autoencoder([20, 10, 20], output_dim=8).init,
         functools.partial(
             linear_squared_error_autoencoder_loss,
             layer_widths=[20, 10, 20]),
@@ -507,7 +723,7 @@ LINEAR_MODELS = [
 
 PIECEWISE_LINEAR_MODELS = [
     (
-        autoencoder([20, 10, 20]).init,
+        autoencoder([20, 10, 20], output_dim=8).init,
         functools.partial(
             autoencoder_with_two_losses,
             layer_widths=[20, 10, 20],
@@ -515,5 +731,29 @@ PIECEWISE_LINEAR_MODELS = [
         ),
         dict(images=(8,)),
         1231987,
+    ),
+]
+
+
+SCAN_MODELS = [
+    (
+        layer_stack_with_scan_mlp([20, 15, 10], output_dim=2).init,
+        functools.partial(
+            layer_stack_mlp_loss,
+            layer_widths=[20, 15, 10],
+            activation=_special_tanh,
+        ),
+        dict(images=(13,), targets=(2,)),
+        9812386123,
+    ),
+    (
+        vanilla_rnn_with_scan(20, output_dim=2).init,
+        functools.partial(
+            vanilla_rnn_with_scan_loss,
+            hidden_size=20,
+            activation=_special_tanh,
+        ),
+        dict(images=(7, 13), targets=(7, 2)),
+        650981239,
     ),
 ]

@@ -983,7 +983,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
 
   def init(
       self,
-      rng: chex.Array,
+      rng: chex.PRNGKey,
       func_args: utils.FuncArgs,
       exact_powers_to_cache: Optional[curvature_blocks.ScalarOrSequence],
       approx_powers_to_cache: Optional[curvature_blocks.ScalarOrSequence],

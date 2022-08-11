@@ -12,41 +12,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC functionality for auto-detecting layer tags and graph matching."""
+import dataclasses
 import functools
 import itertools
 import pprint
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple, TypeVar, Union
+from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple, TypeVar, Union
 
 from absl import logging
 import chex
 import immutabledict
 import jax
-from jax import core
-from jax import lax
-from jax import util as jax_util
 import jax.numpy as jnp
 from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import utils
 import numpy as np
 
+HIGHER_ORDER_NAMES = ("cond", "while", "scan", "xla_call", "xla_pmap")
+
 # Types for annotation
+Var = jax.core.Var
+Vars = Sequence[Var]
+Jaxpr = jax.core.Jaxpr
+ClosedJaxpr = jax.core.ClosedJaxpr
+JaxprEqn = jax.core.JaxprEqn
+JaxprEqns = Sequence[JaxprEqn]
 T = TypeVar("T")
-EquivalenceFunction = Callable[[core.JaxprEqn, core.JaxprEqn], bool]
-GraphMatch = Tuple[
-    "JaxprGraph",
-    Dict[core.Var, core.Var],
-    Tuple[core.JaxprEqn, ...]
-]
-TagCtor = Callable[
-    [Sequence[core.JaxprEqn], Mapping[core.Var, chex.Array]],
-    chex.Array
-]
+J = TypeVar("J", Jaxpr, ClosedJaxpr)
+JaxprOrClosedJaxpr = Union[Jaxpr, ClosedJaxpr]
+EquivalenceFunction = Callable[[JaxprEqn, JaxprEqn], bool]
+MakeVarFunc = Callable[[jax.core.AbstractValue], Var]
+VarProcessor = Callable[[Vars, MakeVarFunc], Tuple[Vars, JaxprEqns]]
 PatternComputeFunc = Callable[[chex.Array, Sequence[chex.Array]], chex.Array]
-ParameterExtractorFunc = Callable[[Sequence[core.JaxprEqn]], Mapping[str, Any]]
-ValuesProcessor = Callable[[Sequence[chex.Array]], Sequence[chex.Array]]
+ParameterExtractorFunc = Callable[[JaxprEqns], Mapping[str, Any]]
+TagCtor = Callable[[Vars, Vars, JaxprEqns, MakeVarFunc], JaxprEqn]
 
 
-def eval_jaxpr_eqn(eqn, in_values):
+def eval_jaxpr_eqn(eqn: JaxprEqn, in_values: Vars) -> Var:
   """Computes the outputs of the given Jaxpr equation."""
   subfuns, bind_params = eqn.primitive.get_bind_params(eqn.params)
   with jax.core.source_info_util.user_context(
@@ -55,8 +56,8 @@ def eval_jaxpr_eqn(eqn, in_values):
 
 
 def reshape_equivalent(
-    equation1: core.JaxprEqn,
-    equation2: core.JaxprEqn
+    equation1: JaxprEqn,
+    equation2: JaxprEqn,
 ) -> bool:
   """Equivalence rule for :func:`~jax.numpy.reshape` primitives."""
   if not (equation1.primitive.name == "reshape" and
@@ -67,8 +68,8 @@ def reshape_equivalent(
 
 
 def broadcast_in_dim_equivalent(
-    equation1: core.JaxprEqn,
-    equation2: core.JaxprEqn
+    equation1: JaxprEqn,
+    equation2: JaxprEqn,
 ) -> bool:
   """Equivalence rule for :func:`~jax.numpy.broadcast` primitives."""
   if not (equation1.primitive.name == "broadcast_in_dim" and
@@ -78,8 +79,8 @@ def broadcast_in_dim_equivalent(
 
 
 def conv_general_dilated_equivalent(
-    equation1: core.JaxprEqn,
-    equation2: core.JaxprEqn
+    equation1: JaxprEqn,
+    equation2: JaxprEqn,
 ) -> bool:
   """Equivalence rule for :func:`~jax.lax.conv_general_dilated` primitives."""
   if not (equation1.primitive.name == "conv_general_dilated" and
@@ -112,8 +113,8 @@ def conv_general_dilated_equivalent(
 
 
 def dot_general_equivalent(
-    equation1: core.JaxprEqn,
-    equation2: core.JaxprEqn
+    equation1: JaxprEqn,
+    equation2: JaxprEqn,
 ) -> bool:
   if not (equation1.primitive.name == "dot_general" and
           equation2.primitive.name == "dot_general"):
@@ -173,7 +174,7 @@ class GraphMatcherComparator:
   def add_special_equivalence_rule(
       self,
       name: str,
-      equivalence_rule: EquivalenceFunction
+      equivalence_rule: EquivalenceFunction,
   ):
     """Adds the special equivalence rule for ``name`` to the global store."""
     if name in self.special_eqn_equivalence_rules:
@@ -183,8 +184,8 @@ class GraphMatcherComparator:
 
   def are_equivalent(
       self,
-      equation1: core.JaxprEqn,
-      equation2: core.JaxprEqn
+      equation1: JaxprEqn,
+      equation2: JaxprEqn,
   ) -> bool:
     """Returns whether the two equations are considered equivalent."""
     if equation1.primitive.name != equation2.primitive.name:
@@ -198,99 +199,51 @@ class GraphMatcherComparator:
     return equation1.params == equation2.params
 
 
+@dataclasses.dataclass(frozen=True)
 class JaxprGraph:
   """A wrapper around Jaxpr as a graph for pattern matching.
 
   Attributes:
     name: The name for this Jaxpr graph.
-    jaxpr: The original Jaxpr that is being wrapped.
-    consts: The constants needed for evaluation of the raw Jaxpr.
-    params_vars: A flat list of all of the abstract parameter variables.
-    params_tree: The PyTree structure of the parameter variables.
-    out_tree: The PyTree structure of the outputs of the Jaxpr function.
-    losses_eqns: A tuple of all of the Jaxpr equations corresponding to a loss
-      tag.
-    var_to_creation_op: A mapping of variables to the Jax equation that created
-      it.
+    closed_jaxpr: The original `ClosedJaxpr` that is being wrapped.
+    params_tree: The PyTreeDef of the parameter variables.
+    params_vars: A flat list of all the abstract parameter variables.
+    out_tree: The PyTreeDef of the outputs of the function.
     tag_ctor: This is an optional attribute, that defines if this is used during
       automatic layer tag registration, how to construct the corresponding layer
       tag primitive from the subgraph matching this pattern.
+    losses_eqns: A tuple of all the Jaxpr equations corresponding to a loss
+      tag.
+    var_to_creation_op: A mapping of variables to the Jax equation that created
+      it.
+    manual_registrations: Any layer tag equations that have been manually
+      registered.
+    jaxpr: The underlying :class:`jax.core.Jaxpr` part of ``self.closed_jaxpr``.
+    consts: The underlying constants part ``self.closed_jaxpr``.
+    outvars: The output variables of the underlying :class:`jax.core.Jaxpr` part
+      of ``self.closed_jaxpr``.
   """
+  name: str
+  closed_jaxpr: ClosedJaxpr
+  params_tree: chex.PyTreeDef
+  params_vars: Vars
+  out_tree: chex.PyTreeDef
+  tag_ctor: Optional[TagCtor]
+  # Until we stop supporting Python 3.7 we can't use @functools.cached_property,
+  # so we set these attributes in __post_init__
+  losses_eqns: Tuple[tags.LossTagEqn, ...] = ()
+  var_to_creation_op: immutabledict.immutabledict = None  # pytype:disable=annotation-type-mismatch
+  manual_registrations: Tuple[tags.LayerTagEqn, ...] = ()
 
-  def __init__(
-      self,
-      name: str,
-      jaxpr: core.Jaxpr,
-      consts: Sequence[Any],
-      params_vars: Sequence[core.Var],
-      params_tree: utils.PyTreeDef,
-      out_tree: utils.PyTreeDef,
-      tag_ctor: Optional[TagCtor],
-  ):
-    """Initializes the instance.
-
-    Args:
-      name: The name for this Jaxpr graph.
-      jaxpr: The original Jaxpr that is being wrapped.
-      consts: The constants needed for evaluation of the raw Jaxpr.
-      params_vars: A flat list of all of the abstract parameter variables.
-      params_tree: The PyTree structure of the parameter variables.
-      out_tree: The PyTree structure of the outputs of the Jaxpr function.
-      tag_ctor: This is an optional attribute, that defines if this is used
-        during automatic layer tag registration, how to construct the
-        corresponding layer tag primitive from the subgraph matching this
-        pattern.
-    """
-    self.name = name
-    self.jaxpr = jaxpr
-    self.params_vars = list(params_vars)
-    self.params_tree = params_tree
-    self.out_tree = out_tree
-    self.consts = list(consts)
-    self.tag_ctor = tag_ctor
-    self.losses_eqns = tuple(
-        eqn for eqn in jaxpr.eqns if isinstance(eqn.primitive, tags.LossTag))
-    self.var_to_creation_op = immutabledict.immutabledict(
-        sum(([(var, eqn) for var in eqn.outvars] for eqn in jaxpr.eqns), []))
-
-  def __repr__(self):
-    return (f"{self.__class__.__name__}({self.name!r}, "
-            f"{self.jaxpr!r}, {self.consts!r}, {self.params_vars!r}, "
-            f"{self.params_tree!r}, {self.out_tree!r}, {self.tag_ctor!r})")
-
-  @property
-  def outvars(self) -> Sequence[core.Atom]:
-    """A sequence of all of the output variables of the Jaxpr graph."""
-    return self.jaxpr.outvars
-
-  def ancestors_sub_graph(self, eqns: Iterable[core.JaxprEqn]) -> "JaxprGraph":
-    """Constructs a subgraph of all the ancestors(self-inclusive) of ``eqns``."""
-    sub_graph_eqns = []
-    sub_graph_vars = set()
-    for eqn in reversed(self.jaxpr.eqns):
-      if eqn in eqns or any(v in sub_graph_vars for v in eqn.outvars):
-        sub_graph_eqns.append(eqn)
-        sub_graph_vars.update(
-            v for v in eqn.invars if not isinstance(v, core.Literal))
-    outvars, out_tree = jax.tree_util.tree_flatten(tuple(
-        eqn.outvars for eqn in self.losses_eqns))
-    return JaxprGraph(
-        name="sub_" + self.name,
-        jaxpr=core.Jaxpr(
-            constvars=self.jaxpr.constvars,
-            invars=self.jaxpr.invars,
-            outvars=outvars,
-            eqns=tuple(reversed(sub_graph_eqns))
-        ),
-        consts=self.consts,
-        params_vars=self.params_vars,
-        params_tree=self.params_tree,
-        out_tree=out_tree,
-        tag_ctor=self.tag_ctor
+  def __post_init__(self):
+    losses_eqns = tuple(
+        eqn for eqn in self.closed_jaxpr.jaxpr.eqns
+        if isinstance(eqn.primitive, tags.LossTag)
     )
-
-  def extract_manual_registrations(self) -> Tuple[tags.LayerTagEqn, ...]:
-    """Returns all manually registered tags."""
+    var_to_creation_op = immutabledict.immutabledict(
+        sum(([(var, eqn) for var in eqn.outvars]
+             for eqn in self.jaxpr.eqns), [])
+    )
     registered_tags = []
     for eqn in self.jaxpr.eqns:
       if isinstance(eqn.primitive, tags.LayerTag):
@@ -300,127 +253,290 @@ class JaxprGraph:
                              f"registration equation: {eqn} is not part of the "
                              f"parameters of the global function.")
         registered_tags.append(eqn)
-    return tuple(registered_tags)
+    manual_registrations = tuple(registered_tags)
+
+    object.__setattr__(self, "losses_eqns", losses_eqns)
+    object.__setattr__(self, "var_to_creation_op", var_to_creation_op)
+    object.__setattr__(self, "manual_registrations", manual_registrations)
+
+  @property
+  def jaxpr(self) -> Jaxpr:
+    return self.closed_jaxpr.jaxpr
+
+  @property
+  def consts(self) -> Sequence[Any]:
+    return self.closed_jaxpr.consts
+
+  @property
+  def outvars(self) -> Vars:
+    return self.jaxpr.outvars  # pytype:disable=bad-return-type
+  #
+  # @functools.cached_property
+  # def losses_eqns(self) -> Tuple[tags.LossTagEqn, ...]:
+  #   return tuple(
+  #       eqn for eqn in self.closed_jaxpr.jaxpr.eqns
+  #       if isinstance(eqn.primitive, tags.LossTag)
+  #   )
+  #
+  # @functools.cached_property
+  # def var_to_creation_op(self) -> immutabledict.immutabledict:
+  #   return immutabledict.immutabledict(
+  #       sum(([(var, eqn) for var in eqn.outvars]
+  #            for eqn in self.jaxpr.eqns), []))
+  #
+  # @functools.cached_property
+  # def manual_registrations(self) -> Tuple[tags.LayerTagEqn, ...]:
+  #   """Returns all manually registered tags."""
+  #   registered_tags = []
+  #   for eqn in self.jaxpr.eqns:
+  #     if isinstance(eqn.primitive, tags.LayerTag):
+  #       for param in eqn.primitive.split_all_inputs(eqn.invars)[2]:
+  #         if param not in self.params_vars:
+  #           raise ValueError("One of the parameters of the manual layer "
+  #                            f"registration equation: {eqn} is not part of "
+  #                            "the parameters of the global function.")
+  #       registered_tags.append(eqn)
+  #   return tuple(registered_tags)
 
 
 def make_jax_graph(
     func: utils.Func,
     func_args: Sequence[Any],
     params_index: Union[int, Sequence[int]],
-    graph_name: str,
+    name: str,
+    compute_only_loss_tags: bool,
+    clean_broadcasts: bool,
     tag_ctor: Optional[TagCtor] = None,
 ) -> JaxprGraph:
   """Creates a :class:`~JaxGraph` instance from the provided function and arguments."""
   in_tree = jax.tree_util.tree_structure(func_args)
-  typed_jaxpr, out_shapes = jax.make_jaxpr(func, return_shape=True)(*func_args)
-  in_vars = jax.tree_util.tree_unflatten(in_tree, typed_jaxpr.jaxpr.invars)
+  closed_jaxpr, out_shapes = jax.make_jaxpr(func, return_shape=True)(*func_args)
+
+  if compute_only_loss_tags:
+    make_var_func = jax.core.gensym([closed_jaxpr.jaxpr])
+    eqns = []
+    sub_graph_vars = set()
+    loss_tags_output_vars = []
+    for eqn in reversed(closed_jaxpr.jaxpr.eqns):
+      if (isinstance(eqn.primitive, tags.LossTag) or
+          any(v in sub_graph_vars for v in eqn.outvars)):
+        if isinstance(eqn.primitive, tags.LossTag):
+          new_out_vars = []
+          for v in eqn.outvars:
+            if isinstance(v, jax.core.DropVar):
+              new_out_vars.append(make_var_func(v.aval))
+            else:
+              new_out_vars.append(v)
+          loss_tags_output_vars.extend(new_out_vars[::-1])
+          eqns.append(eqn.replace(outvars=new_out_vars))
+        else:
+          eqns.append(eqn)
+        sub_graph_vars.update(
+            v for v in eqn.invars if not isinstance(v, jax.core.Literal))
+
+    consts_i = [i for i, c in enumerate(closed_jaxpr.jaxpr.constvars)
+                if c in sub_graph_vars]
+    closed_jaxpr = ClosedJaxpr(
+        jaxpr=closed_jaxpr.jaxpr.replace(
+            eqns=eqns[::-1],
+            constvars=[closed_jaxpr.jaxpr.constvars[i] for i in consts_i],
+            outvars=loss_tags_output_vars[::-1],
+        ),
+        consts=[closed_jaxpr.consts[i] for i in consts_i],
+    )
+    out_shapes = [jax.ShapeDtypeStruct(shape=v.aval.shape, dtype=v.aval.dtype)
+                  for v in closed_jaxpr.jaxpr.outvars]  # pytype:disable=attribute-error
+
+  if clean_broadcasts:
+    closed_jaxpr: ClosedJaxpr = merge_broadcasts_jaxpr(closed_jaxpr)  # pytype:disable=annotation-type-mismatch
+  in_vars = jax.tree_util.tree_unflatten(in_tree, closed_jaxpr.jaxpr.invars)
   if isinstance(params_index, int):
     params_vars = in_vars[params_index]
   else:
     params_vars = tuple(in_vars[i] for i in params_index)
   params_vars, params_tree = jax.tree_util.tree_flatten(params_vars)
   return JaxprGraph(
-      name=graph_name,
-      jaxpr=typed_jaxpr.jaxpr,
-      consts=typed_jaxpr.literals,
-      params_vars=params_vars,
+      name=name,
+      closed_jaxpr=closed_jaxpr,
       params_tree=params_tree,
+      params_vars=params_vars,
       out_tree=jax.tree_util.tree_structure(out_shapes),
       tag_ctor=tag_ctor
   )
 
 
+@dataclasses.dataclass(frozen=True)
 class GraphPattern:
-  """A graph pattern used for automatically detecting layers."""
+  """A graph pattern used for automatically detecting layers.
 
-  def __init__(
-      self,
-      name: str,
-      tag_primitive: tags.LayerTag,
-      compute_func: PatternComputeFunc,
-      parameters_extractor_func: ParameterExtractorFunc,
-      example_args: utils.FuncArgs,
-      in_values_preprocessor: ValuesProcessor = lambda in_values: in_values,
-  ):
-    """Instantiates the graph pattern.
+  The graph matcher needs to trace at least once the full function, which
+  means the caller needs to provide it with dummy arguments. The shapes of the
+  arguments do not matter, as the graph matcher ignores their values, however
+  the rank does. Especially if there is some broadcasting happening you should
+  register with every possible broadcast pattern. As a general advice avoid
+  using a shape to be 1, unless you want the pattern to specifically match
+  that, as some operations, like squeeze for example, can have special
+  behaviour then.
 
-    The graph matcher needs to trace at least once the full function, which
-    means the caller needs to provide it with dummy arguments. The shapes of the
-    arguments do not matter, as the graph matcher ignores their values, however
-    the rank does. Especially if there is some broadcasting happening you should
-    register with every possible broadcast pattern. As a general advice avoid
-    using a shape to be 1, unless you want the pattern to specifically match
-    that, as some operations, like squeeze for example, can have special
-    behaviour then.
-
-    Args:
-      name: The name of the pattern that is being registered to.
-      tag_primitive: The primitive tag to bind.
-      compute_func: The function that performs the computation.
-      parameters_extractor_func: A function that extracts from the traced Jaxpr
-        any parameters that are passed into the tag.
-      example_args: Example arguments that can be inputted into ``func``.
-      in_values_preprocessor: A function that can optionally modify the in_vals
-        passed to the tag_primitive, from those that are usually the input to
-        the jaxpr.
-    """
-    self._name = name
-    self._tag_primitive = tag_primitive
-    self._compute_func = compute_func
-    self._parameters_extractor_func = parameters_extractor_func
-    self._example_args = example_args
-    self._in_values_preprocessor = in_values_preprocessor
-    self._graph = None
+  Attributes:
+    name: The name of the pattern that is being registered to.
+    tag_primitive: The primitive tag to bind.
+    compute_func: The function that performs the computation.
+    parameters_extractor_func: A function that extracts from the traced Jaxpr
+      any parameters that are passed into the tag.
+    example_args: Example arguments that can be inputted into ``func``.
+    in_values_preprocessor: A function that can optionally modify the in_vals
+      passed to the tag_primitive, from those that are usually the input to
+      the jaxpr.
+    jaxpr: The underlying :class:`jax.core.Jaxpr` represented by the pattern.
+    param_vars: The list of :class:`jax.core.Var` that correspond to parameters
+      in the pattern.
+    graph: A :class:`JaxprGraph` representation of the pattern.
+  """
+  name: str
+  tag_primitive: tags.LayerTag
+  compute_func: PatternComputeFunc
+  parameters_extractor_func: ParameterExtractorFunc
+  example_args: utils.FuncArgs
+  in_values_preprocessor: Optional[VarProcessor] = None
+  # Until we stop supporting Python 3.7 we can't use @functools.cached_property,
+  # so we set this attribute in the property
+  _graph: Optional[JaxprGraph] = None
 
   @property
-  def name(self) -> str:
-    """Name of this graph pattern."""
-    return self._name
+  def jaxpr(self) -> Jaxpr:
+    return self.graph.jaxpr
 
   @property
-  def tag_primitive(self) -> tags.LayerTag:
-    """The layer tag primitive that this pattern corresponds to."""
-    return self._tag_primitive
+  def param_vars(self) -> Vars:
+    return self.graph.params_vars
 
   @property
   def graph(self) -> JaxprGraph:
-    """The Jaxpr graph representing the computation of this pattern."""
+    """A :class:`JaxprGraph` representation of the pattern."""
     if self._graph is None:
-      jnp_args = jax.tree_util.tree_map(jnp.asarray, self._example_args)
-      self._graph = make_jax_graph(
-          broadcast_merger(self._compute_func), jnp_args, 1, self._name)
+      jnp_args = jax.tree_util.tree_map(jnp.asarray, self.example_args)
+      graph = make_jax_graph(
+          func=self.compute_func,
+          func_args=jnp_args,
+          params_index=1,
+          name=self.name,
+          compute_only_loss_tags=False,
+          clean_broadcasts=True,
+      )
+      object.__setattr__(self, "_graph", graph)
     return self._graph
 
   def tag_ctor(
       self,
-      eqns: Sequence[core.JaxprEqn],
-      values_map: Mapping[core.Var, chex.Array]
-  ) -> chex.Array:
+      in_vars: Vars,
+      out_vars: Vars,
+      graph_eqns: JaxprEqns,
+      make_var_func: MakeVarFunc,
+  ) -> JaxprEqns:
     """Registers the layer tag for this graph pattern.
 
     Args:
-      eqns: The equations in the function, where this pattern is inserted.
-      values_map: A mapping between variables of the pattern and corresponding
-        concrete Jax arrays.
+      in_vars: The input variables to the pattern.
+      out_vars: The output variables to the pattern.
+      graph_eqns: The real graph equations corresponding to the pattern.
+      make_var_func: A function to create correctly new variables.
     Returns:
-      The output value of the layer tag, after its registration.
+      A sequence of any additional equations that are created from creating the
+      tag.
     """
-    primitive_params = self._parameters_extractor_func(eqns)
-    in_values = [values_map[v] for v in self.graph.jaxpr.invars]
-    out_values = [values_map[v] for v in self.graph.jaxpr.outvars]
-    in_values = self._in_values_preprocessor(in_values)
-    return self.tag_primitive.bind(
-        out_values[0], *in_values, **primitive_params)
+    assert len(out_vars) == 1
+    if self.in_values_preprocessor is not None:
+      in_vars, eqns = self.in_values_preprocessor(in_vars, make_var_func)
+    else:
+      eqns = []
+    new_out_vars = [make_var_func(v.aval) for v in out_vars]
+    tag_eqn = jax.core.new_jaxpr_eqn(
+        invars=[*out_vars, *in_vars],
+        outvars=new_out_vars,
+        primitive=self.tag_primitive,
+        params=self.parameters_extractor_func(graph_eqns),
+        effects=set(),
+    )
+    return [*eqns, tag_eqn]
+
+
+@dataclasses.dataclass(frozen=True)
+class GraphMatch:
+  """Represents a match of the pattern on some graph.
+
+  Attributes:
+    pattern: The pattern that has been matched.
+    variables_map: Mapping of variables from the pattern to the original graph,
+      on which it has been matched.
+    graph_eqns: All the equations in the original graph, that correspond to
+      computation of the pattern.
+    output_var: The variable in the original graph, that correspond to the
+      output variable of the pattern.
+    param_graph_variables: All variables in the original graph, that correspond
+      to parameters of the pattern.
+    name: The name of the pattern that has been matched.
+  """
+  pattern: GraphPattern
+  variables_map: Mapping[Var, Var]
+  graph_eqns: JaxprEqns
+  # Until we stop supporting Python 3.7 we can't use @functools.cached_property,
+  # so we set these attributes in __post_init__
+  output_var: Var = None  # pytype:disable=annotation-type-mismatch
+  param_graph_variables: Vars = ()
+
+  def __post_init__(self):
+    # Until we stop supporting Python 3.7 we can't use
+    # @functools.cached_property, so we set here additional attributes.
+    output_var = self.variables_map[self.pattern.jaxpr.outvars[0]]
+    param_graph_variables = [self.variables_map[p]
+                             for p in self.pattern.graph.params_vars]
+
+    object.__setattr__(self, "output_var", output_var)
+    object.__setattr__(self, "param_graph_variables", param_graph_variables)
+
+  @property
+  def name(self) -> str:
+    return self.pattern.name
+  #
+  # @functools.cached_property
+  # def output_var(self) -> Var:
+  #   return self._variables_map[self.pattern.jaxpr.outvars[0]]
+  #
+  # @functools.cached_property
+  # def param_graph_variables(self) -> Vars:
+  #   return [self._variables_map[p] for p in self.pattern.graph.params_vars]
+
+  def create_eqn(
+      self,
+      env: Dict[Var, Var],
+      make_var_func: MakeVarFunc,
+  ) -> JaxprEqns:
+    """Creates a new ``JaxprEqn`` for the this match."""
+    in_vars = [self.variables_map[k] for k in self.pattern.graph.jaxpr.invars]
+    in_vars = [env.get(v, v) for v in in_vars]
+    out_vars = [self.variables_map[k]
+                for k in self.pattern.graph.jaxpr.outvars]
+    out_vars = [env.get(v, v) for v in out_vars]
+
+    eqns = self.pattern.tag_ctor(
+        in_vars, out_vars, self.graph_eqns, make_var_func)
+    assert len(out_vars) == len(eqns[-1].outvars)
+    # Reinsert the output in the environment
+    for k, v in zip(out_vars, eqns[-1].outvars):
+      env[k] = v
+
+    return eqns
 
 
 def match_equations(
     graph: JaxprGraph,
-    current_variables_map: Mapping[core.Var, core.Var],
-    reversed_eqns_to_match: Sequence[core.JaxprEqn],
-    input_vars: Sequence[core.Var],
-    param_variables: Sequence[core.Var],
+    current_variables_map: Mapping[Var, Var],
+    reversed_eqns_to_match: Sequence[JaxprEqn],
+    input_vars: Vars,
+    param_variables: Vars,
     graph_matcher_rules: GraphMatcherComparator,
-) -> Optional[Dict[core.Var, core.Var]]:
+) -> Optional[Dict[Var, Var]]:
   """Tries to continue matching the remaining equations to the Jaxpr graph.
 
   Args:
@@ -438,20 +554,20 @@ def match_equations(
 
   Returns:
     ``None`` if it is not possible to finish matching the remaining equations
-    in the graph. Otherwise returns the full match of the pattern onto the
+    in the graph. Otherwise, returns the full match of the pattern onto the
     graph, in terms of a variable to variable mapping.
   """
   # Copy the variables mapping
   current_variables_map = dict(current_variables_map)
   def add_vars_if_possible(
-      eqn_vars: Sequence[core.Var],
-      graph_vars: Sequence[core.Var]
+      eqn_vars: Sequence[Var],
+      graph_vars: Sequence[Var]
   ) -> bool:
     """Tries to update the current variables map.
 
     If at least one of the pattern variables is a parameter, but the
     corresponding graph variable is not or vise-versa, the method does not
-    update the current variables map and returns ``False``. Similarly if at
+    update the current variables map and returns ``False``. Similarly, if at
     least one of the graph variables is a :class:`~jax.core.Literal` (meaning a
     constant, independent of the function inputs) and the corresponding
     pattern variable is not an input to the pattern, it returns ``False``. In
@@ -468,7 +584,7 @@ def match_equations(
     for var1, var2 in zip(eqn_vars, graph_vars):
       if (var1 in param_variables and var2 not in graph.params_vars or
           var1 not in param_variables and var2 in graph.params_vars or
-          (isinstance(var2, core.Literal) and var1 not in input_vars)):
+          (isinstance(var2, jax.core.Literal) and var1 not in input_vars)):
         return False
     current_variables_map.update(zip(eqn_vars, graph_vars))
     return True
@@ -486,7 +602,7 @@ def match_equations(
       # Clearly the pattern equation is not an input or parameter
       return None
 
-    assert isinstance(graph_eqn, jax.core.JaxprEqn)
+    assert isinstance(graph_eqn, JaxprEqn)
     # For equations with more than one output, make sure all output variables
     # in the graph are generated from the same graph equation.
     for v in eqn.outvars[1:]:
@@ -538,10 +654,10 @@ def match_equations(
 
 def match_pattern(
     graph: JaxprGraph,
-    root_eqn: core.JaxprEqn,
-    pattern: "JaxprGraph",
+    root_eqn: JaxprEqn,
+    pattern: GraphPattern,
     graph_matcher_rules: GraphMatcherComparator,
-) -> Optional[Dict[core.Var, core.Var]]:
+) -> Optional[GraphMatch]:
   """Tries to match the ``pattern`` in the Jaxpr graph from the ``root_eqn``.
 
   Args:
@@ -562,26 +678,39 @@ def match_pattern(
     return None
   # Set the current variables mapping to the output variables and the try to
   # check the match from there.
-  return match_equations(
+  match_variables_map = match_equations(
       graph=graph,
       current_variables_map=dict(zip(pattern.jaxpr.outvars,
                                      root_eqn.outvars)),
       reversed_eqns_to_match=tuple(reversed(pattern.jaxpr.eqns)),
       input_vars=pattern.jaxpr.invars,
-      param_variables=pattern.params_vars,
+      param_variables=pattern.param_vars,
       graph_matcher_rules=graph_matcher_rules,
+  )
+  if match_variables_map is None:
+    return None
+
+  # Extract all the graph equations corresponding to the pattern.
+  graph_eqns = []
+  for k, v in match_variables_map.items():
+    if (k not in pattern.graph.jaxpr.invars and
+        not isinstance(v, jax.core.Literal)):
+      creation_op = graph.var_to_creation_op[v]
+      assert isinstance(creation_op, JaxprEqn)
+      graph_eqns.append(creation_op)
+  return GraphMatch(
+      pattern=pattern,
+      variables_map=match_variables_map,
+      graph_eqns=graph_eqns,
   )
 
 
 def find_layer_tags_and_patterns(
     graph: JaxprGraph,
-    patterns_to_match: Sequence[GraphPattern],
+    eqns_for_patterns: Sequence[JaxprEqn],
     graph_matcher_rules: GraphMatcherComparator,
-) -> Tuple[Tuple[tags.LayerTagEqn, ...],
-           Dict[core.Var,
-                Tuple[GraphPattern,
-                      Dict[core.Var, core.Var],
-                      Tuple[core.JaxprEqn, ...]]]]:
+    graph_patterns: Sequence[GraphPattern],
+) -> Tuple[Tuple[tags.LayerTagEqn, ...], Dict[Var, GraphMatch]]:
   """Tries to automatically match ``patterns_to_match`` in the Jaxpr graph.
 
   The method returns a pair of ``(manual_registrations, matches)``, where
@@ -597,20 +726,22 @@ def find_layer_tags_and_patterns(
   Args:
     graph: The :class:`~JaxprGraph` on which we are searching for matching
       equations.
-    patterns_to_match: A sequence of different patterns that we want to find
-    matches for in the graph.
+    eqns_for_patterns: All equation that should be considered for finding
+      a pattern.
     graph_matcher_rules: A :class:`~GraphMatcherRules` instance, which is used
       for determining equivalence of individual Jax primitives.
+    graph_patterns: A sequence of :class:`~GraphPattern` objects, which contain
+      all patterns to use, in order of precedence, which to try to find in the
+      graph before registering a parameter with a generic layer tag.
 
   Returns:
     The pair ``(manual_registrations, matches)``.
   """
-  manual_registrations = graph.extract_manual_registrations()
-  # This keeps track to any equations that are already in a pattern and hence
-  # should not be part of any other.
+  # This list keeps track to any equations that are already in a pattern and
+  # hence should not be part of any other.
   registered_equations = []
   # First add any manual registrations to this.
-  for eqn in manual_registrations:
+  for eqn in graph.manual_registrations:
     assert isinstance(eqn.primitive, tags.LayerTag)
     for root_var in eqn.primitive.split_all_inputs(eqn.invars)[0]:
       assert root_var in graph.var_to_creation_op
@@ -618,49 +749,46 @@ def find_layer_tags_and_patterns(
 
   matches = {}
   # Loop through all equations in reverse and for each one check every pattern
-  for eqn in reversed(graph.jaxpr.eqns):
-    if eqn in registered_equations:
+  for eqn in reversed(eqns_for_patterns):
+    if eqn in registered_equations or eqn.primitive.name in HIGHER_ORDER_NAMES:
       continue
-    for pattern in patterns_to_match:
-      match_map = match_pattern(graph, eqn, pattern.graph, graph_matcher_rules)
-      if match_map is not None:
-        assert len(pattern.graph.outvars) == 1
-        output_variable = match_map[pattern.graph.outvars[0]]
-        # Extract all equations from the pattern and add them to the already
-        # registered equations.
-        match_eqns = []
-        for k, v in match_map.items():
-          if k not in pattern.graph.jaxpr.invars:
-            creation_op = graph.var_to_creation_op[v]
-            assert isinstance(creation_op, core.JaxprEqn)
-            match_eqns.append(creation_op)
-            registered_equations.append(match_eqns[-1])
-        # Add the match
-        matches[output_variable] = (pattern, match_map, tuple(match_eqns))
+
+    for pattern in graph_patterns:
+      match = match_pattern(
+          graph=graph,
+          root_eqn=eqn,
+          pattern=pattern,
+          graph_matcher_rules=graph_matcher_rules,
+      )
+      if match is not None:
+        # Add all the match equations to the registered equations
+        registered_equations.extend(match.graph_eqns)
+        # Add the match to the mapping of graph matches
+        matches[match.output_var] = match
         break
 
-  return manual_registrations, matches
+  return graph.manual_registrations, matches
 
 
 def read_env(
-    env: Mapping[core.Var, chex.Array],
-    var: Union[core.Literal, core.Var, Sequence[core.Var]],
+    env: Mapping[Var, chex.Array],
+    var: Union[jax.core.Literal, Var, Sequence[Var]],
 ) -> Union[float, chex.Array, Sequence[chex.Array]]:
   """Reads from the variable-to-array environment during tracing."""
   if isinstance(var, (list, tuple)):
     return jax.tree_util.tree_map(lambda x: read_env(env, x), var)
-  elif isinstance(var, core.Literal):
+  elif isinstance(var, jax.core.Literal):
     # Literals are values baked into the Jaxpr
     return var.val
-  elif isinstance(var, core.Var):
+  elif isinstance(var, Var):
     return env[var]
   else:
     raise NotImplementedError()
 
 
 def write_env(
-    env: MutableMapping[core.Var, chex.Array],
-    var: Union[core.Var, List[core.Var]],
+    env: MutableMapping[Var, chex.Array],
+    var: Union[Var, List[Var]],
     val: Union[chex.Array, List[chex.Array]],
 ) -> None:
   """Writes to the variable-to-array environment during tracing."""
@@ -670,20 +798,64 @@ def write_env(
     if not isinstance(val, list):
       val = [val]
     return jax.tree_util.tree_map(lambda x, y: write_env(env, x, y), var, val)
-  elif isinstance(var, (core.Literal, core.Var)):
+  elif isinstance(var, (jax.core.Literal, Var)):
     env[var] = val
   else:
     raise NotImplementedError()
 
 
-def clean_jaxpr_eqns(
-    jaxpr: core.Jaxpr,
-    preserve_tags: bool = True
-) -> Iterator[core.JaxprEqn]:
+def to_closed_jaxpr(jaxpr: JaxprOrClosedJaxpr) -> ClosedJaxpr:
+  if isinstance(jaxpr, Jaxpr):
+    return ClosedJaxpr(jaxpr=jaxpr, consts=[])
+  else:
+    return jaxpr
+
+
+def to_jaxpr_or_closed_jaxpr(
+    closed_jaxpr: ClosedJaxpr,
+    original: J,
+) -> J:
+  if isinstance(original, Jaxpr):
+    return closed_jaxpr.jaxpr
+  else:
+    return closed_jaxpr
+
+
+def apply_to_higher_order_primitives(eqn, func, *args, **kwargs):
+  """Applies `func` only to higher order Jax primitives."""
+  if eqn.primitive.name not in HIGHER_ORDER_NAMES:
+    return eqn
+  elif eqn.primitive.name == "cond":
+    params = dict(**eqn.params)
+    params["branches"] = tuple(
+        func(branch, *args, **kwargs) for branch in params["branches"]
+    )
+    return eqn.replace(params=params)
+  elif eqn.primitive.name == "while":
+    params = dict(**eqn.params)
+    params["body_jaxpr"] = func(params["body_jaxpr"], *args, **kwargs)
+    return eqn.replace(params=params)
+  elif eqn.primitive.name == "scan":
+    params = dict(**eqn.params)
+    params["jaxpr"] = func(params["jaxpr"], *args, **kwargs)
+    return eqn.replace(params=params)
+  elif eqn.primitive.name in ("xla_call", "xla_pmap"):
+    params = dict(**eqn.params)
+    params["call_jaxpr"] = func(params["call_jaxpr"], *args, **kwargs)
+    return eqn.replace(params=params)
+  else:
+    raise NotImplementedError()
+
+
+def clean_jaxpr(jaxpr: J, preserve_tags: bool = True) -> J:
   """Runs dead code elimination on a Jaxpr, retaining loss and layer tags."""
+  closed_jaxpr = to_closed_jaxpr(jaxpr)
   eqns = []
-  dependants = set(jaxpr.outvars)
-  for eqn in reversed(jaxpr.eqns):
+  dependants = set(closed_jaxpr.jaxpr.outvars)
+  for eqn in reversed(closed_jaxpr.jaxpr.eqns):
+    eqn = apply_to_higher_order_primitives(
+        eqn, clean_jaxpr, preserve_tags=preserve_tags)
+
     check = False
     for v in eqn.outvars:
       if v in dependants:
@@ -694,88 +866,63 @@ def clean_jaxpr_eqns(
     if check:
       eqns.append(eqn)
       new_dependants = set(v for v in eqn.invars
-                           if not isinstance(v, core.Literal))
+                           if not isinstance(v, jax.core.Literal))
       dependants = dependants.union(new_dependants)
   # Dependants should only be invars
-  dependants = dependants - set(jaxpr.invars + jaxpr.constvars)
+  dependants = dependants - set(closed_jaxpr.jaxpr.invars +
+                                closed_jaxpr.jaxpr.constvars)
 
   if dependants:
     raise ValueError("Something went wrong with the dead code elimination.")
-  return reversed(eqns)
+
+  closed_jaxpr = ClosedJaxpr(
+      jaxpr=closed_jaxpr.jaxpr.replace(eqns=list(reversed(eqns))),
+      consts=closed_jaxpr.consts,
+  )
+  return to_jaxpr_or_closed_jaxpr(closed_jaxpr, jaxpr)
 
 
-def broadcast_merger(f: utils.Func) -> utils.Func:
-  """Transforms ``f`` by merging any consecutive broadcasts in its Jaxpr."""
+def merge_broadcasts_jaxpr(jaxpr: J) -> J:
+  """Merges consecutive broadcasts in the given Jaxpr."""
+  closed_jaxpr = clean_jaxpr(to_closed_jaxpr(jaxpr))
 
-  def read_with_delayed_evaluation(env, var):
-    if isinstance(var, (list, tuple)):
-      return jax.tree_util.tree_map(
-          lambda x: read_with_delayed_evaluation(env, x), var)
-    elif isinstance(var, core.Literal):
-      # Literals are values baked into the Jaxpr
-      return var.val
-    elif isinstance(var, core.Var):
-      r = env[var]
-      if isinstance(r, (jnp.ndarray, np.ndarray)):
-        return r
-      elif isinstance(r, Callable):
-        y = r()
-        if isinstance(y, list):
-          assert len(y) == 1
-          y = y[0]
-        assert isinstance(y, jnp.ndarray)
-        env[var] = y
-        return y
-    raise NotImplementedError()
+  broadcasts_outputs = {}
+  eqns = list()
 
-  @functools.wraps(f)
-  def merged_func(*func_args: Any) -> Any:
-    typed_jaxpr, out_avals = jax.make_jaxpr(f, return_shape=True)(*func_args)
-    out_tree = jax.tree_util.tree_structure(out_avals)
-    jaxpr, consts = typed_jaxpr.jaxpr, typed_jaxpr.literals
+  for eqn in closed_jaxpr.jaxpr.eqns:
+    eqn = apply_to_higher_order_primitives(eqn, merge_broadcasts_jaxpr)
 
-    # Mapping from variable -> value
-    env = {}
-    read = functools.partial(read_with_delayed_evaluation, env)
-    write = functools.partial(write_env, env)
-
-    # Bind args and consts to environment
-    flat_args = jax.tree_util.tree_leaves(func_args)
-    write(jaxpr.invars, flat_args)
-    write(jaxpr.constvars, consts)
-
-    # Bind args and consts to environment
-    write(jaxpr.invars, flat_args)
-    write(jaxpr.constvars, consts)
-
-    # Loop through equations and evaluate primitives using `bind`
-    broadcasts_outputs = {}
-    for eqn in clean_jaxpr_eqns(jaxpr):
-      # We ignore broadcasting of constants
-      if (eqn.primitive.name == "broadcast_in_dim" and
-          not all(isinstance(v, core.Literal) for v in eqn.invars)):
-        if eqn.invars[0] in broadcasts_outputs:
-          x, dims = broadcasts_outputs[eqn.invars[0]]
-          kept_dims = eqn.params["broadcast_dimensions"]
-          kept_dims = [kept_dims[d] for d in dims]
-          # In order not to compute any un-needed broadcasting we instead put
-          # in a function for delayed evaluation.
-          write(eqn.outvars, [functools.partial(
-              lax.broadcast_in_dim, x, eqn.params["shape"], kept_dims)])
-          broadcasts_outputs[eqn.outvars[0]] = (x, kept_dims)
-        else:
-          input_values = read(eqn.invars)
-          # In order not to compute any un-needed broadcasting we instead put
-          # in a function for delayed evaluation.
-          write(eqn.outvars, [functools.partial(
-              eval_jaxpr_eqn, eqn, input_values)])
-          broadcasts_outputs[eqn.outvars[0]] = (
-              (input_values[0], eqn.params["broadcast_dimensions"]))
+    # We ignore broadcasting of constants
+    if (eqn.primitive.name == "broadcast_in_dim" and
+        not all(isinstance(v, jax.core.Literal) for v in eqn.invars)):
+      if eqn.invars[0] in broadcasts_outputs:
+        # Construct a merged equation from the previous and current one
+        prev_eqn = broadcasts_outputs[eqn.invars[0]]
+        broadcasts_outputs[eqn.outvars[0]] = prev_eqn.replace(
+            params={
+                "shape": eqn.params["shape"],
+                "broadcast_dimensions": tuple(
+                    eqn.params["broadcast_dimensions"][d]
+                    for d in prev_eqn.params["broadcast_dimensions"]
+                ),
+            },
+            outvars=eqn.outvars,
+        )
       else:
-        write(eqn.outvars, eval_jaxpr_eqn(eqn, read(eqn.invars)))
-    return jax.tree_util.tree_unflatten(out_tree, read(jaxpr.outvars))
-
-  return merged_func
+        broadcasts_outputs[eqn.outvars[0]] = eqn
+      if eqn.outvars[0] in closed_jaxpr.jaxpr.outvars:
+        # We must preserve output equations
+        eqns.append(broadcasts_outputs[eqn.outvars[0]])
+    else:
+      for v in eqn.invars:
+        if not isinstance(v, jax.core.Literal) and v in broadcasts_outputs:
+          eqns.append(broadcasts_outputs[v])
+      eqns.append(eqn)
+  closed_jaxpr = ClosedJaxpr(
+      jaxpr=closed_jaxpr.jaxpr.replace(eqns=eqns),
+      consts=closed_jaxpr.consts
+  )
+  return to_jaxpr_or_closed_jaxpr(closed_jaxpr, jaxpr)
 
 
 #  _____            _     _             _   _
@@ -796,7 +943,7 @@ def _dense(x: chex.Array, params: Sequence[chex.Array]) -> chex.Array:
 
 
 def _dense_parameter_extractor(
-    eqns: Sequence[core.JaxprEqn],
+    eqns: Sequence[JaxprEqn],
 ) -> Mapping[str, Any]:
   """Extracts all parameters from the conv_general_dilated operator."""
   for eqn in eqns:
@@ -825,7 +972,7 @@ def _make_dense_pattern(
 def _conv2d(x: chex.Array, params: Sequence[chex.Array]) -> chex.Array:
   """Example of a conv2d layer function."""
   w = params[0]
-  y = lax.conv_general_dilated(
+  y = jax.lax.conv_general_dilated(
       x,
       w,
       window_strides=(2, 2),
@@ -839,7 +986,7 @@ def _conv2d(x: chex.Array, params: Sequence[chex.Array]) -> chex.Array:
 
 
 def _conv2d_parameter_extractor(
-    eqns: Sequence[core.JaxprEqn],
+    eqns: Sequence[JaxprEqn],
 ) -> Mapping[str, Any]:
   """Extracts all parameters from the conv_general_dilated operator."""
   for eqn in eqns:
@@ -931,8 +1078,9 @@ def _normalization_haiku(
 
 
 def _normalization_haiku_preprocessor(
-    in_values: Sequence[chex.Array],
-) -> Tuple[chex.Array, ...]:
+    in_vars: Vars,
+    make_var_func: MakeVarFunc,
+) -> Tuple[Vars, JaxprEqns]:
   """Preprocesses the inputs to a Haiku normalization layer.
 
   The standard ``scale_and_shift`` represents the following canonical
@@ -954,14 +1102,24 @@ def _normalization_haiku_preprocessor(
   canonical input to ``scale_and_shift`` tag.
 
   Args:
-    in_values: The standard Haiku normalization inputs.
+    in_vars: The input variables to the pattern.
+    make_var_func: A function to create correctly new variables.
 
   Returns:
-    The canonical input to ``scale_and_shift`` and the parameters.
+    The canonical input to ``scale_and_shift`` pattern.
   """
-  [inputs, rsqrt_var, *params] = in_values
-  normalized_inputs = inputs * rsqrt_var
-  return (normalized_inputs,) + tuple(params)
+  [in_var, rsqrt_var, *param_vars] = in_vars
+  # The equation below corresponds to the computation:
+  # normalized_inputs = inputs * rsqrt_var
+  normalized_inputs_var = make_var_func(in_var.aval)
+  normalized_inputs_eqn = jax.core.new_jaxpr_eqn(
+      invars=[in_var, rsqrt_var],
+      outvars=[normalized_inputs_var],
+      primitive=jax.lax.mul_p,
+      params=dict(),
+      effects=set(),
+  )
+  return (normalized_inputs_var, *param_vars), [normalized_inputs_eqn]
 
 
 def _make_normalization_haiku_pattern(
@@ -999,6 +1157,336 @@ DEFAULT_GRAPH_PATTERNS = (
 )
 
 
+class TagLocation:
+  """Represents a tag location inside a function graph."""
+
+  def __init__(
+      self,
+      tag_eqn: JaxprEqn,
+      base_name: str,
+      parent_equations: Sequence[Tuple[JaxprEqn, int]] = (),
+  ):
+    # assert isinstance(tag_eqn.primitive, tags.LayerTag)
+    self.tag_eqn = tag_eqn
+    self.base_name = base_name
+    self.parent_equations = list(parent_equations)
+
+  @property
+  def full_name(self) -> str:
+    """The full name of the tag location."""
+    prefix = ""
+    param_vars = self.bottom_level_parameters
+    for eqn, n in reversed(self.parent_equations):
+      assert eqn.primitive.name in HIGHER_ORDER_NAMES
+      # Prefix for this higher order primitive
+      prefix = prefix + f"{eqn.primitive.name}_{n}/"
+      if eqn.primitive.name == "cond":
+        raise NotImplementedError()
+      elif eqn.primitive.name == "scan":
+        p_indexes = [eqn.params["jaxpr"].jaxpr.invars.index(p)
+                     for p in param_vars]
+        checks = [pi < eqn.params["num_consts"] for pi in p_indexes]
+        if not (all(checks) or all(not ci for ci in checks)):
+          raise ValueError("Parameters inside scan of the same tag are not both"
+                           " carry or const.")
+        if all(checks):
+          prefix = prefix + "const/"
+        else:
+          prefix = prefix + "carry/"
+      elif eqn.primitive.name == "while":
+        p_indexes = [eqn.params["body_jaxpr"].jaxpr.invars.index(p)
+                     for p in param_vars]
+      elif eqn.primitive.name in ("xla_call", "xla_pmap"):
+        p_indexes = [eqn.params["call_jaxpr"].jaxpr.invars.index(p)
+                     for p in param_vars]
+      else:
+        raise NotImplementedError()
+      param_vars = [eqn.invars[pi] for pi in p_indexes]
+    return prefix + self.base_name
+
+  @property
+  def bottom_level_parameters(self) -> Vars:
+    """The bottom level variables of the tag location."""
+    return self.tag_eqn.primitive.split_all_inputs(self.tag_eqn.invars)[2]  # pytype:disable=attribute-error
+
+  @property
+  def top_level_parameters(self) -> Vars:
+    """The top level parameter variables of the tag location."""
+    param_vars = self.bottom_level_parameters
+    for eqn, _ in reversed(self.parent_equations):
+      assert eqn.primitive.name in HIGHER_ORDER_NAMES
+      if eqn.primitive.name == "cond":
+        raise NotImplementedError()
+      elif eqn.primitive.name == "scan":
+        invars = eqn.params["jaxpr"].jaxpr.invars
+      elif eqn.primitive.name == "while":
+        invars = eqn.params["body_jaxpr"].jaxpr.invars
+      elif eqn.primitive.name in ("xla_call", "xla_pmap"):
+        invars = eqn.params["call_jaxpr"].jaxpr.invars
+      else:
+        raise NotImplementedError()
+      p_indexes = [invars.index(p) for p in param_vars]
+      param_vars = [eqn.invars[pi] for pi in p_indexes]
+    return param_vars
+
+  def add_parent_eqn(self, eqn: JaxprEqn, counter: int):
+    assert eqn.primitive.name in HIGHER_ORDER_NAMES
+    self.parent_equations.append((eqn, counter))
+
+
+class TaggedFunction:
+  """Represents a function that has been processed and auto tagged."""
+
+  def __init__(
+      self,
+      func_graph: JaxprGraph,
+      tag_locations: Sequence[TagLocation],
+  ):
+    self._func_graph = func_graph
+    self._tag_locations = tag_locations
+    self._flat_func = jax.core.jaxpr_as_fun(func_graph.closed_jaxpr)
+    self._param_labels = self._compute_parameter_labels()
+
+  def __call__(self, *args, **kwargs):
+    flat_args = jax.tree_util.tree_leaves(args)
+    flat_output = self._flat_func(*flat_args)
+    return jax.tree_util.tree_unflatten(self._func_graph.out_tree, flat_output)
+
+  def _compute_parameter_labels(self) -> Mapping[Var, Sequence[str]]:
+    # Collect all registration for every tagged parameter
+    tagged_params = {}
+    for tag_l in self._tag_locations:
+      for p in tag_l.top_level_parameters:
+        assert p in self._func_graph.params_vars
+        if p not in tagged_params:
+          tagged_params[p] = []
+        tagged_params[p].append(tag_l.full_name)
+    return tagged_params
+
+  def print_parameter_tags(self):
+    """Prints all the parameter registrations."""
+    # Print all tag parameter registrations
+    labels = ["|".join(self._param_labels.get(p, ["Orphan"]))
+              for p in self._func_graph.params_vars]
+    logging.info("=" * 50)
+    logging.info("Graph parameter registrations:")
+    logging.info(pprint.pformat(jax.tree_util.tree_unflatten(
+        self._func_graph.params_tree, labels)))
+    logging.info("=" * 50)
+
+  def check_multiple_registrations(self):
+    for p in self._func_graph.params_vars:
+      if len(self._param_labels[p]) > 1:
+        raise ValueError(f"Parameter {p} has been registered to multiple tags: "
+                         f"{self._param_labels[p]}.")
+
+
+def _auto_register_tags(
+    graph: JaxprGraph,
+    graph_matcher_rules: GraphMatcherComparator,
+    graph_patterns: Sequence[GraphPattern],
+    register_orphans: bool,
+    register_only_until_losses: bool,
+) -> Tuple[JaxprGraph, Sequence[TagLocation]]:
+  """Internal function for automatic registration of layer tags."""
+  higher_counters = {
+      "cond": 0,
+      "while": 0,
+      "scan": 0,
+      "xla_call": 0,
+      "xla_pmap": 0,
+    }
+
+  # Extract the sub-graph that leads to losses
+  if register_only_until_losses:
+    eqns_for_registration = []
+    sub_graph_vars = set()
+    for eqn in reversed(graph.jaxpr.eqns):
+      if (eqn in graph.losses_eqns or
+          any(v in sub_graph_vars for v in eqn.outvars)):
+        eqns_for_registration.append(eqn)
+        sub_graph_vars.update(
+            v for v in eqn.invars if not isinstance(v, jax.core.Literal))
+    eqns_for_registration = eqns_for_registration[::-1]
+  else:
+    eqns_for_registration = graph.jaxpr.eqns
+
+  # Process all higher order primitives
+  eqns = []
+  tag_locations = []
+  for eqn in graph.jaxpr.eqns:
+    if (eqn not in eqns_for_registration or
+        eqn.primitive.name not in HIGHER_ORDER_NAMES):
+      eqns.append(eqn)
+      continue
+
+    eqn_name = eqn.primitive.name
+    if eqn_name == "cond":
+      sub_jaxprs = eqn.params["branches"]
+    elif eqn_name == "while":
+      sub_jaxprs = [eqn.params["body_jaxpr"]]
+    elif eqn_name == "scan":
+      sub_jaxprs = [eqn.params["jaxpr"]]
+    elif eqn_name in ("xla_call", "xla_pmap"):
+      sub_jaxprs = [eqn.params["call_jaxpr"]]
+    else:
+      raise NotImplementedError()
+
+    final_jaxprs = []
+    final_tag_locations = []
+    for original_jaxpr in sub_jaxprs:
+      sub_jaxpr = to_closed_jaxpr(original_jaxpr)
+      params_vars = []
+      for out_v, in_v in zip(eqn.invars, sub_jaxpr.jaxpr.invars):
+        if out_v in graph.params_vars:
+          params_vars.append(in_v)
+      sub_graph, sub_tag_locations = _auto_register_tags(
+          graph=JaxprGraph(
+              name=graph.name + f"_{eqn_name}",
+              closed_jaxpr=sub_jaxpr,
+              params_tree=jax.tree_util.tree_structure(params_vars),
+              params_vars=params_vars,
+              out_tree=jax.tree_util.tree_structure(sub_jaxpr.jaxpr.outvars),
+              tag_ctor=None,
+          ),
+          graph_matcher_rules=graph_matcher_rules,
+          graph_patterns=graph_patterns,
+          register_orphans=False,
+          register_only_until_losses=False,
+      )
+      final_jaxprs.append(
+          to_jaxpr_or_closed_jaxpr(sub_graph.closed_jaxpr, original_jaxpr))
+      final_tag_locations.append(sub_tag_locations)
+
+    if eqn_name == "cond":
+      # TODO(botev): We need to check each branch has identical registrations
+      raise NotImplementedError()
+    else:
+      # Extract the sub jaxpr parameter tag registrations and input vars
+      [sub_tag_locations] = final_tag_locations  # pylint:disable=unbalanced-tuple-unpacking
+
+    # Update the jaxpr parameter in the equation
+    eqn_params = dict(**eqn.params)
+    if eqn_name == "cond":
+      eqn_params["branches"] = final_jaxprs
+    elif eqn_name == "while":
+      [eqn_params["body_jaxpr"]] = final_jaxprs  # pylint:disable=unbalanced-tuple-unpacking
+    elif eqn_name == "scan":
+      [eqn_params["jaxpr"]] = final_jaxprs  # pylint:disable=unbalanced-tuple-unpacking
+    elif eqn_name in ("xla_call", "xla_pmap"):
+      [eqn_params["call_jaxpr"]] = final_jaxprs  # pylint:disable=unbalanced-tuple-unpacking
+    else:
+      raise NotImplementedError()
+
+    eqns.append(eqn.replace(params=eqn_params))
+    del sub_graph, final_jaxprs, final_tag_locations
+
+    # Insert the sub-registrations into the tagged_params
+    for tag_l in sub_tag_locations:
+      tag_l.add_parent_eqn(eqns[-1], higher_counters[eqn_name])
+      higher_counters[eqn_name] = higher_counters[eqn_name] + 1
+      tag_locations.append(tag_l)
+
+  # Make a new graph with the replaced higher order equations
+  mid_graph = JaxprGraph(
+      name=graph.name,
+      closed_jaxpr=ClosedJaxpr(
+          jaxpr=graph.jaxpr.replace(eqns=eqns),
+          consts=graph.consts,
+      ),
+      params_tree=graph.params_tree,
+      params_vars=graph.params_vars,
+      out_tree=graph.out_tree,
+      tag_ctor=None,
+  )
+  del graph
+
+  # Find matches
+  manual_registrations, matches = find_layer_tags_and_patterns(
+      graph=mid_graph,
+      eqns_for_patterns=eqns_for_registration,
+      graph_matcher_rules=graph_matcher_rules,
+      graph_patterns=graph_patterns
+  )
+
+  tagged_params = set()
+  # Automatically detected registrations in higher order primitives
+  for tag_l in tag_locations:
+    for p in tag_l.top_level_parameters:
+      tagged_params.add(p)
+
+  # Manual registrations
+  for manual_eqn in manual_registrations:
+    assert isinstance(manual_eqn.primitive, tags.LayerTag)
+    for p in manual_eqn.primitive.split_all_inputs(manual_eqn.invars)[2]:
+      tagged_params.add(p)
+
+  # Automatically detect registrations
+  for match in matches.values():
+    for p in match.param_graph_variables:
+      tagged_params.add(p)
+
+  # Create the Jaxpr with all the tag registrations
+  make_var_func = jax.core.gensym([mid_graph.jaxpr])
+  eqns = list()
+  env = {}
+  pattern_counters = {}
+
+  if register_orphans:
+    for param in mid_graph.params_vars:
+      if param not in tagged_params:
+        orphan_p = make_var_func(param.aval)
+        eqns.append(jax.core.new_jaxpr_eqn(
+            invars=[param],
+            outvars=[orphan_p],
+            primitive=tags.generic,
+            params={},
+            effects=set(),
+        ))
+        env[param] = orphan_p
+        tag_locations.append(TagLocation(eqns[-1], "Orphan"))
+
+  for eqn in mid_graph.jaxpr.eqns:
+    invars = [env.get(v, v) if isinstance(v, Var) else v
+              for v in eqn.invars]
+    eqns.append(eqn.replace(invars=invars))
+
+    if isinstance(eqn.primitive, tags.LayerTag):
+      # Mark manual registrations
+      n = pattern_counters.get(eqn.primitive.name, 0)
+      pattern_counters[eqn.primitive.name] = n + 1
+      tag_locations.append(
+          TagLocation(eqn, f"Manual[{eqn.primitive.name}_{n}]"))
+
+    for var in eqn.outvars:
+      # Check if this is a match of a graph pattern
+      match = matches.get(var)
+      if match is not None:
+        for additional_eqn in match.create_eqn(env, make_var_func):
+          eqns.append(additional_eqn)
+
+        # Mark automatic registration
+        n = pattern_counters.get(match.name, 0)
+        pattern_counters[match.name] = n + 1
+        tag_locations.append(
+            TagLocation(eqns[-1], f"Auto[{eqns[-1].primitive.name}_{n}]"))
+
+  final_outvars = [env.get(v, v) if isinstance(v, Var) else v
+                   for v in mid_graph.jaxpr.outvars]
+  final_graph = JaxprGraph(
+      name=mid_graph.name,
+      closed_jaxpr=ClosedJaxpr(
+          jaxpr=mid_graph.jaxpr.replace(eqns=eqns, outvars=final_outvars),
+          consts=mid_graph.closed_jaxpr.consts
+      ),
+      params_tree=mid_graph.params_tree,
+      params_vars=mid_graph.params_vars,
+      out_tree=mid_graph.out_tree,
+      tag_ctor=None,
+  )
+  return final_graph, tag_locations
+
+
 def auto_register_tags(
     func: utils.Func,
     func_args: utils.FuncArgs,
@@ -1009,7 +1497,7 @@ def auto_register_tags(
     allow_multiple_registrations: bool = False,
     graph_matcher_rules: GraphMatcherComparator = GraphMatcherComparator(),
     graph_patterns: Sequence[GraphPattern] = DEFAULT_GRAPH_PATTERNS,
-) -> utils.Func:
+) -> TaggedFunction:
   """Transforms the function by automatically registering layer tags.
 
   Args:
@@ -1035,113 +1523,32 @@ def auto_register_tags(
     A transformed function as described above.
   """
   graph = make_jax_graph(
-      func=broadcast_merger(func),
+      func=func,
       func_args=func_args,
       params_index=params_index,
-      graph_name="main",
+      name="main",
+      compute_only_loss_tags=compute_only_loss_tags,
+      clean_broadcasts=True,
   )
 
-  # Extract the sub-graph that leads to losses
-  sub_graph = graph.ancestors_sub_graph(graph.losses_eqns)
   patterns = () if register_only_generic else  tuple(
       pattern for pattern in graph_patterns
       if pattern.name not in patterns_to_skip)
-  manual, matches = find_layer_tags_and_patterns(
-      sub_graph, patterns, graph_matcher_rules)
+  func_graph, tagged_locations = _auto_register_tags(
+      graph=graph,
+      graph_matcher_rules=graph_matcher_rules,
+      graph_patterns=patterns,
+      register_orphans=True,
+      register_only_until_losses=True
+  )
 
-  tagged_params = {}
-  pattern_counters = {}
-  # Manual registrations
-  for manual_eqn in manual:
-    assert isinstance(manual_eqn.primitive, tags.LayerTag)
-    n = pattern_counters.get(manual_eqn.primitive.name, 0)
-    pattern_counters[manual_eqn.primitive.name] = n + 1
-    for p in manual_eqn.primitive.split_all_inputs(manual_eqn.invars)[2]:
-      assert p in sub_graph.params_vars
-      tag_str = f"Manual[{manual_eqn.primitive.name}_{n}]"
-      if p in tagged_params:
-        if not allow_multiple_registrations:
-          raise ValueError(f"Parameter {p} has been registered manually more "
-                           f"than once - {tagged_params[p]} and {tag_str}, but "
-                           f"`allow_multiple_registrations=False`.")
-        tag_str = f"{tagged_params[p]}|{tag_str}"
-      tagged_params[p] = tag_str
-  # Automatically detect registrations
-  for pattern, variables_map, _ in matches.values():
-    n = pattern_counters.get(pattern.name, 0)
-    pattern_counters[pattern.name] = n + 1
-    for pattern_p in pattern.graph.params_vars:
-      p = variables_map[pattern_p]
-      assert p in sub_graph.params_vars
-      tag_str = f"Auto[{pattern.name}_{n}]"
-      if p in tagged_params:
-        if not allow_multiple_registrations:
-          raise ValueError(f"Parameter {p} has been matched a second time - "
-                           f"{tagged_params[p]} and {tag_str}, but "
-                           f"`allow_multiple_registrations=False`.")
-        tag_str = f"{tagged_params[p]}|{tag_str}"
-      tagged_params[p] = tag_str
+  func = TaggedFunction(
+      func_graph=func_graph,
+      tag_locations=tagged_locations,
+  )
+  func.print_parameter_tags()
 
-  params_labels = [tagged_params.get(p, "Orphan") for p in graph.params_vars]
-  logging.info("=" * 50)
-  logging.info("Graph parameter registrations:")
-  logging.info(pprint.pformat(
-      jax.tree_util.tree_unflatten(graph.params_tree, params_labels)))
-  logging.info("=" * 50)
+  if not allow_multiple_registrations:
+    func.check_multiple_registrations()
 
-  # Construct a function with all of the extra tag registrations
-  @functools.wraps(func)
-  def wrapped_auto_registered(*args: Any) -> Any:
-    flat_args = jax.tree_util.tree_leaves(args)
-    # Mapping from variable -> value
-    env = {}
-
-    read = functools.partial(read_env, env)
-    write = functools.partial(write_env, env)
-
-    def tag(var):
-      match = matches.get(var)
-      if match is not None:
-        pattern_, variables_map_, match_eqns_ = match
-        values_map = {k: read(variables_map_[k]) for k in variables_map_}
-        val = pattern_.tag_ctor(match_eqns_, values_map)
-        env[var] = val
-
-    # Bind args and consts to environment
-    write(graph.jaxpr.invars, flat_args)
-    write(graph.jaxpr.constvars, graph.consts)
-
-    # Register any orphan parameters as generic
-    for param in graph.params_vars:
-      if param not in tagged_params:
-        write(param, tags.register_generic(read(param)))
-
-    # Set the correct output variables
-    if compute_only_loss_tags:
-      output_vars = []
-      for eqn in graph.losses_eqns:
-        # Do not include any dropped variables as they are always mapped to
-        # the same value.
-        output_vars.append(
-            [v for v in eqn.outvars if not isinstance(v, jax.core.DropVar)])
-      output_vars, out_tree = jax.tree_util.tree_flatten(output_vars)
-    else:
-      output_vars = graph.jaxpr.outvars
-      out_tree = graph.out_tree
-
-    # Loop through equations and evaluate primitives using `bind`
-    losses_evaluated = 0
-    for eqn in graph.jaxpr.eqns:
-      out = eqn.outvars if eqn.primitive.multiple_results else eqn.outvars[0]
-      write(out, eval_jaxpr_eqn(eqn, read(eqn.invars)))
-      jax_util.safe_map(tag, eqn.outvars)
-
-      # If we want to output only tagged losses
-      if isinstance(eqn.primitive, tags.LossTag):
-        losses_evaluated += 1
-      if compute_only_loss_tags and len(graph.losses_eqns) == losses_evaluated:
-        break
-
-    outputs = read(output_vars)
-    return jax.tree_util.tree_unflatten(out_tree, outputs)
-  return wrapped_auto_registered
+  return func

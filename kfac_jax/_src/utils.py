@@ -604,7 +604,7 @@ def psd_inv_cholesky(matrix: chex.Array, damping: chex.Array) -> chex.Array:
   if matrix.shape[:1] != matrix.shape[1:]:
     raise ValueError(f"Expected square matrix, but got shape {matrix.shape}.")
   identity = jnp.eye(matrix.shape[0])
-  return linalg.solve(matrix + damping * identity, identity, sym_pos=True)
+  return linalg.solve(matrix + damping * identity, identity, assume_a="pos")
 
 
 def pi_adjusted_inverse(

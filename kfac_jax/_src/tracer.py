@@ -17,8 +17,6 @@ from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple, TypeVar,
 
 import chex
 import jax
-from jax import core
-from jax import util as jax_util
 import jax.numpy as jnp
 from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import loss_functions
@@ -27,6 +25,7 @@ from kfac_jax._src import utils
 
 # Types for annotations
 T = TypeVar("T")
+J = TypeVar("J", jax.core.Jaxpr, jax.core.ClosedJaxpr)
 TaggedFunction = Callable[..., Tuple[loss_functions.LossFunction, ...]]
 FuncWithTags = Callable[..., Any]
 LossTagInputs = Tuple[chex.Array, ...]
@@ -53,6 +52,7 @@ LayerTagVjp = Tuple[
     Tuple[loss_functions.LossFunction, ...],
     Callable[[Tuple[LossTagInputs, ...]], Tuple[Dict[str, chex.Array], ...]]
 ]
+JaxprOrClosedJaxpr = Union[jax.core.Jaxpr, jax.core.ClosedJaxpr]
 
 
 def shape_and_type(x: chex.Array) -> Tuple[chex.Shape, chex.ArrayDType]:
@@ -70,7 +70,7 @@ def make_cache_key(
 
 
 def extract_tags(
-    jaxpr: core.Jaxpr
+    jaxpr: jax.core.Jaxpr
 ) -> Tuple[Tuple[tags.LayerTagEqn, ...], Tuple[tags.LossTagEqn, ...]]:
   """Extracts the layer and the loss tags from the given Jaxpr."""
   return (tuple(eqn for eqn in jaxpr.eqns
@@ -80,7 +80,7 @@ def extract_tags(
 
 
 def order_layer_tags(
-    params_vars_flat: Sequence[core.Var],
+    params_vars_flat: Sequence[jax.core.Var],
     layer_tags: Sequence[tags.LayerTagEqn],
     allow_left_out_params: bool = False,
 ) -> Tuple[Tuple[tags.LayerTagEqn, ...], Tuple[Tuple[int, ...], ...]]:
@@ -141,7 +141,7 @@ class ProcessedJaxpr(utils.Finalizable):
 
   def __init__(
       self,
-      jaxpr: core.Jaxpr,
+      jaxpr: jax.core.Jaxpr,
       consts: Sequence[Any],
       in_tree: utils.PyTreeDef,
       params_index: int,
@@ -173,7 +173,7 @@ class ProcessedJaxpr(utils.Finalizable):
     self.finalize()
 
   @property
-  def in_vars_flat(self) -> List[core.Var]:
+  def in_vars_flat(self) -> List[jax.core.Var]:
     """A flat list of all of the abstract input variables."""
     return self.jaxpr.invars
 
@@ -188,7 +188,7 @@ class ProcessedJaxpr(utils.Finalizable):
     return self.in_vars[self.params_index]
 
   @property
-  def params_vars_flat(self) -> List[core.Var]:
+  def params_vars_flat(self) -> List[jax.core.Var]:
     """A flat list of all abstract parameter variables."""
     return jax.tree_util.tree_leaves(self.params_vars)
 
@@ -363,7 +363,7 @@ def cached_transformation(
 
 
 def construct_compute_losses_inputs(
-    jaxpr: core.Jaxpr,
+    jaxpr: jax.core.Jaxpr,
     consts: Sequence[Any],
     num_losses: int,
     primal_func_args: utils.FuncArgs,
@@ -657,7 +657,7 @@ def _layer_tag_vjp(
     return read(layer_input_vars)
 
   def forward_aux(
-      aux: Mapping[core.Var, chex.Array]
+      aux: Mapping[jax.core.Var, chex.Array]
   ) -> Tuple[Tuple[LossTagInputs, ...],
              Tuple[Mapping[str, chex.Numeric], ...]]:
     """Computes the inputs and kwargs of all **loss** tags.
@@ -757,13 +757,13 @@ def _layer_tag_vjp(
     layers_info = []
     for tag in processed_jaxpr.layer_tags:
       info = {}
-      primals = jax_util.safe_map(read_primals, tuple(tag.invars))
+      primals = jax.util.safe_map(read_primals, tuple(tag.invars))
       (info["outputs"],
        info["inputs"],
        info["params"]) = tag.primitive.split_all_inputs(primals)
       # Due to the ability to preprocess inputs for tags the input gradients
       # could be potentially wrong (e.g. zero) so we don't include them.
-      tangents = jax_util.safe_map(read_tangents, tuple(tag.invars))
+      tangents = jax.util.safe_map(read_tangents, tuple(tag.invars))
       (info["outputs_tangent"],
        _,
        info["params_tangent"]) = tag.primitive.split_all_inputs(tangents)

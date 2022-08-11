@@ -37,10 +37,33 @@ class TestGraphMatcher(parameterized.TestCase):
     eqn2 = eqns[0]
 
     self.assertEqual(eqn1.primitive, eqn2.primitive)
-    # For xla_call we skip any detailed check as they are very complicated.
-    if eqn1.primitive.name != "xla_call":
-      for k in eqn1.params:
+    if eqn1.primitive.name == "cond":
+      raise NotImplementedError()
+    elif eqn1.primitive.name == "while":
+      exclude_param = "body_jaxpr"
+    elif eqn1.primitive.name == "scan":
+      exclude_param = "jaxpr"
+    elif eqn1.primitive.name in ("xla_call", "xla_pmap"):
+      exclude_param = "call_jaxpr"
+    else:
+      exclude_param = ""
+    # Check all eqn parameters
+    for k in eqn1.params:
+      if k != exclude_param:
         self.assertEqual(eqn1.params[k], eqn2.params[k])
+
+    # For higher order primitive check the jaxpr match
+    if exclude_param:
+      j1 = eqn1.params[exclude_param]
+      j2 = eqn2.params[exclude_param]
+      if isinstance(j1, jax.core.ClosedJaxpr):
+        assert isinstance(j2, jax.core.ClosedJaxpr)
+        self.assertEqual(len(j1.consts), len(j2.consts))
+        j1 = j1.jaxpr
+        j2 = j2.jaxpr
+      self.check_jaxpr_equal(j1, j2, True)
+
+    # Check variables
     for v1, v2 in zip(eqn1.invars, eqn2.invars):
       if isinstance(v1, jax.core.Literal):
         self.assertIsInstance(v2, jax.core.Literal)
@@ -51,7 +74,59 @@ class TestGraphMatcher(parameterized.TestCase):
         vars_to_vars[v1] = v2
     return vars_to_vars
 
-  @parameterized.parameters(models.NON_LINEAR_MODELS)
+  def check_jaxpr_equal(self, jaxpr_1, jaxpr_2, map_output_vars: bool):
+    """Checks that the two jaxpr match."""
+    self.assertEqual(len(jaxpr_1.invars), len(jaxpr_2.invars))
+    self.assertEqual(len(jaxpr_1.constvars), len(jaxpr_2.constvars))
+    self.assertEqual(len(jaxpr_1.outvars), len(jaxpr_2.outvars))
+    # Note that since the auto registered computation finishes at the loss tags
+    # it will always have the same or less number of equations.
+    self.assertLessEqual(len(jaxpr_1.eqns), len(jaxpr_2.eqns))
+
+    # Extract all loss tags from both jax expressions
+    l1_eqns = []
+    for eqn in jaxpr_1.eqns:
+      if isinstance(eqn.primitive, kfac_jax.layers_and_loss_tags.LossTag):
+        l1_eqns.append(eqn)
+    l2_eqns = []
+    vars_to_eqn = {}
+    for eqn in jaxpr_2.eqns:
+      if isinstance(eqn.primitive, kfac_jax.layers_and_loss_tags.LossTag):
+        l2_eqns.append(eqn)
+      for v in eqn.outvars:
+        vars_to_eqn[v] = eqn
+    self.assertEqual(len(l1_eqns), len(l2_eqns))
+
+    # Match all losses output variables
+    if map_output_vars:
+      vars_to_vars = dict(zip(jaxpr_1.outvars, jaxpr_2.outvars))
+    else:
+      vars_to_vars = {}
+      for eqn1, eqn2 in zip(l1_eqns, l2_eqns):
+        self.assertEqual(len(eqn1.outvars), len(eqn2.outvars))
+        for v1, v2 in zip(eqn1.outvars, eqn2.outvars):
+          if isinstance(v1, jax.core.DropVar):
+            self.assertIsInstance(v2, jax.core.DropVar)
+          elif isinstance(v1, jax.core.Literal):
+            self.assertIsInstance(v2, jax.core.Literal)
+            self.assertEqual(v1.aval, v2.aval)
+          else:
+            self.assertEqual(v1.aval.shape, v2.aval.shape)
+            self.assertEqual(v1.aval.dtype, v2.aval.dtype)
+            vars_to_vars[v1] = v2
+
+    # Match all others equations
+    for eqn in reversed(jaxpr_1.eqns):
+      vars_to_vars = self.check_equation_match(eqn, vars_to_vars, vars_to_eqn)
+
+    for v1, v2 in zip(jaxpr_1.invars, jaxpr_2.invars):
+      if v1 in vars_to_vars:
+        self.assertEqual(v2, vars_to_vars[v1])
+      self.assertEqual(v1.aval.shape, v2.aval.shape)
+      self.assertEqual(v1.aval.dtype, v2.aval.dtype)
+      self.assertEqual(v1.count, v2.count)
+
+  @parameterized.parameters(models.NON_LINEAR_MODELS + models.SCAN_MODELS)
   def test_auto_register_tags_jaxpr(
       self,
       init_func: Callable[..., models.hk.Params],
@@ -81,51 +156,7 @@ class TestGraphMatcher(parameterized.TestCase):
         return_registered_losses_inputs=True,
     )
     tagged_jaxpr = jax.make_jaxpr(tagged_func)(params, data).jaxpr
-    self.assertEqual(len(jaxpr.invars), len(tagged_jaxpr.invars))
-    self.assertEqual(len(jaxpr.constvars), len(tagged_jaxpr.constvars))
-    self.assertEqual(len(jaxpr.outvars), len(tagged_jaxpr.outvars))
-    # Note that since the auto registered computation finishes at the loss tags
-    # it will always have the same or less number of equations.
-    self.assertLessEqual(len(jaxpr.eqns), len(tagged_jaxpr.eqns))
-
-    # Extract all loss tags from both jax expressions
-    l1_eqns = []
-    for eqn in jaxpr.eqns:
-      if isinstance(eqn.primitive, kfac_jax.layers_and_loss_tags.LossTag):
-        l1_eqns.append(eqn)
-    l2_eqns = []
-    vars_to_eqn = {}
-    for eqn in tagged_jaxpr.eqns:
-      if isinstance(eqn.primitive, kfac_jax.layers_and_loss_tags.LossTag):
-        l2_eqns.append(eqn)
-      for v in eqn.outvars:
-        vars_to_eqn[v] = eqn
-    self.assertEqual(len(l1_eqns), len(l2_eqns))
-
-    # Match all losses output variables
-    vars_to_vars = {}
-    for eqn1, eqn2 in zip(l1_eqns, l2_eqns):
-      self.assertEqual(len(eqn1.outvars), len(eqn2.outvars))
-      for v1, v2 in zip(eqn1.outvars, eqn2.outvars):
-        if isinstance(v1, jax.core.DropVar):
-          self.assertIsInstance(v2, jax.core.DropVar)
-        elif isinstance(v1, jax.core.Literal):
-          self.assertIsInstance(v2, jax.core.Literal)
-          self.assertEqual(v1.aval, v2.aval)
-        else:
-          self.assertEqual(v1.aval.shape, v2.aval.shape)
-          self.assertEqual(v1.aval.dtype, v2.aval.dtype)
-          vars_to_vars[v1] = v2
-
-    # Match all other equations
-    for eqn in reversed(jaxpr.eqns):
-      vars_to_vars = self.check_equation_match(eqn, vars_to_vars, vars_to_eqn)
-
-    for v1 in jaxpr.invars:
-      v2 = vars_to_vars[v1]
-      self.assertEqual(v1.aval.shape, v2.aval.shape)
-      self.assertEqual(v1.aval.dtype, v2.aval.dtype)
-      self.assertEqual(v1.count, v2.count)
+    self.check_jaxpr_equal(jaxpr, tagged_jaxpr, False)
 
 
 if __name__ == "__main__":
