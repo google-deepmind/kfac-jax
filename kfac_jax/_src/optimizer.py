@@ -130,9 +130,12 @@ class Optimizer(utils.WithStagedMethods):
       value_and_grad_func: Python callable. The function should return the value
         of the loss to be optimized and its gradients. If the argument
         ``value_func_has_aux`` is ``False`` then the interface should be:
-        ``loss, loss_grads = value_and_grad_func(params, batch)``. If
+        ``loss, loss_grads = value_and_grad_func(*args)``. If
         ``value_func_has_aux`` is ``True`` then the interface should be:
-        ``(loss, aux), loss_grads = value_and_grad_func(params, batch)``.
+        ``(loss, aux), loss_grads = value_and_grad_func(*args)``. Here ``args``
+        is ``(params, func_state, rng, batch)``, with ``rng`` omitted if
+        ``value_func_has_rng`` is ``False``, and with ``func_state`` omitted if
+        ``value_func_has_state`` is ``False``.
       l2_reg: Scalar. Set this value to tell the optimizer what L2
         regularization coefficient you are using (if any). Note the coefficient
         appears in the regularizer as ``coeff / 2 * sum(param**2)``. This adds
@@ -259,7 +262,7 @@ class Optimizer(utils.WithStagedMethods):
         specifying whether the batch is replicated over multiple devices and
         returns the batch size for a single device. (Default: ``None``)
       pmap_axis_name: String. The name of the pmap axis to use when
-        ``multi_device`` is set to True. (Default: ``curvature_axis``)
+        ``multi_device`` is set to True. (Default: ``kfac_axis``)
       forbid_setting_attributes_after_finalize: Boolean. By default after the
         object is finalized, you can not set any of its properties. This is done
         in order to protect the user from making changes to the object
