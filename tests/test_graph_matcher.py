@@ -79,9 +79,7 @@ class TestGraphMatcher(parameterized.TestCase):
     self.assertEqual(len(jaxpr_1.invars), len(jaxpr_2.invars))
     self.assertEqual(len(jaxpr_1.constvars), len(jaxpr_2.constvars))
     self.assertEqual(len(jaxpr_1.outvars), len(jaxpr_2.outvars))
-    # Note that since the auto registered computation finishes at the loss tags
-    # it will always have the same or less number of equations.
-    self.assertLessEqual(len(jaxpr_1.eqns), len(jaxpr_2.eqns))
+    self.assertEqual(len(jaxpr_1.eqns), len(jaxpr_2.eqns))
 
     # Extract all loss tags from both jax expressions
     l1_eqns = []
@@ -153,7 +151,7 @@ class TestGraphMatcher(parameterized.TestCase):
     tagged_func = functools.partial(
         model_func,
         explicit_tagging=True,
-        return_registered_losses_inputs=True,
+        return_losses_outputs=True,
     )
     tagged_jaxpr = jax.make_jaxpr(tagged_func)(params, data).jaxpr
     self.check_jaxpr_equal(jaxpr, tagged_jaxpr, False)

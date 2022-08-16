@@ -93,7 +93,7 @@ class LossTag(core.Primitive, Generic[T]):
       raise ValueError("Inputs to the tag are too many.")
     if self.num_inputs < len(args) < self.num_inputs + self.num_targets:
       raise ValueError("Inputs to the tag are not quite enough.")
-    return args
+    return args[:self.num_inputs]
 
   def impl(self, *operands: chex.Array, **_: Any) -> Tuple[chex.Array, ...]:
     return self.get_outputs(*operands)
@@ -128,7 +128,7 @@ class LossTag(core.Primitive, Generic[T]):
     if len(arg_values) != len(arg_tangents):
       raise ValueError("Values and tangents are not the same length.")
     primal_output = self.bind(*arg_values, **kwargs)
-    return primal_output, tuple(arg_tangents)
+    return primal_output, tuple(self.get_outputs(*arg_tangents))
 
   def _batching(
       self,

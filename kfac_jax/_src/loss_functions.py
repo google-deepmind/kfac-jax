@@ -1057,7 +1057,7 @@ def register_normal_predictive_distribution(
     targets: Optional[chex.Array] = None,
     variance: float = 0.5,
     weight: float = 1.0,
-) -> Tuple[chex.Array, ...]:
+) -> chex.Array:
   """Registers a normal predictive distribution.
 
   This corresponds to a squared error loss of the form
@@ -1088,14 +1088,14 @@ def register_normal_predictive_distribution(
   if targets is None:
     targets = jnp.zeros_like(mean)
   return NormalMeanNegativeLogProbLoss_tag.bind(
-      mean, targets, variance=variance, weight=weight)
+      mean, targets, variance=variance, weight=weight)[0]
 
 
 def register_squared_error_loss(
     prediction: chex.Array,
     targets: Optional[chex.Array] = None,
     weight: float = 1.0,
-) -> Tuple[chex.Array, ...]:
+) -> chex.Array:
   """Registers a squared error loss function.
 
   This assumes the squared error loss of the form ``||target - prediction||^2``,
@@ -1122,7 +1122,7 @@ def register_multi_bernoulli_predictive_distribution(
     logits: chex.Array,
     targets: Optional[chex.Array] = None,
     weight: float = 1.0,
-) -> Tuple[chex.Array, ...]:
+) -> chex.Array:
   """Registers a multi-Bernoulli predictive distribution.
 
   Note that this is distinct from
@@ -1147,14 +1147,14 @@ def register_multi_bernoulli_predictive_distribution(
   if targets is None:
     targets = jnp.zeros_like(logits)
   return MultiBernoulliNegativeLogProbLoss_tag.bind(
-      logits, targets, weight=weight)
+      logits, targets, weight=weight)[0]
 
 
 def register_sigmoid_cross_entropy_loss(
     logits: chex.Array,
     targets: Optional[chex.Array] = None,
     weight: float = 1.0,
-) -> Tuple[chex.Array, ...]:
+) -> chex.Array:
   """Registers a sigmoid cross-entropy loss function.
 
   Note that this is distinct from :func:`~register_softmax_cross_entropy_loss`
@@ -1181,7 +1181,7 @@ def register_categorical_predictive_distribution(
     logits: chex.Array,
     targets: Optional[chex.Array] = None,
     weight: float = 1.0,
-) -> Tuple[chex.Array, ...]:
+) -> chex.Array:
   """Registers a categorical predictive distribution.
 
   Note that this is distinct from
@@ -1207,10 +1207,10 @@ def register_categorical_predictive_distribution(
     targets = jnp.zeros_like(logits[..., 0])
   if targets.ndim == logits.ndim:
     return OneHotCategoricalLogitsNegativeLogProbLoss_tag.bind(
-        logits, targets, weight=weight)
+        logits, targets, weight=weight)[0]
   elif targets.ndim == logits.ndim - 1:
     return CategoricalLogitsNegativeLogProbLoss_tag.bind(
-        logits, targets, weight=weight)
+        logits, targets, weight=weight)[0]
   else:
     raise ValueError(f"The logits rank is {logits.ndim} and the targets rank "
                      f"must be either equal or one less than it, but is "
@@ -1221,7 +1221,7 @@ def register_softmax_cross_entropy_loss(
     logits: chex.Array,
     targets: Optional[chex.Array] = None,
     weight: float = 1.0,
-) -> Tuple[chex.Array, ...]:
+) -> chex.Array:
   """Registers a softmax cross-entropy loss function.
 
   Note that this is distinct from :func:`~register_sigmoid_cross_entropy_loss`
