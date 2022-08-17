@@ -39,6 +39,7 @@ FuncAux = chex.ArrayTree
 PyTreeDef = chex.PyTreeDef
 PyTreeType = Any
 PyTree = chex.ArrayTree
+TPyTree = TypeVar("TPyTree", bound=PyTree)
 FuncArgs = Sequence[PyTree]
 Func = Callable[..., Union[chex.Array, Tuple[chex.Array, FuncAux]]]
 ValueFunc = Callable[..., chex.Array]
@@ -389,7 +390,7 @@ def product(iterable_object: Iterable[chex.Numeric]) -> chex.Numeric:
   return x
 
 
-def scalar_mul(obj: PyTree, scalar: chex.Numeric) -> PyTree:
+def scalar_mul(obj: TPyTree, scalar: chex.Numeric) -> TPyTree:
   """Multiplies all PyTree leaves of the object by the provided scalar."""
   # The check below is in its current form because of how `jax.jit` tracing
   # mechanism work. If we use `scalar == 1` and `scalar` is an array,  inside a
@@ -401,7 +402,7 @@ def scalar_mul(obj: PyTree, scalar: chex.Numeric) -> PyTree:
   return jax.tree_util.tree_map(lambda x: x * scalar, obj)
 
 
-def scalar_div(obj: PyTree, scalar: chex.Numeric) -> PyTree:
+def scalar_div(obj: TPyTree, scalar: chex.Numeric) -> TPyTree:
   """Divides all PyTree leaves of the object by the provided scalar."""
   # The check below is in its current form because of how `jax.jit` tracing
   # mechanism work. If we use `scalar == 1` and `scalar` is an array,  inside a
@@ -414,9 +415,9 @@ def scalar_div(obj: PyTree, scalar: chex.Numeric) -> PyTree:
 
 
 def weighted_sum_of_objects(
-    objects: Sequence[PyTree],
+    objects: Sequence[TPyTree],
     coefficients: Sequence[chex.Numeric],
-) -> PyTree:
+) -> TPyTree:
   """Computes a weighted sum of the objects'.
 
   The function computes `sum_i coefficients[i] * objects[i]`. All objects must

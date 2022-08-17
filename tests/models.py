@@ -266,7 +266,10 @@ class _DeterministicBernoulliNegativeLogProbLoss(
     return _DeterministicBernoulli(logits=self._logits, dtype=jnp.int32)
 
 DeterministicBernoulliNegativeLogProbLoss_tag = loss_functions.tags.LossTag(
-    _DeterministicBernoulliNegativeLogProbLoss, num_inputs=1)
+    _DeterministicBernoulliNegativeLogProbLoss,
+    parameter_dependants=["logits"],
+    parameter_independants=["targets", "weight"],
+)
 
 
 def _register_deterministic_bernoulli(
@@ -295,7 +298,10 @@ class _DeterministicCategoricalNegativeLogProbLoss(
     return _DeterministicCategorical(logits=self._logits, dtype=jnp.int32)
 
 _DeterministicCategoricalNegativeLogProbLoss_tag = loss_functions.tags.LossTag(
-    _DeterministicCategoricalNegativeLogProbLoss, num_inputs=1)
+    _DeterministicCategoricalNegativeLogProbLoss,
+    parameter_dependants=["logits"],
+    parameter_independants=["targets", "weight"],
+)
 
 
 def _register_deterministic_categorical(

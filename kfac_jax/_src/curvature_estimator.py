@@ -128,7 +128,8 @@ class ImplicitExactCurvature:
   def batch_size(cls, losses: Sequence[loss_functions.LossFunction]) -> int:
     """The expected batch size given a list of loss instances."""
     del cls  # Unused
-    loss_inputs = jax.tree_util.tree_leaves([loss.inputs for loss in losses])
+    loss_inputs = jax.tree_util.tree_leaves([loss.parameter_dependants
+                                             for loss in losses])
     batch_size = loss_inputs[0].shape[0]
     if not all(loss_in.shape[0] == batch_size for loss_in in loss_inputs):
       raise ValueError("Not all registered losses have the same first dimension"
@@ -248,8 +249,8 @@ class ImplicitExactCurvature:
     assert len(losses1) == len(losses2)
     for loss1, loss2 in zip(losses1, losses2):
       assert isinstance(loss1, type(loss2))
-      inputs1 = jax.tree_util.tree_leaves(loss1.inputs)
-      inputs2 = jax.tree_util.tree_leaves(loss2.inputs)
+      inputs1 = jax.tree_util.tree_leaves(loss1.parameter_dependants)
+      inputs2 = jax.tree_util.tree_leaves(loss2.parameter_dependants)
       for in1, in2 in zip(inputs1, inputs2):
         assert in1.shape == in2.shape
         assert in1.dtype == in2.dtype
@@ -515,7 +516,7 @@ class ImplicitExactCurvature:
     losses, _ = self._loss_tags_vjp(func_args)
     batch_size = self.batch_size(losses)
 
-    return (tuple(tuple(input.shape for input in loss.inputs)
+    return (tuple(tuple(x.shape for x in loss.parameter_dependants)
                   for loss in losses),
             batch_size)
 
@@ -1145,7 +1146,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       #     weight_k = 1.0 * weight_k-1 + (ema_new/n)
       # Which is mathematically equivalent to the original version.
       zero_tangents = jax.tree_util.tree_map(
-          jnp.zeros_like, list(loss.inputs for loss in losses))
+          jnp.zeros_like, list(loss.parameter_dependants for loss in losses))
       if estimation_mode == "fisher_exact":
         shapes = [l.fisher_factor_inner_shape[1:] for l in losses]
       else:

@@ -24,6 +24,9 @@ from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import utils
 
 
+Array = chex.Array
+
+
 class LossFunction(utils.Finalizable):
   """Abstract base class for loss functions.
 
@@ -33,47 +36,65 @@ class LossFunction(utils.Finalizable):
   needed.
   """
 
-  def __init__(self, weight: float):
+  def __init__(self, weight: chex.Numeric):
     """Initializes the loss instance.
 
     Args:
       weight: The relative weight attributed to the loss.
     """
+    if not isinstance(weight, (int, float)):
+      if not isinstance(weight, Array) or weight.size > 1:
+        raise ValueError("`weight` must be a scalar value.")
     super().__init__()
     self._weight = weight
     self.finalize()
 
   @property
-  def weight(self) -> float:
+  def dtype(self) -> chex.ArrayDType:
+    return self.parameter_dependants[0].dtype
+
+  @property
+  def weight(self) -> chex.Numeric:
     """The relative weight of the loss."""
     return self._weight
 
   @property
   @abc.abstractmethod
-  def targets(self) -> Optional[chex.Array]:
-    """The targets being predicted by the model.
-
-    Returns:
-      None or Tensor of appropriate shape for calling self._evaluate() on.
-    """
+  def targets(self) -> Optional[Array]:
+    """The targets (if present) used for evaluating the loss."""
 
   @property
   @abc.abstractmethod
-  def inputs(self) -> Tuple[chex.Array, ...]:
-    """The inputs to the loss function (excluding the targets)."""
+  def parameter_dependants(self) -> Tuple[Array, ...]:
+    """All the parameter dependent arrays of the loss."""
+
+  @property
+  def num_parameter_dependants(self) -> int:
+    """Number of parameter dependent arrays of the loss."""
+    return len(self.parameter_dependants)
+
+  @property
+  @abc.abstractmethod
+  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+    """All the parameter independent arrays of the loss."""
+
+  @property
+  def num_parameter_independants(self) -> int:
+    """Number of parameter independent arrays of the loss."""
+    return len(self.parameter_independants)
 
   @abc.abstractmethod
   def copy_with_different_inputs(
       self,
-      inputs: Sequence[chex.Array],
+      parameter_dependants: Sequence[Array],
   ) -> "LossFunction":
     """Creates the same :class:`~LossFunction` object, but with different inputs."""
 
   def evaluate(
       self,
-      targets: Optional[chex.Array] = None,
+      targets: Optional[Array] = None,
       coefficient_mode: str = "regular",
-  ) -> chex.Array:
+  ) -> Array:
     """Evaluates the loss function on the targets.
 
     Args:
@@ -109,14 +130,14 @@ class LossFunction(utils.Finalizable):
     return self._evaluate(targets) * multiplier
 
   @abc.abstractmethod
-  def _evaluate(self, targets: chex.Array) -> chex.Array:
+  def _evaluate(self, targets: Array) -> Array:
     """Evaluates the value of the loss, disregarding the relative weight."""
 
   def grad_of_evaluate(
       self,
-      targets: Optional[chex.Array],
+      targets: Optional[Array],
       coefficient_mode: str,
-  ) -> Tuple[chex.Array, ...]:
+  ) -> Tuple[Array, ...]:
     """Evaluates the gradient of the loss function, w.r.t. its inputs.
 
     Args:
@@ -129,17 +150,16 @@ class LossFunction(utils.Finalizable):
       The gradient of the loss function w.r.t. its inputs, at the provided
       targets.
     """
-    targets = self.targets if targets is None else targets
-    def evaluate_sum(inputs: Sequence[chex.Array]) -> chex.Array:
+    def evaluate_sum(inputs: Sequence[Array]) -> Array:
       """Evaluates the loss summed over all axis, including batch etc."""
       instance = self.copy_with_different_inputs(inputs)
       return jnp.sum(instance.evaluate(targets, coefficient_mode))
-    return jax.grad(evaluate_sum)(self.inputs)
+    return jax.grad(evaluate_sum)(self.parameter_dependants)
 
   def multiply_ggn(
       self,
-      vector: Sequence[chex.Array],
-  ) -> Tuple[chex.Array, ...]:
+      vector: Sequence[Array],
+  ) -> Tuple[Array, ...]:
     """Right-multiplies a vector by the GGN of the loss function.
 
     Here the GGN is the Generalized Gauss-Newton matrix (whose definition is
@@ -158,14 +178,14 @@ class LossFunction(utils.Finalizable):
   @abc.abstractmethod
   def multiply_ggn_unweighted(
       self,
-      vector: Sequence[chex.Array],
-  ) -> Tuple[chex.Array, ...]:
+      vector: Sequence[Array],
+  ) -> Tuple[Array, ...]:
     """Same as :func:`~LossFunction.multiply_ggn`, disregarding the relative weight."""
 
   def multiply_ggn_factor(
       self,
-      vector: chex.Array,
-  ) -> Tuple[chex.Array, ...]:
+      vector: Array,
+  ) -> Tuple[Array, ...]:
     """Right-multiplies a vector by a factor B of the GGN.
 
     Here the GGN is the Generalized Gauss-Newton matrix (whose definition is
@@ -189,14 +209,14 @@ class LossFunction(utils.Finalizable):
 
   @abc.abstractmethod
   def multiply_ggn_factor_unweighted(
-      self, vector: chex.Array
-  ) -> Tuple[chex.Array, ...]:
+      self, vector: Array
+  ) -> Tuple[Array, ...]:
     """Same as :func:`~LossFunction.multiply_ggn_factor`, disregarding the relative weight."""
 
   def multiply_ggn_factor_transpose(
       self,
-      vector: Sequence[chex.Array],
-  ) -> chex.Array:
+      vector: Sequence[Array],
+  ) -> Array:
     """Right-multiplies a vector by the transpose of a factor B of the GGN.
 
     Here the GGN is the Generalized Gauss-Newton matrix (whose definition is
@@ -222,14 +242,14 @@ class LossFunction(utils.Finalizable):
   @abc.abstractmethod
   def multiply_ggn_factor_transpose_unweighted(
       self,
-      vector: Sequence[chex.Array],
-  ) -> chex.Array:
+      vector: Sequence[Array],
+  ) -> Array:
     """Same as :func:`~LossFunction.multiply_ggn_factor_transpose`, disregarding the relative weight."""
 
   def multiply_ggn_factor_replicated_one_hot(
       self,
       index: Sequence[int],
-  ) -> Tuple[chex.Array, ...]:
+  ) -> Tuple[Array, ...]:
     """Right-multiplies a replicated-one-hot vector by a factor B of the GGN.
 
     Here the GGN is the Generalized Gauss-Newton matrix (whose definition is
@@ -261,7 +281,7 @@ class LossFunction(utils.Finalizable):
   def multiply_ggn_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[chex.Array, ...]:
+  ) -> Tuple[Array, ...]:
     """Same as :func:`~LossFunction.multiply_ggn_factor_replicated_one_hot`, disregarding the relative weight."""
 
   @property
@@ -274,18 +294,18 @@ class NegativeLogProbLoss(LossFunction):
   """Base class for loss functions that represent negative log-probability."""
 
   @property
-  def inputs(self) -> Tuple[chex.Array, ...]:
+  def parameter_dependants(self) -> Tuple[Array, ...]:
     return self.params
 
   @property
   @abc.abstractmethod
-  def params(self) -> Tuple[chex.Array, ...]:
+  def params(self) -> Tuple[Array, ...]:
     """Parameters to the underlying distribution."""
 
   def multiply_fisher(
       self,
-      vector: Sequence[chex.Array],
-  ) -> Tuple[chex.Array, ...]:
+      vector: Sequence[Array],
+  ) -> Tuple[Array, ...]:
     """Right-multiplies a vector by the Fisher.
 
     Args:
@@ -302,14 +322,14 @@ class NegativeLogProbLoss(LossFunction):
   @abc.abstractmethod
   def multiply_fisher_unweighted(
       self,
-      vector: Sequence[chex.Array],
-  ) -> Tuple[chex.Array, ...]:
+      vector: Sequence[Array],
+  ) -> Tuple[Array, ...]:
     """Same as :func:`~LossFunction.multiply_fisher`, disregarding the relative weight."""
 
   def multiply_fisher_factor(
       self,
-      vector: chex.Array,
-  ) -> Tuple[chex.Array, ...]:
+      vector: Array,
+  ) -> Tuple[Array, ...]:
     """Right-multiplies a vector by a factor B of the Fisher.
 
     Here the Fisher is the Fisher information matrix (i.e. expected outer-
@@ -336,14 +356,14 @@ class NegativeLogProbLoss(LossFunction):
   @abc.abstractmethod
   def multiply_fisher_factor_unweighted(
       self,
-      vector: chex.Array,
-  ) -> Tuple[chex.Array, ...]:
+      vector: Array,
+  ) -> Tuple[Array, ...]:
     """Same as :func:`~LossFunction.multiply_fisher_factor`, disregarding the relative weight."""
 
   def multiply_fisher_factor_transpose(
       self,
-      vector: Sequence[chex.Array],
-  ) -> chex.Array:
+      vector: Sequence[Array],
+  ) -> Array:
     """Right-multiplies a vector by the transpose of a factor B of the Fisher.
 
     Here the Fisher is the Fisher information matrix (i.e. expected outer-
@@ -371,14 +391,14 @@ class NegativeLogProbLoss(LossFunction):
   @abc.abstractmethod
   def multiply_fisher_factor_transpose_unweighted(
       self,
-      vector: Sequence[chex.Array],
-  ) -> chex.Array:
+      vector: Sequence[Array],
+  ) -> Array:
     """Same as :func:`~LossFunction.multiply_fisher_factor_transpose`, disregarding the relative weight."""
 
   def multiply_fisher_factor_replicated_one_hot(
       self,
       index: Sequence[int],
-  ) -> Tuple[chex.Array, ...]:
+  ) -> Tuple[Array, ...]:
     """Right-multiplies a replicated-one-hot vector by a factor B of the Fisher.
 
     Here the Fisher is the Fisher information matrix (i.e. expected outer-
@@ -412,7 +432,7 @@ class NegativeLogProbLoss(LossFunction):
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[chex.Array, ...]:
+  ) -> Tuple[Array, ...]:
     """Same as :func:`~LossFunction.multiply_fisher_factor_replicated_one_hot`, disregarding the relative weight."""
 
   @property
@@ -421,14 +441,14 @@ class NegativeLogProbLoss(LossFunction):
     """The shape of the array returned by :func:`~LossFunction.multiply_fisher_factor`."""
 
   @abc.abstractmethod
-  def sample(self, rng: chex.PRNGKey) -> chex.Array:
+  def sample(self, rng: chex.PRNGKey) -> Array:
     """Sample ``targets`` from the underlying distribution."""
 
   def grad_of_evaluate_on_sample(
       self,
-      rng: chex.Array,
+      rng: Array,
       coefficient_mode: str,
-  ) -> Tuple[chex.Array, ...]:
+  ) -> Tuple[Array, ...]:
     """Evaluates the gradient of the log probability on a random sample.
 
     Args:
@@ -455,26 +475,26 @@ class NaturalParamsNegativeLogProbLoss(NegativeLogProbLoss, abc.ABC):
 
   def multiply_ggn_unweighted(
       self,
-      vector: Sequence[chex.Array],
-  ) -> Tuple[chex.Array, ...]:
+      vector: Sequence[Array],
+  ) -> Tuple[Array, ...]:
     return self.multiply_fisher_unweighted(vector)
 
   def multiply_ggn_factor_unweighted(
       self,
-      vector: chex.Array,
-  ) -> Tuple[chex.Array, ...]:
+      vector: Array,
+  ) -> Tuple[Array, ...]:
     return self.multiply_fisher_factor_unweighted(vector)
 
   def multiply_ggn_factor_transpose_unweighted(
       self,
-      vector: Sequence[chex.Array],
-  ) -> chex.Array:
+      vector: Sequence[Array],
+  ) -> Array:
     return self.multiply_fisher_factor_transpose_unweighted(vector)
 
   def multiply_ggn_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[chex.Array, ...]:
+  ) -> Tuple[Array, ...]:
     return self.multiply_fisher_factor_replicated_one_hot_unweighted(index)
 
   @property
@@ -490,10 +510,10 @@ class DistributionNegativeLogProbLoss(NegativeLogProbLoss):
   def dist(self) -> distrax.Distribution:
     """The underlying Distrax distribution."""
 
-  def _evaluate(self, targets: chex.Array) -> chex.Array:
+  def _evaluate(self, targets: Array) -> Array:
     return - self.dist.log_prob(targets)
 
-  def sample(self, rng: chex.PRNGKey) -> chex.Array:
+  def sample(self, rng: chex.PRNGKey) -> Array:
     return self.dist.sample(seed=rng)
 
   @property
@@ -517,10 +537,10 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def __init__(
       self,
-      mean: chex.Array,
-      targets: Optional[chex.Array] = None,
-      variance: float = 0.5,
-      weight: float = 1.0,
+      mean: Array,
+      targets: Optional[Array] = None,
+      variance: chex.Numeric = 0.5,
+      weight: chex.Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -531,34 +551,51 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       weight: The relative weight of the loss.
     """
     if not isinstance(variance, (int, float)):
-      raise ValueError("The `variance` argument should be python scalar.")
+      if not isinstance(variance, Array) or variance.size > 1:
+        raise ValueError("`variance` must be either a python scalar or a "
+                         "scalar array.")
     self._mean = mean
     self._targets = targets
-    self._variance = float(variance)
+    self._variance = variance
     super().__init__(weight=weight)
 
   @property
-  def targets(self) -> Optional[chex.Array]:
+  def mean(self) -> Array:
+    return self._mean
+
+  @property
+  def variance(self) -> chex.Numeric:
+    return self._variance
+
+  @property
+  def targets(self) -> Optional[Array]:
     return self._targets
 
   @property
-  def dist(self) -> distrax.MultivariateNormalDiag:
-    scale_diag = jnp.full_like(self._mean, jnp.sqrt(self._variance))
-    return distrax.MultivariateNormalDiag(loc=self._mean, scale_diag=scale_diag)
+  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+    arrays = (self.variance, self.weight)
+    if self._targets is not None:
+      arrays = (self._targets,) + arrays
+    return arrays
 
   @property
-  def params(self) -> Tuple[chex.Array]:
-    return (self._mean,)
+  def dist(self) -> distrax.MultivariateNormalDiag:
+    scale_diag = jnp.full_like(self.mean, jnp.sqrt(self.variance))
+    return distrax.MultivariateNormalDiag(loc=self.mean, scale_diag=scale_diag)
+
+  @property
+  def params(self) -> Tuple[Array]:
+    return (self.mean,)
 
   def copy_with_different_inputs(
       self,
-      inputs: Sequence[chex.Array]
+      parameter_dependants: Sequence[Array],
   ) -> "NormalMeanNegativeLogProbLoss":
     """Creates the same :class:`~LossFunction` object, but with different inputs.
 
     Args:
-      inputs: The inputs to use to the constructor of a class instance. This
-        must be a sequence of length 1.
+      parameter_dependants: The inputs to use to the constructor of a class
+        instance. This must be a sequence of length 1.
 
     Returns:
       An instance of :class:`~NormalMeanNegativeLogPorLoss` with the provided
@@ -566,37 +603,37 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     Raises:
       A ValueError if the ``inputs`` is a sequence of different length than 1.
     """
-    [mean] = inputs
+    [mean] = parameter_dependants
     return NormalMeanNegativeLogProbLoss(
         mean=mean,
-        targets=self.targets,
+        targets=self._targets,
         variance=self._variance,
-        weight=self.weight,
+        weight=self._weight,
     )
 
   def multiply_fisher_unweighted(
       self,
-      vector: Sequence[chex.Array]
-  ) -> Tuple[chex.Array]:
+      vector: Sequence[Array]
+  ) -> Tuple[Array]:
     return (vector[0] / self._variance,)
 
   def multiply_fisher_factor_unweighted(
       self,
-      vector: chex.Array,
-  ) -> Tuple[chex.Array]:
+      vector: Array,
+  ) -> Tuple[Array]:
     return (vector / jnp.sqrt(self._variance),)
 
   def multiply_fisher_factor_transpose_unweighted(
       self,
-      vector: Sequence[chex.Array],
-  )  -> chex.Array:
+      vector: Sequence[Array],
+  )  -> Array:
     # it's symmetric
     return self.multiply_fisher_factor_unweighted(vector[0])[0]
 
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[chex.Array]:
+  ) -> Tuple[Array]:
     index = index[0]
     ones_slice = jnp.ones([self._mean.shape[0]])[..., None]
     output_slice = ones_slice / jnp.sqrt(self._variance)
@@ -623,10 +660,10 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
 
   def __init__(
       self,
-      mean: chex.Array,
-      variance: chex.Array,
-      targets: Optional[chex.Array] = None,
-      weight: float = 1.0,
+      mean: Array,
+      variance: Array,
+      targets: Optional[Array] = None,
+      weight: chex.Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -646,8 +683,15 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
     super().__init__(weight=weight)
 
   @property
-  def targets(self) -> Optional[chex.Array]:
+  def targets(self) -> Optional[Array]:
     return self._targets
+
+  @property
+  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+    arrays = (self.weight,)
+    if self._targets is not None:
+      arrays = (self._targets,) + arrays
+    return arrays
 
   @property
   def dist(self) -> distrax.MultivariateNormalDiag:
@@ -655,18 +699,18 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
         loc=self._mean, scale_diag=jnp.sqrt(self._variance))
 
   @property
-  def params(self) -> Tuple[chex.Array, chex.Array]:
+  def params(self) -> Tuple[Array, Array]:
     return self._mean, self._variance
 
   def copy_with_different_inputs(
       self,
-      inputs: Sequence[chex.Array]
+      parameter_dependants: Sequence[Array]
   ) -> "NormalMeanVarianceNegativeLogProbLoss":
     """Creates the same :class:`~LossFunction` object, but with different inputs.
 
     Args:
-      inputs: The inputs to use to the constructor of a class instance. This
-        must be a sequence of length 2.
+      parameter_dependants: The inputs to use to the constructor of a class
+        instance. This must be a sequence of length 2.
 
     Returns:
       An instance of :class:`~NormalMeanVarianceNegativeLogProbLoss` with the
@@ -674,41 +718,41 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
     Raises:
       A ValueError if the ``inputs`` is a sequence of different length than 2.
     """
-    [mean, variance] = inputs
+    [mean, variance] = parameter_dependants
     return NormalMeanVarianceNegativeLogProbLoss(
-        mean, variance, self.targets, self.weight)
+        mean, variance, targets=self._targets, weight=self._weight)
 
   @property
-  def _fisher_mean(self) -> chex.Array:
+  def _fisher_mean(self) -> Array:
     """The Fisher w.r.t. to the mean parameters."""
     return 1. / self._variance
 
   @property
-  def _fisher_mean_factor(self) -> chex.Array:
+  def _fisher_mean_factor(self) -> Array:
     """The Fisher factor w.r.t. to the mean parameters."""
     return jnp.sqrt(self._fisher_mean)
 
   @property
-  def _fisher_var(self) -> chex.Array:
+  def _fisher_var(self) -> Array:
     """The Fisher w.r.t. to the variance parameters."""
     return 1. / (2 * jnp.square(self._variance))
 
   @property
-  def _fisher_var_factor(self) -> chex.Array:
+  def _fisher_var_factor(self) -> Array:
     """The Fisher factor w.r.t. to the variance parameters."""
     return 1. / (jnp.sqrt(2.) * self._variance)
 
   def multiply_fisher_unweighted(
       self,
-      vectors: Sequence[chex.Array],
-  ) -> Tuple[chex.Array, chex.Array]:
-    mean_vec, var_vec = vectors
+      vector: Sequence[Array],
+  ) -> Tuple[Array, Array]:
+    mean_vec, var_vec = vector
     return self._fisher_mean * mean_vec, self._fisher_var * var_vec
 
   def multiply_fisher_factor_unweighted(
       self,
-      vector: chex.Array,
-  ) -> Tuple[chex.Array, chex.Array]:
+      vector: Array,
+  ) -> Tuple[Array, Array]:
     mean_vec, var_vec = jnp.split(vector, 2, axis=-1)
     result_mean_vec = self._fisher_mean_factor * mean_vec
     result_var_vec = self._fisher_var_factor * var_vec
@@ -716,9 +760,9 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
 
   def multiply_fisher_factor_transpose_unweighted(
       self,
-      vectors: Sequence[chex.Array],
-  ) -> chex.Array:
-    mean_vec, var_vec = vectors
+      vector: Sequence[Array],
+  ) -> Array:
+    mean_vec, var_vec = vector
     result_mean_vec = self._fisher_mean_factor * mean_vec
     result_var_vec = self._fisher_var_factor * var_vec
     return jnp.concatenate([result_mean_vec, result_var_vec], axis=-1)
@@ -726,7 +770,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[chex.Array, chex.Array]:
+  ) -> Tuple[Array, Array]:
     [index] = index
 
     if index < int(self._mean.shape[-1]):
@@ -751,25 +795,25 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
 
   def multiply_ggn_unweighted(
       self,
-      vector: Sequence[chex.Array],
-  ) -> Tuple[chex.Array, ...]:
+      vector: Sequence[Array],
+  ) -> Tuple[Array, ...]:
     raise NotImplementedError()
 
   def multiply_ggn_factor_unweighted(
-      self, vector: chex.Array
-  ) -> Tuple[chex.Array, ...]:
+      self, vector: Array
+  ) -> Tuple[Array, ...]:
     raise NotImplementedError()
 
   def multiply_ggn_factor_transpose_unweighted(
       self,
-      vector: Sequence[chex.Array],
-  ) -> chex.Array:
+      vector: Sequence[Array],
+  ) -> Array:
     raise NotImplementedError()
 
   def multiply_ggn_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[chex.Array, ...]:
+  ) -> Tuple[Array, ...]:
     raise NotImplementedError()
 
   @property
@@ -791,9 +835,9 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def __init__(
       self,
-      logits: chex.Array,
-      targets: Optional[chex.Array] = None,
-      weight: float = 1.0,
+      logits: Array,
+      targets: Optional[Array] = None,
+      weight: chex.Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -807,53 +851,60 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     super().__init__(weight=weight)
 
   @property
-  def targets(self) -> Optional[chex.Array]:
+  def targets(self) -> Optional[Array]:
     return self._targets
+
+  @property
+  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+    arrays = (self.weight,)
+    if self._targets is not None:
+      arrays = (self._targets,) + arrays
+    return arrays
 
   @property
   def dist(self) -> distrax.Bernoulli:
     return distrax.Bernoulli(logits=self._logits, dtype=jnp.int32)
 
   @property
-  def _probs(self) -> chex.Array:
+  def _probs(self) -> Array:
     """The probabilities of the underlying Bernoulli distribution."""
     return self.dist.probs
 
   @property
-  def params(self) -> Tuple[chex.Array]:
+  def params(self) -> Tuple[Array]:
     return (self._logits,)
 
   def copy_with_different_inputs(
       self,
-      inputs: Sequence[chex.Array]
+      parameter_dependants: Sequence[Array]
   ) -> "MultiBernoulliNegativeLogProbLoss":
-    [logits] = inputs
+    [logits] = parameter_dependants
     return MultiBernoulliNegativeLogProbLoss(
-        logits, self.targets, self.weight)
+        logits, targets=self._targets, weight=self._weight)
 
   def multiply_fisher_unweighted(
       self,
-      vector: Sequence[chex.Array]
-  ) -> Tuple[chex.Array]:
+      vector: Sequence[Array]
+  ) -> Tuple[Array]:
     return (self._probs * (1 - self._probs) * vector[0],)
 
   def multiply_fisher_factor_unweighted(
       self,
-      vector: chex.Array
-  ) -> Tuple[chex.Array]:
+      vector: Array
+  ) -> Tuple[Array]:
     return (jnp.sqrt(self._probs * (1 - self._probs)) * vector,)
 
   def multiply_fisher_factor_transpose_unweighted(
       self,
-      vector: Sequence[chex.Array]
-  ) -> chex.Array:
+      vector: Sequence[Array]
+  ) -> Array:
     # it's symmetric in this case
     return self.multiply_fisher_factor_unweighted(vector[0])[0]
 
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[chex.Array]:
+  ) -> Tuple[Array]:
     [index] = index
     probs_slice = self._probs[:, index][..., None]
     output_slice = jnp.sqrt(probs_slice * (1 - probs_slice))
@@ -876,9 +927,9 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def __init__(
       self,
-      logits: chex.Array,
-      targets: Optional[chex.Array] = None,
-      weight: float = 1.0,
+      logits: Array,
+      targets: Optional[Array] = None,
+      weight: chex.Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -894,25 +945,32 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     super().__init__(weight=weight)
 
   @property
-  def targets(self) -> Optional[chex.Array]:
+  def targets(self) -> Optional[Array]:
     return self._targets
+
+  @property
+  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+    arrays = (self.weight,)
+    if self._targets is not None:
+      arrays = (self._targets,) + arrays
+    return arrays
 
   @property
   def dist(self) -> distrax.Categorical:
     return distrax.Categorical(logits=self._logits, dtype=jnp.int32)
 
   @property
-  def _probs(self) -> chex.Array:
+  def _probs(self) -> Array:
     """The probabilities of the underlying Bernoulli distribution."""
     return self.dist.probs
 
   @property
-  def _sqrt_probs(self) -> chex.Array:
+  def _sqrt_probs(self) -> Array:
     """The square root of ``self.probs``."""
     return jnp.sqrt(self._probs)
 
   @property
-  def params(self) -> Tuple[chex.Array]:
+  def params(self) -> Tuple[Array]:
     return (self._logits,)
 
   @property
@@ -921,16 +979,16 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def copy_with_different_inputs(
       self,
-      inputs: Sequence[chex.Array]
+      parameter_dependants: Sequence[Array]
   ) -> "CategoricalLogitsNegativeLogProbLoss":
-    [logits] = inputs
+    [logits] = parameter_dependants
     return CategoricalLogitsNegativeLogProbLoss(
-        logits, self.targets, self.weight)
+        logits, targets=self._targets, weight=self._weight)
 
   def multiply_fisher_unweighted(
       self,
-      vector: Sequence[chex.Array]
-  ) -> Tuple[chex.Array]:
+      vector: Sequence[Array]
+  ) -> Tuple[Array]:
     probs = self._probs
     fisher_product = vector[0] * probs - probs * jnp.sum(
         vector[0] * probs, axis=-1, keepdims=True)
@@ -938,8 +996,8 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def multiply_fisher_factor_unweighted(
       self,
-      vector: chex.Array
-  ) -> Tuple[chex.Array]:
+      vector: Array
+  ) -> Tuple[Array]:
     probs = self._probs
     sqrt_probs = self._sqrt_probs
     return (sqrt_probs * vector - probs * jnp.sum(
@@ -947,8 +1005,8 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def multiply_fisher_factor_transpose_unweighted(
       self,
-      vector: Sequence[chex.Array]
-  ) -> chex.Array:
+      vector: Sequence[Array]
+  ) -> Array:
     probs = self._probs
     sqrt_probs = self._sqrt_probs
     return sqrt_probs * vector[0] - sqrt_probs * jnp.sum(
@@ -957,7 +1015,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[chex.Array]:
+  ) -> Tuple[Array]:
     [index] = index
     probs = self._probs
     sqrt_probs_slice = self._sqrt_probs[:, index][..., None]
@@ -980,19 +1038,19 @@ class OneHotCategoricalLogitsNegativeLogProbLoss(
 
   def copy_with_different_inputs(
       self,
-      inputs: Sequence[chex.Array]
+      parameter_dependants: Sequence[Array]
   ) -> "OneHotCategoricalLogitsNegativeLogProbLoss":
-    [logits] = inputs
+    [logits] = parameter_dependants
     return OneHotCategoricalLogitsNegativeLogProbLoss(
-        logits, self.targets, self.weight)
+        logits, targets=self._targets, weight=self._weight)
 
 
 def insert_slice_in_zeros(
-    slice_to_insert: chex.Array,
+    slice_to_insert: Array,
     dim: int,
     dim_size: int,
     position: int,
-) -> chex.Array:
+) -> Array:
   """Inserts slice into a larger array of zeros.
 
   Forms a new array which is the same shape as slice_to_insert, except that
@@ -1035,29 +1093,43 @@ def insert_slice_in_zeros(
 #              __/ |              __/ |
 #             |___/              |___/
 
-
 NormalMeanNegativeLogProbLoss_tag = tags.LossTag(
-    NormalMeanNegativeLogProbLoss, num_inputs=1)
+    NormalMeanNegativeLogProbLoss,
+    parameter_dependants=["mean"],
+    parameter_independants=["targets", "variance", "weight"],
+)
 
 NormalMeanVarianceNegativeLogProbLoss_tag = tags.LossTag(
-    NormalMeanVarianceNegativeLogProbLoss, num_inputs=2)
-
-CategoricalLogitsNegativeLogProbLoss_tag = tags.LossTag(
-    CategoricalLogitsNegativeLogProbLoss, num_inputs=1)
+    NormalMeanVarianceNegativeLogProbLoss,
+    parameter_dependants=["mean", "variance"],
+    parameter_independants=["targets", "weight"],
+)
 
 MultiBernoulliNegativeLogProbLoss_tag = tags.LossTag(
-    MultiBernoulliNegativeLogProbLoss, num_inputs=1)
+    MultiBernoulliNegativeLogProbLoss,
+    parameter_dependants=["logits"],
+    parameter_independants=["targets", "weight"],
+)
+
+CategoricalLogitsNegativeLogProbLoss_tag = tags.LossTag(
+    CategoricalLogitsNegativeLogProbLoss,
+    parameter_dependants=["logits"],
+    parameter_independants=["targets", "weight"],
+)
 
 OneHotCategoricalLogitsNegativeLogProbLoss_tag = tags.LossTag(
-    OneHotCategoricalLogitsNegativeLogProbLoss, num_inputs=1)
+    OneHotCategoricalLogitsNegativeLogProbLoss,
+    parameter_dependants=["logits"],
+    parameter_independants=["targets", "weight"],
+)
 
 
 def register_normal_predictive_distribution(
-    mean: chex.Array,
-    targets: Optional[chex.Array] = None,
+    mean: Array,
+    targets: Optional[Array] = None,
     variance: float = 0.5,
-    weight: float = 1.0,
-) -> chex.Array:
+    weight: chex.Numeric = 1.0,
+) -> Array:
   """Registers a normal predictive distribution.
 
   This corresponds to a squared error loss of the form
@@ -1086,16 +1158,19 @@ def register_normal_predictive_distribution(
     The mean and targets as dependable on the tag.
   """
   if targets is None:
-    targets = jnp.zeros_like(mean)
-  return NormalMeanNegativeLogProbLoss_tag.bind(
-      mean, targets, variance=variance, weight=weight)[0]
+    args = [mean, variance, weight]
+    args_names = ["mean", "variance", "weight"]
+  else:
+    args = [mean, targets, variance, weight]
+    args_names = ["mean", "targets", "variance", "weight"]
+  return NormalMeanNegativeLogProbLoss_tag.bind(*args, args_names=args_names)[0]
 
 
 def register_squared_error_loss(
-    prediction: chex.Array,
-    targets: Optional[chex.Array] = None,
-    weight: float = 1.0,
-) -> chex.Array:
+    prediction: Array,
+    targets: Optional[Array] = None,
+    weight: chex.Numeric = 1.0,
+) -> Array:
   """Registers a squared error loss function.
 
   This assumes the squared error loss of the form ``||target - prediction||^2``,
@@ -1119,10 +1194,10 @@ def register_squared_error_loss(
 
 
 def register_multi_bernoulli_predictive_distribution(
-    logits: chex.Array,
-    targets: Optional[chex.Array] = None,
-    weight: float = 1.0,
-) -> chex.Array:
+    logits: Array,
+    targets: Optional[Array] = None,
+    weight: chex.Numeric = 1.0,
+) -> Array:
   """Registers a multi-Bernoulli predictive distribution.
 
   Note that this is distinct from
@@ -1145,16 +1220,20 @@ def register_multi_bernoulli_predictive_distribution(
     The logits and targets as dependable on the tag.
   """
   if targets is None:
-    targets = jnp.zeros_like(logits)
+    args = [logits, weight]
+    args_names = ["logits", "weight"]
+  else:
+    args = [logits, targets, weight]
+    args_names = ["logits", "targets", "weight"]
   return MultiBernoulliNegativeLogProbLoss_tag.bind(
-      logits, targets, weight=weight)[0]
+      *args, args_names=args_names)[0]
 
 
 def register_sigmoid_cross_entropy_loss(
-    logits: chex.Array,
-    targets: Optional[chex.Array] = None,
-    weight: float = 1.0,
-) -> chex.Array:
+    logits: Array,
+    targets: Optional[Array] = None,
+    weight: chex.Numeric = 1.0,
+) -> Array:
   """Registers a sigmoid cross-entropy loss function.
 
   Note that this is distinct from :func:`~register_softmax_cross_entropy_loss`
@@ -1178,10 +1257,10 @@ def register_sigmoid_cross_entropy_loss(
 
 
 def register_categorical_predictive_distribution(
-    logits: chex.Array,
-    targets: Optional[chex.Array] = None,
-    weight: float = 1.0,
-) -> chex.Array:
+    logits: Array,
+    targets: Optional[Array] = None,
+    weight: chex.Numeric = 1.0,
+) -> Array:
   """Registers a categorical predictive distribution.
 
   Note that this is distinct from
@@ -1204,24 +1283,28 @@ def register_categorical_predictive_distribution(
     The logits and targets as dependable on the tag.
   """
   if targets is None:
-    targets = jnp.zeros_like(logits[..., 0])
-  if targets.ndim == logits.ndim:
-    return OneHotCategoricalLogitsNegativeLogProbLoss_tag.bind(
-        logits, targets, weight=weight)[0]
-  elif targets.ndim == logits.ndim - 1:
-    return CategoricalLogitsNegativeLogProbLoss_tag.bind(
-        logits, targets, weight=weight)[0]
+    args = [logits, weight]
+    args_names = ["logits", "weight"]
+    tag_cls = CategoricalLogitsNegativeLogProbLoss_tag
   else:
-    raise ValueError(f"The logits rank is {logits.ndim} and the targets rank "
-                     f"must be either equal or one less than it, but is "
-                     f"{targets.ndim}.")
+    args = [logits, targets, weight]
+    args_names = ["logits", "targets", "weight"]
+    if targets.ndim == logits.ndim:
+      tag_cls = OneHotCategoricalLogitsNegativeLogProbLoss_tag
+    elif targets.ndim == logits.ndim - 1:
+      tag_cls = CategoricalLogitsNegativeLogProbLoss_tag
+    else:
+      raise ValueError(f"The logits rank is {logits.ndim} and the targets rank "
+                       f"must be either equal or one less than it, but is "
+                       f"{targets.ndim}.")
+  return tag_cls.bind(*args, args_names=args_names)[0]
 
 
 def register_softmax_cross_entropy_loss(
-    logits: chex.Array,
-    targets: Optional[chex.Array] = None,
-    weight: float = 1.0,
-) -> chex.Array:
+    logits: Array,
+    targets: Optional[Array] = None,
+    weight: chex.Numeric = 1.0,
+) -> Array:
   """Registers a softmax cross-entropy loss function.
 
   Note that this is distinct from :func:`~register_sigmoid_cross_entropy_loss`
