@@ -265,7 +265,7 @@ class _DeterministicBernoulliNegativeLogProbLoss(
   def dist(self):
     return _DeterministicBernoulli(logits=self._logits, dtype=jnp.int32)
 
-DeterministicBernoulliNegativeLogProbLoss_tag = loss_functions.tags.LossTag(
+_DeterministicBernoulliNegativeLogProbLoss_tag = loss_functions.tags.LossTag(
     _DeterministicBernoulliNegativeLogProbLoss,
     parameter_dependants=["logits"],
     parameter_independants=["targets", "weight"],
@@ -277,8 +277,15 @@ def _register_deterministic_bernoulli(
     targets: chex.Array,
     weight=1.0
 ) -> chex.Array:
-  return DeterministicBernoulliNegativeLogProbLoss_tag.bind(
-      logits, targets, weight=weight)[0]
+  """Registers a deterministic bernoulli loss."""
+  if targets is None:
+    args = [logits, weight]
+    args_names = ["logits", "weight"]
+  else:
+    args = [logits, targets, weight]
+    args_names = ["logits", "targets", "weight"]
+  return _DeterministicBernoulliNegativeLogProbLoss_tag.bind(
+      *args, args_names=args_names)[0]
 
 
 class _DeterministicCategorical(distrax.Categorical):
@@ -309,8 +316,15 @@ def _register_deterministic_categorical(
     targets: chex.Array,
     weight=1.0
 ) -> chex.Array:
-  return DeterministicBernoulliNegativeLogProbLoss_tag.bind(
-      logits, targets, weight=weight)[0]
+  """Registers a deterministic categorical loss."""
+  if targets is None:
+    args = [logits, weight]
+    args_names = ["logits", "weight"]
+  else:
+    args = [logits, targets, weight]
+    args_names = ["logits", "targets", "weight"]
+  return _DeterministicCategoricalNegativeLogProbLoss_tag.bind(
+      *args, args_names=args_names)[0]
 
 
 def squared_error_loss(
