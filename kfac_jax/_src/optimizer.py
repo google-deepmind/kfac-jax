@@ -128,14 +128,18 @@ class Optimizer(utils.WithStagedMethods):
 
     Args:
       value_and_grad_func: Python callable. The function should return the value
-        of the loss to be optimized and its gradients. If the argument
-        ``value_func_has_aux`` is ``False`` then the interface should be:
-        ``loss, loss_grads = value_and_grad_func(*args)``. If
-        ``value_func_has_aux`` is ``True`` then the interface should be:
-        ``(loss, aux), loss_grads = value_and_grad_func(*args)``. Here ``args``
-        is ``(params, func_state, rng, batch)``, with ``rng`` omitted if
-        ``value_func_has_rng`` is ``False``, and with ``func_state`` omitted if
-        ``value_func_has_state`` is ``False``.
+        of the loss to be optimized and its gradients, and optionally the model
+        state and auxiliary information (usually statistics to log). The
+        interface should be:
+        ``out_args, loss_grads = value_and_grad_func(*in_args)``.
+        Here, ``in_args`` is ``(params, func_state, rng, batch)``, with ``rng``
+        omitted if ``value_func_has_rng`` is ``False``, and with ``func_state``
+        omitted if ``value_func_has_state`` is ``False``. Meanwhile,
+        ``out_args`` is ``(loss, func_state, aux)``, with ``func_state`` omitted
+        if ``value_func_has_state`` is ``False``, and with ``aux`` omitted if
+        ``value_func_has_aux`` is ``False``. If both ``value_func_has_state``
+        and ``value_func_has_aux`` are ``False``, ``out_args`` should just be
+        ``loss`` and not ``(loss,)``.
       l2_reg: Scalar. Set this value to tell the optimizer what L2
         regularization coefficient you are using (if any). Note the coefficient
         appears in the regularizer as ``coeff / 2 * sum(param**2)``. This adds
@@ -143,11 +147,10 @@ class Optimizer(utils.WithStagedMethods):
         quadratic model when using adaptive damping. Note that the user is still
         responsible for adding regularization to the loss.
       value_func_has_aux: Boolean. Specifies whether the provided callable
-        ``value_and_grad_func`` returns the loss value only, or also some
-        auxiliary data. (Default: ``False``)
+        ``value_and_grad_func`` returns auxiliary data. (Default: ``False``)
       value_func_has_state: Boolean. Specifies whether the provided callable
-        ``value_and_grad_func`` has a persistent state that is inputted and it
-        also outputs an update version of it. (Default: ``False``)
+        ``value_and_grad_func`` has a persistent state that is passed in and
+        out. (Default: ``False``)
       value_func_has_rng: Boolean. Specifies whether the provided callable
         ``value_and_grad_func`` additionally takes as input an rng key.
         (Default: ``False``)

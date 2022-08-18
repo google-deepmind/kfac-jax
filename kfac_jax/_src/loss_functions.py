@@ -13,7 +13,7 @@
 # limitations under the License.
 """"K-FAC loss functions objects, tags and registration functions."""
 import abc
-from typing import  Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 import chex
 import distrax
@@ -511,7 +511,7 @@ class DistributionNegativeLogProbLoss(NegativeLogProbLoss):
     """The underlying Distrax distribution."""
 
   def _evaluate(self, targets: Array) -> Array:
-    return - self.dist.log_prob(targets)
+    return -self.dist.log_prob(targets)  # keeps leading dims intact
 
   def sample(self, rng: chex.PRNGKey) -> Array:
     return self.dist.sample(seed=rng)
@@ -929,6 +929,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       logits: Array,
       targets: Optional[Array] = None,
+      mask: Optional[Array] = None,
       weight: chex.Numeric = 1.0,
   ):
     """Initializes the loss instance.
@@ -938,10 +939,22 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
         ``(batch_size, output_size)``.
       targets: Optional targets to use for evaluation, which specify an integer
         index of the correct class. Must be of shape ``(batch_size,)``.
+      mask: Optional mask to apply to losses over the batch. Should be
+        0/1-valued and of shape ``(batch_size,)``. The tensors returned by
+        ``evaluate`` and ``grad_of_evaluate``, as well as the various matrix
+        vector products, will be multiplied by mask (with broadcasting to later
+        dimensions).
       weight: The relative weight of the loss.
     """
+
+    if mask is not None and mask.shape != logits.shape[:1]:
+      raise ValueError("If provided, mask.shape must be equal to "
+                       "logits.shape[:1].")
+
     self._logits = logits
     self._targets = targets
+    self._mask = mask
+
     super().__init__(weight=weight)
 
   @property
@@ -949,20 +962,36 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._targets
 
   @property
+  def mask(self) -> Optional[Array]:
+    return self._mask
+
+  @property
   def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
     arrays = (self.weight,)
-    if self._targets is not None:
-      arrays = (self._targets,) + arrays
+    if self.mask is not None:
+      arrays = (self.mask,) + arrays
+    if self.targets is not None:
+      arrays = (self.targets,) + arrays
     return arrays
 
   @property
   def dist(self) -> distrax.Categorical:
     return distrax.Categorical(logits=self._logits, dtype=jnp.int32)
 
+  def _evaluate(self, targets: Array) -> Array:
+    evl = super()._evaluate(targets)
+    if self.mask is not None:
+      return evl * self.mask
+    else:
+      return evl
+
   @property
   def _probs(self) -> Array:
     """The probabilities of the underlying Bernoulli distribution."""
-    return self.dist.probs
+    if self.mask is not None:
+      return self.dist.probs * self.mask[..., None]
+    else:
+      return self.dist.probs
 
   @property
   def _sqrt_probs(self) -> Array:
@@ -983,7 +1012,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   ) -> "CategoricalLogitsNegativeLogProbLoss":
     [logits] = parameter_dependants
     return CategoricalLogitsNegativeLogProbLoss(
-        logits, targets=self._targets, weight=self._weight)
+        logits, targets=self.targets, mask=self.mask, weight=self.weight)
 
   def multiply_fisher_unweighted(
       self,
@@ -1042,7 +1071,7 @@ class OneHotCategoricalLogitsNegativeLogProbLoss(
   ) -> "OneHotCategoricalLogitsNegativeLogProbLoss":
     [logits] = parameter_dependants
     return OneHotCategoricalLogitsNegativeLogProbLoss(
-        logits, targets=self._targets, weight=self._weight)
+        logits, targets=self.targets, mask=self.mask, weight=self.weight)
 
 
 def insert_slice_in_zeros(
@@ -1259,6 +1288,7 @@ def register_sigmoid_cross_entropy_loss(
 def register_categorical_predictive_distribution(
     logits: Array,
     targets: Optional[Array] = None,
+    mask: Optional[Array] = None,
     weight: chex.Numeric = 1.0,
 ) -> Array:
   """Registers a categorical predictive distribution.
@@ -1270,10 +1300,18 @@ def register_categorical_predictive_distribution(
   Args:
     logits: The logits of the distribution (i.e. its parameters). The first
       dimension must be the batch size.
-    targets: (OPTIONAL) The targets for the loss function.  Only required if
-      one wants to use the "empirical Fisher" instead of the true Fisher
-      (which is controlled by the ``estimation_mode`` to the optimizer).
+    targets: (OPTIONAL) The values at which the log probability of this
+      distribution is evaluated (to give the loss).  Only required if one wants
+      to use the "empirical Fisher" instead of the true Fisher (which is
+      controlled by the ``estimation_mode`` to the optimizer).
       (Default: None)
+    mask: (OPTIONAL) Mask to apply to log probabilities over the batch of this
+      distribution . Should be 0/1-valued and of shape ``(batch_size,)``. Log
+      probablities corresponding to mask values of 0 will be treated as constant
+      and equal to 0. Note that the contributions to the curvature matrix
+      approximations from such log probs will be treated as 0 instead of absent
+      (which will affect the averages that underlie these computations). Note
+      that this might change in the future. (Default: None)
     weight: (OPTIONAL) a scalar. A coefficient to multiply the
       log prob loss associated with this distribution. The Fisher will be
       multiplied by the corresponding factor. This is NOT equivalent to
@@ -1282,13 +1320,7 @@ def register_categorical_predictive_distribution(
   Returns:
     The logits and targets as dependable on the tag.
   """
-  if targets is None:
-    args = [logits, weight]
-    args_names = ["logits", "weight"]
-    tag_cls = CategoricalLogitsNegativeLogProbLoss_tag
-  else:
-    args = [logits, targets, weight]
-    args_names = ["logits", "targets", "weight"]
+  if targets is not None:
     if targets.ndim == logits.ndim:
       tag_cls = OneHotCategoricalLogitsNegativeLogProbLoss_tag
     elif targets.ndim == logits.ndim - 1:
@@ -1297,12 +1329,24 @@ def register_categorical_predictive_distribution(
       raise ValueError(f"The logits rank is {logits.ndim} and the targets rank "
                        f"must be either equal or one less than it, but is "
                        f"{targets.ndim}.")
+  args = [logits]
+  args_names = ["logits"]
+  if targets is not None:
+    args = args + [targets]
+    args_names = args_names + ["targets"]
+  if mask is not None:
+    args = args + [mask]
+    args_names = args_names + ["mask"]
+  args = args + [weight]
+  args_names = args_names + ["weight"]
+
   return tag_cls.bind(*args, args_names=args_names)[0]
 
 
 def register_softmax_cross_entropy_loss(
     logits: Array,
     targets: Optional[Array] = None,
+    mask: Optional[Array] = None,
     weight: chex.Numeric = 1.0,
 ) -> Array:
   """Registers a softmax cross-entropy loss function.
@@ -1319,9 +1363,19 @@ def register_softmax_cross_entropy_loss(
       one wants to use the "empirical Fisher" instead of the true Fisher
       (which is controlled by the ``estimation_mode`` to the optimizer).
       (Default: None)
+    mask: (OPTIONAL) Mask to apply to losses over the batch. Should be
+      0/1-valued and of shape ``(batch_size,)``. Losses corresponding to mask
+      values of 0 will be treated as constant and equal to 0. Note that the
+      contributions to the curvature matrix approximations from such losses will
+      be treated as 0 instead of absent (which will affect the averages that
+      underlie these computations). Note that this might change in the future.
+      (Default: None)
     weight: (OPTIONAL) a scalar. A coefficient to multiply the loss function by.
       (Default: 1.0)
   Returns:
     The logits and targets as dependable on the tag.
   """
-  return register_categorical_predictive_distribution(logits, targets, weight)
+  return register_categorical_predictive_distribution(logits,
+                                                      targets=targets,
+                                                      mask=mask,
+                                                      weight=weight)
