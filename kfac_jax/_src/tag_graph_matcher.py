@@ -1197,7 +1197,7 @@ class TagLocation:
         p_indexes = [eqn.params["body_jaxpr"].jaxpr.invars.index(p)
                      for p in param_vars]
       elif eqn.primitive.name in ("xla_call", "xla_pmap"):
-        p_indexes = [eqn.params["call_jaxpr"].jaxpr.invars.index(p)
+        p_indexes = [eqn.params["call_jaxpr"].invars.index(p)
                      for p in param_vars]
       else:
         raise NotImplementedError()
@@ -1222,7 +1222,7 @@ class TagLocation:
       elif eqn.primitive.name == "while":
         invars = eqn.params["body_jaxpr"].jaxpr.invars
       elif eqn.primitive.name in ("xla_call", "xla_pmap"):
-        invars = eqn.params["call_jaxpr"].jaxpr.invars
+        invars = eqn.params["call_jaxpr"].invars
       else:
         raise NotImplementedError()
       p_indexes = [invars.index(p) for p in param_vars]
