@@ -250,13 +250,11 @@ def get_first(obj: PyTree) -> PyTree:
   return jax.tree_util.tree_map(index_if_not_scalar, obj)
 
 
-@jax.jit
 def get_mean(obj: PyTree) -> PyTree:
   """Returns the average of `obj` over different devices."""
   return get_first(compute_mean(obj))
 
 
-@jax.jit
 def get_sum(obj: PyTree) -> PyTree:
   """Returns the sum of `obj` over different devices."""
   return get_first(compute_sum(obj))
