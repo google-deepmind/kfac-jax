@@ -103,13 +103,19 @@ class ImplicitExactCurvature:
       self,
       func: utils.Func,
       params_index: int = 0,
+      batch_size_extractor: Callable[[utils.Batch, bool], chex.Numeric] =
+      utils.default_batch_size_extractor,
   ):
-    """Initializes the curvature instance.
+    """Initializes the ImplicitExactCurvature instance.
 
     Args:
       func: The model function, which should have at least one registered loss.
       params_index: The index of the parameters argument in arguments list of
         ``func``.
+      batch_size_extractor: A function that takes as input the function
+        arguments (and a boolean specifying whether the batch is replicated over
+        multiple devices) and returns the batch size for a single device.
+        (Default: ``kfac.utils.default_batch_size_extractor``)
     """
     self._loss_tags_vjp = tracer.loss_tags_vjp(
         func=func,
@@ -123,18 +129,11 @@ class ImplicitExactCurvature:
         func=func,
         params_index=params_index,
     )
+    self._batch_size_extractor = batch_size_extractor
 
-  @classmethod
-  def batch_size(cls, losses: Sequence[loss_functions.LossFunction]) -> int:
+  def batch_size(self, func_args: utils.FuncArgs) -> chex.Numeric:
     """The expected batch size given a list of loss instances."""
-    del cls  # Unused
-    loss_inputs = jax.tree_util.tree_leaves([loss.parameter_dependants
-                                             for loss in losses])
-    batch_size = loss_inputs[0].shape[0]
-    if not all(loss_in.shape[0] == batch_size for loss_in in loss_inputs):
-      raise ValueError("Not all registered losses have the same first dimension"
-                       " size of their first input.")
-    return batch_size
+    return self._batch_size_extractor(func_args[-1], False)
 
   @classmethod
   def _multiply_loss_fisher(
@@ -271,8 +270,8 @@ class ImplicitExactCurvature:
     Returns:
       The product ``Hv``.
     """
-    vector, losses = self._loss_tags_hvp(func_args, parameter_structured_vector)
-    batch_size = self.batch_size(losses)
+    vector, _ = self._loss_tags_hvp(func_args, parameter_structured_vector)
+    batch_size = self.batch_size(func_args)
 
     assert utils.abstract_objects_equal(parameter_structured_vector, vector)
 
@@ -307,7 +306,7 @@ class ImplicitExactCurvature:
     loss_fisher_jacobian_vectors = self._multiply_loss_fisher(
         losses, jacobian_vectors)
     vector = vjp(loss_fisher_jacobian_vectors)
-    batch_size = self.batch_size(losses)
+    batch_size = self.batch_size(func_args)
 
     assert utils.abstract_objects_equal(parameter_structured_vector, vector)
 
@@ -337,7 +336,7 @@ class ImplicitExactCurvature:
     loss_ggn_jacobian_vectors = self._multiply_loss_ggn(
         losses, jacobian_vectors)
     vector = vjp(loss_ggn_jacobian_vectors)
-    batch_size = self.batch_size(losses)
+    batch_size = self.batch_size(func_args)
 
     assert utils.abstract_objects_equal(parameter_structured_vector, vector)
 
@@ -368,7 +367,7 @@ class ImplicitExactCurvature:
                        "be a subclass of `NegativeLogProbLoss`.")
     loss_vectors = self._multiply_loss_fisher_factor_transpose(
         losses, jacobian_vectors)
-    batch_size = self.batch_size(losses)
+    batch_size = self.batch_size(func_args)
     return utils.scalar_div(loss_vectors, jnp.sqrt(batch_size))
 
   def multiply_ggn_factor_transpose(
@@ -390,7 +389,7 @@ class ImplicitExactCurvature:
     losses, jacobian_vectors = self._loss_tags_jvp(
         func_args, parameter_structured_vector)
     vectors = self._multiply_loss_ggn_factor_transpose(losses, jacobian_vectors)
-    batch_size = self.batch_size(losses)
+    batch_size = self.batch_size(func_args)
     return utils.scalar_div(vectors, jnp.sqrt(batch_size))
 
   def multiply_fisher_factor(
@@ -423,7 +422,7 @@ class ImplicitExactCurvature:
     if put_stop_grad_on_loss_factor:
       fisher_factor_vectors = jax.lax.stop_gradient(fisher_factor_vectors)
     vectors = vjp(fisher_factor_vectors)
-    batch_size = self.batch_size(losses)
+    batch_size = self.batch_size(func_args)
     return utils.scalar_div(vectors, jnp.sqrt(batch_size))
 
   def multiply_ggn_factor(
@@ -451,7 +450,7 @@ class ImplicitExactCurvature:
     if put_stop_grad_on_loss_factor:
       ggn_factor_vectors = jax.lax.stop_gradient(ggn_factor_vectors)
     vectors = vjp(ggn_factor_vectors)
-    batch_size = self.batch_size(losses)
+    batch_size = self.batch_size(func_args)
     return utils.scalar_div(vectors, jnp.sqrt(batch_size))
 
   def multiply_jacobian_transpose(
@@ -490,7 +489,7 @@ class ImplicitExactCurvature:
       Shapes of loss inner vectors in a tuple, and the batch size as an int.
     """
     losses, _ = self._loss_tags_vjp(func_args)
-    batch_size = self.batch_size(losses)
+    batch_size = self.batch_size(func_args)
 
     if mode == "fisher":
       return (tuple(loss.fisher_factor_inner_shape for loss in losses),
@@ -514,7 +513,7 @@ class ImplicitExactCurvature:
       inputs, and the batch size (as an int).
     """
     losses, _ = self._loss_tags_vjp(func_args)
-    batch_size = self.batch_size(losses)
+    batch_size = self.batch_size(func_args)
 
     return (tuple(tuple(x.shape for x in loss.parameter_dependants)
                   for loss in losses),
@@ -549,7 +548,7 @@ class CurvatureEstimator(utils.Finalizable):
       params_index: int = 0,
       default_estimation_mode: str = "fisher_gradients",
   ):
-    """Initializes the curvature instance.
+    """Initializes the CurvatureEstimator instance.
 
     Args:
       func: The model function, which should have at least one registered loss.
@@ -707,7 +706,7 @@ class CurvatureEstimator(utils.Finalizable):
       state: StateType,
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       rng: chex.PRNGKey,
       func_args: utils.FuncArgs,
       pmap_axis_name: Optional[str],
@@ -1075,7 +1074,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       state: "BlockDiagonalCurvature.State",
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       rng: chex.PRNGKey,
       func_args: utils.FuncArgs,
       pmap_axis_name: Optional[str],
@@ -1351,7 +1350,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       state: BlockDiagonalCurvature.State,
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       rng: chex.PRNGKey,
       func_args: utils.FuncArgs,
       pmap_axis_name: Optional[str],

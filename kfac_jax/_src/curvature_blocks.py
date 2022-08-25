@@ -396,7 +396,7 @@ class CurvatureBlock(utils.Finalizable):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> "CurvatureBlock.State":
     """Updates the block's curvature estimates using the ``info`` provided.
@@ -546,7 +546,7 @@ class ScaledIdentity(CurvatureBlock):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> CurvatureBlock.State:
     return state
@@ -627,7 +627,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> "Diagonal.State":
     state = self._update_curvature_matrix_estimate(
@@ -643,7 +643,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> "Diagonal.State":
     pass
@@ -809,7 +809,7 @@ class Full(CurvatureBlock, abc.ABC):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> "Full.State":
     pass
@@ -1060,7 +1060,7 @@ class NaiveDiagonal(Diagonal):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: str,
   ) -> "NaiveDiagonal.State":
     for factor, dw in zip(
@@ -1083,7 +1083,7 @@ class NaiveFull(Full):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> Full.State:
     params_grads = jax.tree_util.tree_leaves(estimation_data["params_tangent"])
@@ -1116,7 +1116,7 @@ class DenseDiagonal(Diagonal):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> "Diagonal.State":
     x, = estimation_data["inputs"]
@@ -1142,7 +1142,7 @@ class DenseFull(Full):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> "Full.State":
     x, = estimation_data["inputs"]
@@ -1178,7 +1178,7 @@ class DenseTwoKroneckerFactored(TwoKroneckerFactored):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> TwoKroneckerFactored.State:
     del pmap_axis_name
@@ -1271,7 +1271,7 @@ class Conv2DDiagonal(Diagonal):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> Diagonal.State:
     x, = estimation_data["inputs"]
@@ -1358,7 +1358,7 @@ class Conv2DFull(Full):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> Full.State:
     x, = estimation_data["inputs"]
@@ -1481,7 +1481,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> TwoKroneckerFactored.State:
     del pmap_axis_name
@@ -1543,7 +1543,7 @@ class ScaleAndShiftDiagonal(Diagonal):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> Diagonal.State:
     x, = estimation_data["inputs"]
@@ -1592,7 +1592,7 @@ class ScaleAndShiftFull(Full):
       estimation_data: Mapping[str, Sequence[chex.Array]],
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-      batch_size: int,
+      batch_size: chex.Numeric,
       pmap_axis_name: Optional[str],
   ) -> Full.State:
     del pmap_axis_name

@@ -49,17 +49,6 @@ ReturnWithoutFuncState = Tuple[
 ReturnEither = Union[ReturnWithFuncState, ReturnWithoutFuncState]
 
 
-def default_batch_size_extractor(
-    batch: utils.Batch,
-    multi_device: bool = False,
-) -> chex.Numeric:
-  axis = 1 if multi_device else 0
-  size = jax.tree_util.tree_leaves(batch)[0].shape[axis]
-  if multi_device:
-    return jnp.asarray([size] * jax.local_device_count(), dtype=jnp.int32)
-  return size
-
-
 class Optimizer(utils.WithStagedMethods):
   """The K-FAC optimizer."""
 
@@ -118,11 +107,12 @@ class Optimizer(utils.WithStagedMethods):
       multi_device: bool = False,
       debug: bool = False,
       batch_size_extractor: Callable[[utils.Batch, bool], chex.Numeric] =
-      default_batch_size_extractor,
+      utils.default_batch_size_extractor,
       pmap_axis_name: str = "kfac_axis",
       forbid_setting_attributes_after_finalize: bool = True,
       modifiable_attribute_exceptions: Sequence[str] = (),
       include_norms_in_stats: bool = False,
+      include_per_param_norms_in_stats: bool = False,
   ):
     """Initializes the K-FAC optimizer with the provided settings.
 
@@ -171,10 +161,10 @@ class Optimizer(utils.WithStagedMethods):
         as input the current step number and return a single array that
         represents the momentum. (Default: ``None``)
       use_adaptive_damping: Boolean. Specifies whether the optimizer will
-        use the quadratic model induced by the true curvature matrix to
-        automatically adapt the damping or it would be fixed. If this is set to
-        ``False`` the user must provide a value to the damping argument of the
-        step function at each iteration. (Default: ``False``)
+        use the Levenberg-Marquardt method to try to adjust the damping
+        automatically every ``damping_adaptation_interval`` iterations. If this
+        is set to ``False`` the user must provide a value to the damping
+        argument of the step function at each iteration. (Default: ``False``)
       damping_schedule: Callable. A schedule for the damping. This should take
         as input the current step number and return a single array that
         represents the learning rate. (Default: ``None``)
@@ -182,7 +172,7 @@ class Optimizer(utils.WithStagedMethods):
         damping that the optimizer will use when ``use_adaptive_damping`` is set
         to ``True``. The damping value times the identity matrix is
         (approximately) added to the curvature matrix (i.e. the Fisher or GGN)
-        before it is inverted multiplied by the gradient when computing the
+        before it is inverted and multiplied by the gradient when computing the
         (raw) update. This quantity should match the scale of the objective, so
         that if you put a multiplier on your loss you should apply the same
         multiplier to the damping. Roughly speaking, larger values constrain the
@@ -205,13 +195,15 @@ class Optimizer(utils.WithStagedMethods):
         damping from the ``l2_reg`` argument is always included.
         (Default: ``False``)
       damping_adaptation_interval: Int. The number of steps in between
-        updating the ``damping`` parameter. (Default: ``5``)
-      damping_adaptation_decay: Scalar. The ``damping`` parameter is multiplied
-        by the ``damping_adaptation_decay`` every
-        ``damping_adaptation_interval`` number of iterations. (Default: ``0.9``)
-      damping_lower_threshold: Scalar. The ``damping`` parameter is increased if
+        updating the damping parameter. (Default: ``5``)
+      damping_adaptation_decay: Scalar. The damping parameter will be adjusted
+        up or down by
+        ``damping_adaptation_decay ** damping_adaptation_interval``, or remain
+        unchanged, every ``damping_adaptation_interval`` number of iterations.
+        (Default: ``0.9``)
+      damping_lower_threshold: Scalar. The damping parameter is increased if
         the reduction ratio is below this threshold. (Default: ``0.25``)
-      damping_upper_threshold: Scalar. The ``damping`` parameter is decreased if
+      damping_upper_threshold: Scalar. The damping parameter is decreased if
         the reduction ratio is below this threshold. (Default: ``0.75``)
       always_use_exact_qmodel_for_damping_adjustment: Boolean. When using
         learning rate and/or momentum adaptation, the quadratic model change
@@ -261,9 +253,10 @@ class Optimizer(utils.WithStagedMethods):
       debug: Boolean. If non of the step or init functions would be jitted. Note
         that this also overrides ``multi_device`` and prevents using pmap.
         (Default: ``False``)
-      batch_size_extractor: A function that takes as input a batch and a boolean
-        specifying whether the batch is replicated over multiple devices and
-        returns the batch size for a single device. (Default: ``None``)
+      batch_size_extractor: A function that takes as input the function
+        arguments (and a boolean specifying whether the batch is replicated over
+        multiple devices) and returns the batch size for a single device.
+        (Default: ``kfac.utils.default_batch_size_extractor``)
       pmap_axis_name: String. The name of the pmap axis to use when
         ``multi_device`` is set to True. (Default: ``kfac_axis``)
       forbid_setting_attributes_after_finalize: Boolean. By default after the
@@ -280,6 +273,10 @@ class Optimizer(utils.WithStagedMethods):
       include_norms_in_stats: Boolean. It True, the vector norms of the
         gradient, preconditioned gradient, and parameter update are included in
         the statistics returned by the step function. (Default: ``False``)
+      include_per_param_norms_in_stats: Boolean. It True, the per-parameter
+        vector norms of the gradient, preconditioned gradient, and parameter
+        update are included in the statistics returned by the step function.
+        (Default: ``False``)
     """
     super().__init__(
         multi_device=multi_device,
@@ -346,6 +343,7 @@ class Optimizer(utils.WithStagedMethods):
     self._patterns_to_skip = patterns_to_skip
     self._batch_process_func = batch_process_func or (lambda x: x)
     self._include_norms_in_stats = include_norms_in_stats
+    self._include_per_param_norms_in_stats = include_per_param_norms_in_stats
     self._batch_size_extractor = batch_size_extractor
 
     # Curvature estimator
@@ -361,6 +359,7 @@ class Optimizer(utils.WithStagedMethods):
     self._implicit = curvature_estimator.ImplicitExactCurvature(
         self._value_func,
         params_index=0,
+        batch_size_extractor=batch_size_extractor,
     )
 
   @property
@@ -801,6 +800,8 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._include_norms_in_stats:
       param_norm = utils.norm(params)
+    if self._include_per_param_norms_in_stats:
+      param_norm_per_param = utils.per_parameter_norm(params, "param_norm")
 
     # Compute loss and gradients
     loss, grads, func_state, aux = self._compute_loss_and_grads(func_args)
@@ -810,6 +811,8 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._include_norms_in_stats:
       grad_norm = utils.norm(grads)
+    if self._include_per_param_norms_in_stats:
+      grad_norm_per_param = utils.per_parameter_norm(grads, "grad_norm")
 
     # Update the inverse curvature
     state = self._maybe_update_inverse_cache(state)
@@ -821,6 +824,9 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._include_norms_in_stats:
       precon_grad_norm = utils.norm(preconditioned_gradient)
+    if self._include_per_param_norms_in_stats:
+      precon_grad_norm_per_param = utils.per_parameter_norm(
+          preconditioned_gradient, "precon_grad_norm")
 
     # Compute the coefficients for the vectors
     coefficients, quad_model_change = self._coefficients_and_quad_change(
@@ -837,6 +843,8 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._include_norms_in_stats:
       update_norm = utils.norm(delta)
+    if self._include_per_param_norms_in_stats:
+      update_norm_per_param = utils.per_parameter_norm(delta, "update_norm")
 
     # Update parameters
     params = jax.tree_util.tree_map(jnp.add, params, delta)
@@ -883,6 +891,12 @@ class Optimizer(utils.WithStagedMethods):
       stats["precon_grad_norm"] = precon_grad_norm
       stats["update_norm"] = update_norm
 
+    if self._include_per_param_norms_in_stats:
+      stats.update(param_norm_per_param)
+      stats.update(grad_norm_per_param)
+      stats.update(precon_grad_norm_per_param)
+      stats.update(update_norm_per_param)
+
     if not self._use_adaptive_damping:
       state.damping = None
 
@@ -919,7 +933,9 @@ class Optimizer(utils.WithStagedMethods):
       momentum: Momentum to use if the optimizer was created with
         ``use_adaptive_momentum=True``, ``None`` otherwise.
       damping: Damping to use if the optimizer was created with
-        ``use_adaptive_damping=True``, ``None`` otherwise.
+        ``use_adaptive_damping=True``, ``None`` otherwise. See discussion
+        of constructor argument ``initial_damping`` for more information about
+        damping.
       global_step_int: The global step as a python int. Note that this must
         match the step internal to the optimizer that is part of its state.
     Returns:

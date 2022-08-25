@@ -27,6 +27,7 @@ from jax import tree_util
 import jax.numpy as jnp
 from jax.scipy import linalg
 import numpy as np
+import tree
 
 _CHEX_SCALAR_TYPES = (float, int)
 
@@ -596,6 +597,14 @@ def norm(obj: PyTree) -> chex.Array:
   elements_squared_norm = jax.tree_util.tree_map(
       lambda x: jnp.sum(jnp.square(x)), obj)
   return jnp.sqrt(sum(jax.tree_util.tree_leaves(elements_squared_norm)))
+
+
+def per_parameter_norm(obj: PyTree, key_prefix: str) -> PyTree:
+  per_param_norm = jax.tree_util.tree_map(jnp.linalg.norm, obj)
+  per_param_norm = tree.flatten_with_path(per_param_norm)
+  return {
+      key_prefix + "(" + "/".join(k) + ")": v for k, v in per_param_norm
+  }
 
 
 def psd_inv_cholesky(matrix: chex.Array, damping: chex.Array) -> chex.Array:
@@ -1303,3 +1312,14 @@ def staged(
     return outs
 
   return decorated
+
+
+def default_batch_size_extractor(
+    batch: Batch,
+    multi_device: bool = False,
+) -> chex.Numeric:
+  axis = 1 if multi_device else 0
+  size = jax.tree_util.tree_leaves(batch)[0].shape[axis]
+  if multi_device:
+    return jnp.asarray([size] * jax.local_device_count(), dtype=jnp.int32)
+  return size
