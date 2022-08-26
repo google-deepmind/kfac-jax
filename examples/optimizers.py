@@ -68,7 +68,7 @@ class OptaxWrapper:
     self._value_func_has_rng = value_func_has_rng
     self._optax_optimizer = optax_optimizer
     self._batch_process_func = batch_process_func or (lambda x: x)
-    self.pmap_axis_name = "optax_axs"
+    self.pmap_axis_name = "optax_axis"
     self._jit_step = jax.pmap(
         self._step,
         axis_name=self.pmap_axis_name,
