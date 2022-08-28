@@ -1054,7 +1054,7 @@ class NaiveDiagonal(Diagonal):
   batch size.
   """
 
-  def _update_curvature_matrix_estimate(
+  def _update_curvature_matrix_estimate(  # pytype: disable=signature-mismatch  # overriding-parameter-type-checks
       self,
       state: "NaiveDiagonal.State",
       estimation_data: Mapping[str, Sequence[chex.Array]],
