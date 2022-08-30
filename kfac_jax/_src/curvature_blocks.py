@@ -959,14 +959,12 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       if not use_cached:
         s_i, q_i = utils.safe_psd_eigh(state.inputs_factor.value)
         s_o, q_o = utils.safe_psd_eigh(state.outputs_factor.value)
-        eigenvalues = jnp.outer(s_i, s_o)
       else:
         s_i = state.cache["inputs_factor_eigenvalues"]
         q_i = state.cache["inputs_factor_eigen_vectors"]
         s_o = state.cache["outputs_factor_eigenvalues"]
         q_o = state.cache["outputs_factor_eigen_vectors"]
-        eigenvalues = jnp.outer(s_i, s_o)
-      eigenvalues = eigenvalues + identity_weight
+      eigenvalues = jnp.outer(s_i, s_o) + identity_weight
       eigenvalues = jnp.power(eigenvalues, power)
       result = utils.kronecker_eigen_basis_mul_v(q_o, q_i, eigenvalues, vector)
     else:
