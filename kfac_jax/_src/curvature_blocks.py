@@ -1059,7 +1059,7 @@ class NaiveDiagonal(Diagonal):
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
       batch_size: chex.Numeric,
-      pmap_axis_name: str,
+      pmap_axis_name: Optional[str],
   ) -> "NaiveDiagonal.State":
     for factor, dw in zip(
         state.diagonal_factors, estimation_data["params_tangent"]):
