@@ -24,6 +24,7 @@ import jax
 from jax import core
 from jax import lax
 from jax import tree_util
+from jax.experimental import host_callback as hcb
 import jax.numpy as jnp
 from jax.scipy import linalg
 import numpy as np
@@ -775,7 +776,35 @@ def kronecker_eigen_basis_mul_v(
   return kronecker_product_mul_v(q_a, q_b, eig_weighted_v, False)
 
 
-def safe_psd_eigh(x: chex.Array) -> Tuple[chex.Array, chex.Array]:
+def _host_eigh(x: chex.Array, *_) -> Tuple[chex.Array, chex.Array]:
+  """This calls the CPU numpy function for eigh."""
+  shape_s = jax.ShapeDtypeStruct(x.shape[:-1], x.dtype)
+  shape_q = jax.ShapeDtypeStruct(x.shape, x.dtype)
+  return hcb.call(np.linalg.eigh, x, result_shape=(shape_s, shape_q))
+
+
+def _eigh(
+    x: chex.Array,
+    force_on_host: bool = False,
+) -> Tuple[chex.Array, chex.Array]:
+  """Computes eigenvectors and eigenvalues, with optionally offloading to cpu."""
+  if force_on_host:
+    return _host_eigh(x)
+  # Recently with CUDA 11.7 there is a bug in cuSOLVER which makes the eigh
+  # implementation unstable sometimes on GPUs.
+  s, q = jnp.linalg.eigh(x)
+  return jax.lax.cond(
+      jnp.any(jnp.isnan(s)),
+      _host_eigh,
+      lambda *args: args[1:],
+      x, s, q
+  )
+
+
+def safe_psd_eigh(
+    x: chex.Array,
+    force_on_host: bool = False,
+) -> Tuple[chex.Array, chex.Array]:
   """Computes the eigenvalue decomposition for a PSD matrix.
 
   The function is similar to `jax.numpy.linalg.eigh`, but it clips the returned
@@ -785,6 +814,7 @@ def safe_psd_eigh(x: chex.Array) -> Tuple[chex.Array, chex.Array]:
 
   Args:
     x: The input matrix, assumed to be PSD.
+    force_on_host: If `True` will perform the computation on the host CPU.
 
   Returns:
     A pair of (eigenvalues, eigenvectors) arrays.
@@ -795,7 +825,7 @@ def safe_psd_eigh(x: chex.Array) -> Tuple[chex.Array, chex.Array]:
   s, q = lax.cond(
       jnp.any(jnp.isnan(x)),
       lambda _: (jnp.full([d], jnp.nan), jnp.full([d, d], jnp.nan)),
-      jnp.linalg.eigh,
+      functools.partial(_eigh, force_on_host=force_on_host),
       x,
   )
 
