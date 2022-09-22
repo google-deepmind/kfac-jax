@@ -593,11 +593,11 @@ class TestEstimator(parameterized.TestCase):
     )
 
     v = init_func(init_key2, data)
-    m_v = estimator.multiply(state, v, e, True, True)
-    m_inv_v = estimator.multiply_inverse(cached_state, v, e, True, True)
+    m_v = estimator.multiply(state, v, e, True, True, None)
+    m_inv_v = estimator.multiply_inverse(cached_state, v, e, True, True, None)
 
     # Check cached and non-cached are the same
-    m_inv_v2 = estimator.multiply_inverse(state, v, e, True, False)
+    m_inv_v2 = estimator.multiply_inverse(state, v, e, True, False, None)
     self.assertAllClose(m_inv_v, m_inv_v2, atol=1e-5, rtol=1e-4)
 
     block_vectors = estimator.params_vector_to_blocks_vectors(v)
