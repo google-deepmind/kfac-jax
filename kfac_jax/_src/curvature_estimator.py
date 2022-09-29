@@ -1302,8 +1302,8 @@ class BlockDiagonalCurvature(CurvatureEstimator):
         # We must precompute the matches outside of the thunk itself, as the
         # thunk will be traced separately from the current compiled context
         # (since it's called within a lax.switch statement).
-        matches = jax.tree_util.tree_map(lambda o, v: o is v,
-                                         thunk(), vals)
+        matches = jax.tree_util.tree_map(lambda o, v: o is v, thunk(), vals)
+
         def new_thunk():
           return jax.tree_util.tree_map(lambda o, m: None if m else o,
                                         thunk(), matches)

@@ -98,6 +98,7 @@ class Optimizer(utils.WithStagedMethods):
       estimation_mode: str = "fisher_gradients",
       curvature_ema: chex.Numeric = 0.95,
       inverse_update_period: int = 5,
+      use_exact_inverses: bool = False,
       batch_process_func: Optional[Callable[[utils.Batch], utils.Batch]] = None,
       register_only_generic: bool = False,
       patterns_to_skip: Sequence[str] = (),
@@ -234,6 +235,10 @@ class Optimizer(utils.WithStagedMethods):
         estimate moving averages. (Default: ``0.95``)
       inverse_update_period: Int. The number of steps in between updating the
         the computation of the inverse curvature approximation. (Default: ``5``)
+      use_exact_inverses: Bool. If ``True``, preconditioner inverses are
+        computed "exactly" without the pi-adjusted factored damping approach.
+        Note that this involves the use of eigendecompositions, which can
+        sometimes be much more expensive. (Default: ``False``)
       batch_process_func: Callable. A function which to be called on each batch
         before feeding to the KFAC on device. This could be useful for specific
         device input optimizations. (Default: ``None``)
@@ -363,6 +368,19 @@ class Optimizer(utils.WithStagedMethods):
     self._include_norms_in_stats = include_norms_in_stats
     self._include_per_param_norms_in_stats = include_per_param_norms_in_stats
     self._batch_size_extractor = batch_size_extractor
+
+    self._use_cached_inverses = (self._inverse_update_period != 1)
+    self._use_exact_inverses = use_exact_inverses
+
+    if self._use_exact_inverses and self._use_cached_inverses:
+      self._exact_powers_to_cache = -1
+    else:
+      self._exact_powers_to_cache = None
+
+    if not self._use_exact_inverses and self._use_cached_inverses:
+      self._approx_powers_to_cache = -1
+    else:
+      self._approx_powers_to_cache = None
 
     # Curvature estimator
     self._estimator = curvature_estimator.BlockDiagonalCurvature(
@@ -589,8 +607,8 @@ class Optimizer(utils.WithStagedMethods):
         functools.partial(
             self.estimator.update_cache,
             identity_weight=self.l2_reg + state.damping,
-            exact_powers=None,
-            approx_powers=-1,
+            exact_powers=self._exact_powers_to_cache,
+            approx_powers=self._approx_powers_to_cache,
             eigenvalues=False,
             pmap_axis_name=self.pmap_axis_name,
         ),
@@ -612,8 +630,8 @@ class Optimizer(utils.WithStagedMethods):
         state=state.estimator_state,
         parameter_structured_vector=grads,
         identity_weight=self.l2_reg + state.damping,
-        exact_power=False,
-        use_cached=True,
+        exact_power=self._use_exact_inverses,
+        use_cached=self._use_cached_inverses,
         pmap_axis_name=self.pmap_axis_name,
     )
 
@@ -726,6 +744,7 @@ class Optimizer(utils.WithStagedMethods):
       func_state: Optional[utils.FuncState] = None,
   ) -> "Optimizer.State":
     """A staged function to initialize the optimizer state ."""
+
     return Optimizer.State(
         velocities=jax.tree_util.tree_map(jnp.zeros_like, params),
         estimator_state=self.estimator.init(
@@ -738,8 +757,8 @@ class Optimizer(utils.WithStagedMethods):
                 has_state=self._value_func_has_state,
                 has_rng=self._value_func_has_rng,
             ),
-            exact_powers_to_cache=None,
-            approx_powers_to_cache=-1,
+            exact_powers_to_cache=self._exact_powers_to_cache,
+            approx_powers_to_cache=self._approx_powers_to_cache,
             cache_eigenvalues=False
         ),
         damping=(jnp.array(self._initial_damping)
@@ -765,8 +784,10 @@ class Optimizer(utils.WithStagedMethods):
       func_state: Optional[utils.FuncState] = None,
   ) -> "Optimizer.State":
     """Initializes the optimizer and returns the appropriate optimizer state."""
+
     if not self.finalized:
       self.finalize(params, rng, batch, func_state)
+
     return self._init(params, rng, batch, func_state)
 
   @functools.partial(utils.staged, donate_argnums=[1, 3, 5])
