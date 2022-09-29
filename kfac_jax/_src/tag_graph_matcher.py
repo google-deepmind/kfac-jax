@@ -1453,10 +1453,10 @@ def _auto_register_tags(
 
     if isinstance(eqn.primitive, tags.LayerTag):
       # Mark manual registrations
-      n = pattern_counters.get(eqn.primitive.name, 0)
-      pattern_counters[eqn.primitive.name] = n + 1
-      tag_locations.append(
-          TagLocation(eqn, f"Manual[{eqn.primitive.name}_{n}]"))
+      tag_name = eqn.primitive.name
+      n = pattern_counters.get(tag_name, 0)
+      pattern_counters[tag_name] = n + 1
+      tag_locations.append(TagLocation(eqn, f"Manual[{tag_name}_{n}]"))
 
     for var in eqn.outvars:
       # Check if this is a match of a graph pattern
@@ -1466,10 +1466,10 @@ def _auto_register_tags(
           eqns.append(additional_eqn)
 
         # Mark automatic registration
-        n = pattern_counters.get(match.name, 0)
-        pattern_counters[match.name] = n + 1
-        tag_locations.append(
-            TagLocation(eqns[-1], f"Auto[{eqns[-1].primitive.name}_{n}]"))
+        tag_name = eqns[-1].primitive.name
+        n = pattern_counters.get(tag_name, 0)
+        pattern_counters[tag_name] = n + 1
+        tag_locations.append(TagLocation(eqns[-1], f"Auto[{tag_name}_{n}]"))
 
   final_outvars = [env.get(v, v) if isinstance(v, Var) else v
                    for v in mid_graph.jaxpr.outvars]

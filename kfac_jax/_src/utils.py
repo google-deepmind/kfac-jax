@@ -736,111 +736,104 @@ def psd_inv_cholesky(matrix: chex.Array, damping: chex.Array) -> chex.Array:
   return linalg.solve(matrix + damping * identity, identity, assume_a="pos")
 
 
-def pi_adjusted_inverse(
-    a: chex.Array,
-    b: chex.Array,
+def pi_adjusted_kronecker_inverse(
+    *arrays: chex.Array,
     damping: chex.Numeric,
     pmap_axis_name: Optional[str],
-) -> Tuple[chex.Array, chex.Array]:
-  """Computes an approximation to the inverse of `(a kron b + damping * I)`.
+) -> Tuple[chex.Array, ...]:
+  """Computes pi-adjusted factored damping inverses.
 
-  The inverse of `a kron b + damping * I` is not Kronecker factored in general,
-  because of the added identity. This function computes the pi-adjusted inverse
-  from [1] which finds two matrices whose Kronecker product approximates the
-  inverse. The two input matrices `a` and `b` are assumed to be PSD.
+  The inverse of `a_1 kron a_2 kron ... kron a_n + damping * I` is not Kronecker
+  factored in general, because of the added identity. [1] proposed a pi-adjusted
+  factored damping approach to approximate the inverse as a Kronecker product.
+  [2] generalized this approach from two to tree factors, and [3] generalized it
+  to arbitrary numbers of factors. This function implements the generalized
+  approach.
 
   [1] - https://arxiv.org/abs/1503.05671
+  [2] - https://openreview.net/forum?id=SkkTMpjex
+  [3] - https://ui.adsabs.harvard.edu/abs/2021arXiv210602925R/abstract
 
   Args:
-    a: The left Kronecker factor.
-    b: The right Kronecker factor.
+    *arrays: A list of matrices, vectors (which are interpreted
+      as representing the diagonal of a matrix) or scalars (which are
+      interpreted as being a 1x1 matrix). All matrices must be PSD.
     damping: The weight of the identity added to the Kronecker product.
     pmap_axis_name: A `jax.pmap` axis name to use for synchronization.
 
   Returns:
-    A pair of factors `(a_inv, b_inv)` whose Kronecker product approximates the
-    inverse of `(a kron b + damping * I)`.
+    A list of factors with the same length as the input `arrays` whose Kronecker
+    product approximates the inverse of `a_1 kron ... kron a_n + damping * I`.
   """
-  # Compute the nuclear/trace norms of each factor
-  assert a.ndim <= 2 and b.ndim <= 2
-  a_norm = jnp.sum(a) if a.ndim == 1 else jnp.trace(a)
-  b_norm = jnp.sum(b) if b.ndim == 1 else jnp.trace(b)
+  # The implementation writes each single factor as `c_i u_i`, where the matrix
+  # `u_i` is such that `trace(u_i) / dim(u_i) = 1`. We then factor out all the
+  # scalar factors `c_i` into a single overall scaling coefficient and
+  # distribute the damping to each single non-scalar factor `u_i` equally before
+  # inverting them.
 
+  # Need the a[None] in order to support a scalar input, with shape ().
+  norms = [jnp.sum(a[None]) if a.ndim <= 2 else jnp.trace(a) for a in arrays]
   # We need to sync the norms here, because reduction can be non-deterministic.
   # They specifically are on GPUs by default for better performance.
-  # Hence, although factor_0 and factor_1 are synced, the trace operation above
-  # can still produce different answers on different devices.
-  a_norm, b_norm = pmean_if_pmap((a_norm, b_norm), pmap_axis_name)
+  norms = pmean_if_pmap(norms, pmap_axis_name)
 
-  # Compute the overall scale
-  scale = a_norm * b_norm
+  # Compute the normalized factors `u_i`, such that Trace(u_i) / dim(u_i) = 1
+  dims = [1 if a.size == 1 else a.shape[0] for a in arrays]
+  us = [ai * di / ni for ai, di, ni in zip(arrays, dims, norms)]
 
-  def regular_inverse() -> Tuple[chex.Array, chex.Array]:
-    # Special cases with one or two scalar factors
+  # kron(arrays) = c * kron(us)
+  c = jnp.exp(jnp.sum(jnp.log(jnp.stack(norms)) - jnp.log(jnp.stack(dims))))
 
-    if a.size == 1 and b.size == 1:
-      # Case: Inverse of a scalar. Has exact solution.
-      value = jnp.full_like(a, jnp.sqrt(scale + damping))
-      return value, value
+  def regular_inverse() -> Tuple[chex.Array, ...]:
+    # We distribute the damping only inside the non-scalar factors
+    non_scalars = sum(1 if di != 1 else 0 for di in dims)
+    d_hat = jnp.power(damping / c, 1.0 / non_scalars)
 
-    elif a.size == 1:
-      # Case: Inverse of the matrix `b` and scalar `a`:
-      # `(a * b + d * I)^-1 = (1/scale) * (b/||b|| + d / scale * I)`
-      # since `scale = a * ||b||`.
-      b_normalized = b / b_norm
-      b_damping = damping / scale
-      if b.ndim == 1:
-        b_inv = 1.0 / (b_normalized + b_damping)
-      else:
-        b_inv = psd_inv_cholesky(b_normalized, b_damping)
-      return jnp.full_like(a, 1.0 / scale), b_inv
-
-    elif b.size == 1:
-      # Case: Inverse of the matrix `a` and scalar `b`:
-      # `(a * b + d * I)^-1 = (1/scale) * (a/||a|| + d / scale)^-1`
-      # since `scale = ||a|| * b`.
-      a_normalized = a / a_norm
-      a_damping = damping / scale
-      if a.ndim == 1:
-        a_inv = 1.0 / (a_normalized + a_damping)
-      else:
-        a_inv = psd_inv_cholesky(a_normalized, a_damping)
-      return a_inv, jnp.full_like(b, 1.0 / scale)
-
+    # We distribute the overall scale over each factor, including scalars
+    if non_scalars == 0:
+      # In the case where all factors are scalar we need to add the damping
+      c_k = jnp.power(c + damping, 1.0 / len(arrays))
     else:
-      # Case: The standard inversion from [1]
+      c_k = jnp.power(c, 1.0 / len(arrays))
 
-      # Invert first factor
-      a_normalized = a / a_norm
-      a_damping = jnp.sqrt(damping * b.shape[0] / (scale * a.shape[0]))
-      if a.ndim == 1:
-        a_inv = 1.0 / (a_normalized + a_damping) / jnp.sqrt(scale)
+    a_hats_inv = []
+    for a in us:
+
+      if a.ndim == 2:
+        inv = psd_inv_cholesky(a, d_hat)
+
+      elif a.size == 1:
+        inv = jnp.ones_like(a)
+
       else:
-        a_inv = psd_inv_cholesky(a_normalized, a_damping) / jnp.sqrt(scale)
+        inv = 1.0 / (a + d_hat)
 
-      # Invert second factor
-      b_normalized = b / b_norm
-      b_damping = jnp.sqrt(damping * a.shape[0] / (scale * b.shape[0]))
-      if b.ndim == 1:
-        b_inv = 1.0 / (b_normalized + b_damping) / jnp.sqrt(scale)
+      a_hats_inv.append(inv / c_k)
+
+    return tuple(a_hats_inv)
+
+  def zero_inverse() -> Tuple[chex.Array, ...]:
+    # In the special case where for some reason one of the factors is zero, then
+    # the inverse is just `damping^-1 * I`, hence we write each factor as
+    # `damping^(1/k) * I`.
+    c_k = jnp.power(damping, 1.0 / len(arrays))
+
+    a_hats_inv = []
+    for a in us:
+
+      if a.ndim == 2:
+        inv = jnp.eye(a.shape[0])
+
       else:
-        b_inv = psd_inv_cholesky(b_normalized, b_damping) / jnp.sqrt(scale)
+        inv = jnp.ones_like(a)
 
-      return a_inv, b_inv
+      a_hats_inv.append(inv / c_k)
 
-  def zero_inverse() -> Tuple[chex.Array, chex.Array]:
-    a_inv = jnp.ones_like(a) if a.ndim == 1 else jnp.eye(a.shape[0])
-    b_inv = jnp.ones_like(b) if b.ndim == 1 else jnp.eye(b.shape[0])
-    return a_inv / jnp.sqrt(damping), b_inv / jnp.sqrt(damping)
+    return tuple(a_hats_inv)
 
   if get_special_case_zero_inv():
-    # In the special case where for some reason one of the factors is zero, then
-    # the correct inverse of `(0 kron A + lambda I)` is
-    # `(I/sqrt(lambda) kron (I/sqrt(lambda)`. However, because one of the norms
-    # is zero, then `pi` and `1/pi` would be 0 and infinity leading to NaN
-    # values. Hence, we need to make this check explicitly.
     return lax.cond(
-        jnp.greater(scale, 0.0),
+        jnp.greater(c, 0.0),
         regular_inverse,
         zero_inverse)
   else:

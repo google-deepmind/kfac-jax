@@ -1086,9 +1086,9 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
                                   f"yet implemented.")
       if not use_cached:
 
-        (inputs_factor, outputs_factor) = utils.pi_adjusted_inverse(
-            a=state.inputs_factor.value,
-            b=state.outputs_factor.value,
+        (inputs_factor, outputs_factor) = utils.pi_adjusted_kronecker_inverse(
+            state.inputs_factor.value,
+            state.outputs_factor.value,
             damping=identity_weight,
             pmap_axis_name=pmap_axis_name)
 
@@ -1184,9 +1184,9 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       # This computes the approximate inverse factor using the pi-adjusted
       # inversion from the original KFAC paper.
       (cache["inputs_factor"],
-       cache["outputs_factor"]) = utils.pi_adjusted_inverse(
-           a=state.inputs_factor.value,
-           b=state.outputs_factor.value,
+       cache["outputs_factor"]) = utils.pi_adjusted_kronecker_inverse(
+           state.inputs_factor.value,
+           state.outputs_factor.value,
            damping=identity_weight,
            pmap_axis_name=pmap_axis_name)
 
