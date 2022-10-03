@@ -17,6 +17,7 @@ import dataclasses
 import functools
 import numbers
 import operator
+import string
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 import chex
@@ -29,7 +30,9 @@ from jax.scipy import linalg
 import numpy as np
 import tree
 
+_ALPHABET = string.ascii_lowercase
 _CHEX_SCALAR_TYPES = (float, int)
+
 
 # Types for annotation
 T = TypeVar("T")
@@ -847,8 +850,37 @@ def kronecker_product_mul_v(
     a_is_symmetric: bool,
 ) -> chex.Array:
   """Computes `unvec[(a kron b) vec(v)]` for correctly sized input matrices."""
-  a_transpose = a if a_is_symmetric else jnp.swapaxes(a, -1, -2)
-  return (b @ v) @ a_transpose
+  del a_is_symmetric  # not used
+  return kronecker_product_axis_mul_v([b, a], v, axis_groups=[[0], [1]])
+
+
+def kronecker_product_axis_mul_v(
+    factors: Sequence[chex.Array],
+    v: chex.Array,
+    axis_groups: Optional[Sequence[Sequence[int]]] = None,
+    transpose_factors: bool = False,
+):
+  """Computes kronecker product by axis groups."""
+  if axis_groups is None:
+    axis_groups = [[i] for i in range(v.ndim)]
+
+  assert len(factors) == len(axis_groups)
+
+  factor_str = "yz" if transpose_factors else "zy"
+  general_str = _ALPHABET[:v.ndim]
+
+  result = v
+  for group, factor in zip(axis_groups, factors):
+    assert tuple(sorted(group)) == tuple(range(min(group), max(group) + 1))
+    shape = v.shape[:min(group)] + (-1,) + v.shape[max(group) + 1:]
+    vector = result.reshape(shape)
+    vector_str = general_str[:min(group)] + "y" + general_str[max(group) + 1:]
+    result_str = vector_str.replace("y", "z")
+    einsum_str = f"{factor_str},{vector_str}->{result_str}"
+    r_next = jnp.einsum(einsum_str, factor, vector)
+    result = r_next.reshape(v.shape)
+
+  return result
 
 
 def kronecker_eigen_basis_mul_v(
@@ -890,6 +922,29 @@ def kronecker_eigen_basis_mul_v(
   eig_weighted_v = eigenvalues * q_proj_v
 
   return kronecker_product_mul_v(q_a, q_b, eig_weighted_v, False)
+
+
+def kronecker_eigen_basis_axis_mul_v(
+    q_factors: Sequence[chex.Array],
+    eigenvalues: chex.Array,
+    v: chex.Array,
+    axis_groups: Optional[Sequence[Sequence[int]]] = None,
+):
+  """Computes kronecker product by axis groups."""
+  if axis_groups is None:
+    axis_groups = [[i] for i in range(v.ndim)]
+
+  assert len(q_factors) == eigenvalues.ndim == len(axis_groups)
+
+  q_proj_v = kronecker_product_axis_mul_v(q_factors, v, axis_groups, True)
+
+  if eigenvalues.shape != q_proj_v.shape:
+    raise ValueError("The eigenvalues array should have the same shape as the "
+                     "projection of `v` onto `q_a kron q_b`.")
+
+  eig_weighted_v = eigenvalues * q_proj_v
+
+  return kronecker_product_axis_mul_v(q_factors, eig_weighted_v, axis_groups)
 
 
 def _host_eigh(x: chex.Array, *_) -> Tuple[chex.Array, chex.Array]:

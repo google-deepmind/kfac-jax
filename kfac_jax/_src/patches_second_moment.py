@@ -673,7 +673,7 @@ def _patches_moments_full_spec(
   # a VALID convolution with the kernel, provided the padding.
   out_h = _ceil(ker_max_h, s_h) * s_h - s_h + ker_h
   out_w = _ceil(ker_max_w, s_w) * s_w - s_w + ker_w
-  # Finally we potentially add extra padding on the right in order to make the
+  # Finally, we potentially add extra padding on the right in order to make the
   # padded image sizes divisible by their strides. This is needed so we can use
   # later reshape the image into multiples of the strides, which allows us to
   # execute a strided slice via XLA's dynamic slice.  Note that
