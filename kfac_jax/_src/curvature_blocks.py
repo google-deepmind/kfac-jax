@@ -1076,6 +1076,11 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
         q_o = state.cache["outputs_factor_eigen_vectors"]
 
       eigenvalues = jnp.outer(s_i, s_o) + identity_weight
+
+      # eigenvalues = jnp.outer(s_i, s_o)
+      # eigenvalues = eigenvalues + 0.01 * jnp.power(eigenvalues, 2)
+      # eigenvalues = eigenvalues + identity_weight
+
       eigenvalues = jnp.power(eigenvalues, power)
 
       result = utils.kronecker_eigen_basis_mul_v(q_o, q_i, eigenvalues, vector)
@@ -1611,13 +1616,23 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
     return self._layer_tag_eq.params["dimension_numbers"].rhs_spec[0]
 
   @property
-  def weights_spatial_size(self) -> int:
-    """The spatial filter size of the weights."""
+  def weights_spatial_shape(self) -> Tuple[int, ...]:
+    """The spatial filter shape of the weights."""
+
     weights_shape = self._layer_tag_eq.params["rhs_shape"]
     indices = self._layer_tag_eq.params["dimension_numbers"].rhs_spec[2:4]
-    return weights_shape[indices[0]] * weights_shape[indices[1]]
+
+    return (weights_shape[indices[0]], weights_shape[indices[1]])
+
+  @property
+  def weights_spatial_size(self) -> int:
+    """The spatial filter size of the weights."""
+
+    shape = self.weights_spatial_shape
+    return shape[0] * shape[1]
 
   def input_size(self) -> int:
+
     if self.has_bias:
       return self.num_inputs_channels * self.weights_spatial_size + 1
     else:
@@ -1640,37 +1655,46 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   def num_locations(
       self,
       inputs: chex.Array,
-      params: Sequence[chex.Array],
   ) -> int:
     """The number of spatial locations that each filter is applied to."""
 
     spatial_index = self._layer_tag_eq.params["dimension_numbers"].lhs_spec[2:]
     inputs_spatial_shape = tuple(inputs.shape[i] for i in spatial_index)
 
-    kernel_index = self._layer_tag_eq.params["dimension_numbers"].rhs_spec[2:]
-    kernel_spatial_shape = tuple(params[0].shape[i] for i in kernel_index)
-
     return psm.num_conv_locations(
-        inputs_spatial_shape, kernel_spatial_shape,
+        inputs_spatial_shape, self.weights_spatial_shape,
         self._layer_tag_eq.params["window_strides"],
         self._layer_tag_eq.params["padding"])
 
-  def compute_inputs_stats(
+  def extract_patches(
       self,
       inputs: chex.Array,
-      params: Sequence[chex.Array],
   ) -> chex.Array:
-    """Computes the statistics for the inputs factor."""
 
-    input_cov_m, input_cov_v = psm.patches_moments(
+    return psm.patches_moments(
         inputs,
-        kernel_shape=params[0].shape,
+        kernel_shape=self.weights_spatial_shape,
         strides=self._layer_tag_eq.params["window_strides"],
         padding=self._layer_tag_eq.params["padding"],
         data_format=None,
         dim_numbers=self._layer_tag_eq.params["dimension_numbers"],
         precision=self._layer_tag_eq.params.get("precision"),
     )
+
+  def compute_inputs_stats(
+      self,
+      inputs: chex.Array,
+  ) -> chex.Array:
+    """Computes the statistics for the inputs factor."""
+
+    # Note that the input statistics are computed and stored with an extra
+    # num_locations scaling factor compared to what's described in the paper.
+
+    input_cov_m, input_cov_v = self.extract_patches(inputs)
+
+    # TODO(jamesmartens,botev): Is it possible we could do this all without
+    # reshapes or concats? That would probably be friendlier to the devices and
+    # compiler.
 
     # Flatten the kernel and channels dimensions
     k, h, c = input_cov_v.shape
@@ -1684,7 +1708,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
     if not self.has_bias:
       return input_cov_m
 
-    num_locations = jnp.full((1,), self.num_locations(inputs, params))
+    num_locations = jnp.full((1,), self.num_locations(inputs))
     input_cov = jnp.concatenate([input_cov_m, input_cov_v[None]], axis=0)
     input_cov_v = jnp.concatenate([input_cov_v, num_locations], axis=0)
 
@@ -1695,6 +1719,9 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
       tangent_of_output: chex.Array,
   ) -> chex.Array:
     """Computes the statistics for the outputs factor."""
+
+    # TODO(jamesmartens): replace this logic with einsum (which is probably
+    # more optimized)?
 
     if self.outputs_channel_index != 3:
 
@@ -1731,7 +1758,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
 
     assert utils.first_dim_is_size(batch_size, x, dy)
 
-    input_cov = self.compute_inputs_stats(x, estimation_data["params"])
+    input_cov = self.compute_inputs_stats(x)
     output_cov = self.compute_outputs_stats(dy)
 
     state.inputs_factor.update(input_cov, ema_old, ema_new)
