@@ -259,25 +259,35 @@ def _parse_simple_args(
     A tuple of the (kernel shape, strides, padding, dim_numbers)
   """
   spatial_dims = len(inputs_shape) - 2
+
   if data_format is not None and dim_numbers is not None:
     raise ValueError("At least one of `data_format` and `dim_numbers` "
                      "must be None.")
+
   if dim_numbers is not None:
+
     if not isinstance(dim_numbers, lax.ConvDimensionNumbers):
+
       if not isinstance(dim_numbers, (list, tuple)):
         raise ValueError("The provided dim_numbers argument must be either a "
                          "list, tuple or lax.ConvDimensionNumbers.")
+
       if len(dim_numbers) != 3:
         raise ValueError("When the provided dim_numbers argument is a list or "
                          "tuple it must have length 3, but has length "
                          f"{len(dim_numbers)}.")
+
       lax_dim_numbers = lax.ConvDimensionNumbers(*dim_numbers)
+
     else:
       lax_dim_numbers: lax.ConvDimensionNumbers = dim_numbers
+
   else:
     lax_dim_numbers = _data_format_to_dim_numbers(data_format)
+
   if isinstance(kernel_spatial_shape, int):
     kernel_spatial_shape = (kernel_spatial_shape,) * spatial_dims
+
   if len(kernel_spatial_shape) != spatial_dims:
     raise ValueError("The provided argument `kernel_spatial_shape` must have "
                      f"length equal to the spatial dimensions {spatial_dims} of"
@@ -285,9 +295,11 @@ def _parse_simple_args(
 
   inputs_spatial_shape = _ConvSpec(lax_dim_numbers.lhs_spec).get_spatial(
       inputs_shape)
+
   kernel_spatial_shape = _ConvSpec(lax_dim_numbers.rhs_spec).get_spatial(
       kernel_spatial_shape)
   strides = _normalize_strides(kernel_spatial_shape, strides)
+
   padding = _normalize_padding(
       inputs_spatial_shape, kernel_spatial_shape, strides, padding)
 
@@ -835,10 +847,13 @@ def patches_moments(
         per_channel=per_channel,
         precision=precision,
     )
+
     # Compute vector update
     axis = tuple(i for i in range(len(rhs_spec)) if i != rhs_spec.c_axis)
+
     vector_update = jnp.sum(conv_rhs, axis=axis)
     vector_update = lax.broadcast_in_dim(vector_update, (1, 1, c), (2,))
+
     return ih, iw, matrix_update, vector_update
 
   vector_shape = kernel_spatial_shape + (c,)
@@ -846,32 +861,43 @@ def patches_moments(
   matrix_shape = leading_shape + vector_shape
 
   if unroll_loop:
+
     matrix_results, vector_results = zip(
         *[general_loop_body(ii, padded_image)[-2:]
           for ii in range(ker_h * ker_w)])
+
     matrix_results = jnp.stack(matrix_results, axis=0)
     matrix_results = jnp.reshape(matrix_results, matrix_shape)
+
     vector_results = jnp.stack(vector_results, axis=0)
     vector_results = jnp.reshape(vector_results, vector_shape)
+
     return matrix_results, vector_results
+
   else:
+
     def loop_cond(args):
       return args[0] < ker_h * ker_w
 
     def loop_body(loop_inputs):
+
       i, image, matrix_result, vector_result = loop_inputs
       ih, iw, matrix_update, vector_update = general_loop_body(i, image)
+
       # Update matrix value
       indices = (ih, iw, 0, 0, 0) + (() if per_channel else (0,))
       matrix_result = lax.dynamic_update_slice_p.bind(
           matrix_result, matrix_update, *indices)
+
       # Update vector value
       vector_result = lax.dynamic_update_slice_p.bind(
           vector_result, vector_update, ih, iw, 0)
+
       return i + 1, image, matrix_result, vector_result
 
     # Initialize loop states with zeros
     matrix_init = jnp.zeros(matrix_shape, dtype=inputs.dtype)
     vector_init = jnp.zeros(vector_shape, dtype=inputs.dtype)
     init_vals = (0, padded_image, matrix_init, vector_init)
+
     return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]

@@ -942,12 +942,12 @@ class Optimizer(utils.WithStagedMethods):
     else:
       new_loss, rho = jnp.nan, jnp.nan
 
-    # Update data seen and step counter
-    total_batch_size = self._batch_size_extractor(func_args[-1], False)
-
+    # Compute per-device and total batch size
+    batch_size = self._batch_size_extractor(func_args[-1], False)
     if self.multi_device:
-      total_batch_size = total_batch_size * jax.device_count()
+      total_batch_size = batch_size * jax.device_count()
 
+    # Update data seen and step counter
     state.data_seen = state.data_seen + total_batch_size
     state.step_counter = state.step_counter + 1
 

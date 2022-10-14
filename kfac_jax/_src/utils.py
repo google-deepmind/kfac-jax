@@ -619,6 +619,7 @@ def inner_product(
 def symmetric_matrix_inner_products(
     vectors1: Sequence[PyTree],
     vectors2: Sequence[PyTree],
+    ip_function: Callable[[PyTree, PyTree], chex.Array] = inner_product,
 ) -> chex.Array:
   """Computes a matrix of the inner products between the two sequences.
 
@@ -627,6 +628,8 @@ def symmetric_matrix_inner_products(
       representing a single vector.
     vectors2: A sequence of identically structured PyTrees, each one
       representing a single vector.
+    ip_function: A callable which computes the inner product between PyTrees.
+      Defaults to the standard dot-product.
 
   Returns:
     A symmetric matrix `m` with elements `m[i, j] = <vectors[i], vectors2[j]>`
@@ -641,27 +644,34 @@ def symmetric_matrix_inner_products(
       if j < i:
         m[i].append(m[j][i])
       else:
-        m[i].append(inner_product(v_i, v_j))
+        m[i].append(ip_function(v_i, v_j))
 
   return jnp.asarray(m)
 
 
-def matrix_of_inner_products(vectors: Sequence[PyTree]) -> chex.Array:
+def matrix_of_inner_products(
+    vectors: Sequence[PyTree],
+    ip_function: Callable[[PyTree, PyTree], chex.Array] = inner_product,
+) -> chex.Array:
   """Computes the matrix of inner products of the sequence of vectors.
 
   Args:
     vectors: A sequence of identically structured PyTrees, each one representing
       a single vector.
+    ip_function: A callable which computes the inner product between PyTrees.
+      Defaults to the standard dot-product.
 
   Returns:
     A matrix `m` with elements `m[i, j] = <vectors[i], vectors[j]>`.
   """
-  return symmetric_matrix_inner_products(vectors, vectors)
+  return symmetric_matrix_inner_products(vectors, vectors,
+                                         ip_function=ip_function)
 
 
 def vector_of_inner_products(
     base: PyTree,
-    vectors: Sequence[PyTree]
+    vectors: Sequence[PyTree],
+    ip_function: Callable[[PyTree, PyTree], chex.Array] = inner_product,
 ) -> chex.Array:
   """Computes a vector of inner products with base.
 
@@ -669,13 +679,15 @@ def vector_of_inner_products(
     base: A PyTree representing the base vector.
     vectors: A sequence of identically structured PyTrees, each one representing
       a single vector.
+    ip_function: A callable which computes the inner product between PyTrees.
+      Defaults to the standard dot-product.
 
   Returns:
     A vector `v` with elements `v[i] = <base, vectors[i]>`.
   """
   v = []
   for v_i in vectors:
-    v.append(inner_product(v_i, base))
+    v.append(ip_function(v_i, base))
 
   return jnp.asarray(v)
 

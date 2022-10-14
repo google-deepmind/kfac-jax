@@ -1157,6 +1157,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
 
     # Compute the losses and the VJP function from the function inputs
     losses, losses_vjp = self._compute_losses_vjp(func_args)
+
     if "fisher" in estimation_mode:
       if any(not isinstance(l, loss_functions.NegativeLogProbLoss)
              for l in losses):
@@ -1419,9 +1420,11 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
   def _create_blocks(self):
     # Here in order to be able to have a block together for all parameters, we
     # create a non-existing (in the original graph) generic layer tag equation.
+
     jax_version = (
         jax.__version_info__ if hasattr(jax, "__version_info__")
         else tuple(map(int, jax.__version__.split("."))))
+
     if jax_version > (0, 3, 4):
       self._blocks = (curvature_blocks.NaiveFull(
           layer_tag_eq=tags.LayerTagEqn(
@@ -1434,6 +1437,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
           ),
           name="ExactCurvature"
       ),)
+
     else:
       self._blocks = (curvature_blocks.NaiveFull(
           layer_tag_eq=tags.LayerTagEqn(
@@ -1447,21 +1451,27 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       ),)
 
   def _compute_losses_vjp(self, func_args):
+
     # For some reason pytype can't detect that this attribute exists from the
     # super class.
     losses, losses_vjp = self._vjp(func_args)  # pytype: disable=attribute-error
 
     def modified_losses_jvp(vjp_vec):
+
       blocks_info = losses_vjp(vjp_vec)
+
       tangents = [block["params_tangent"] for block in blocks_info]
       tangents = jax.tree_util.tree_leaves(tangents)
+
       # Need to reorder all of the block information to follow the canonical
       # order of variables
       params_vars = BlockDiagonalCurvature.params_vector_to_blocks_vectors(
           self, self._jaxpr.params_vars)
       order = np.argsort([p.count
                           for p in jax.tree_util.tree_leaves(params_vars)])
+
       return [dict(params_tangent=tuple(tangents[i] for i in order))]
+
     return losses, modified_losses_jvp
 
   def params_vector_to_blocks_vectors(
@@ -1496,17 +1506,21 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
   ) -> curvature_blocks.Full.State:
+
     rng = jax.random.split(rng, batch_size)
 
     def single_state_update(
         index: chex.Numeric,
         state_: curvature_blocks.Full.State
     ) -> curvature_blocks.Full.State:
+
       is_first = index == 0
       args = list(func_args)
+
       # Index the batch for the `index` arguments.
       args[self._batch_index] = jax.tree_util.tree_map(
           lambda x: x[index][None], args[self._batch_index])
+
       return BlockDiagonalCurvature.update_curvature_matrix_estimate(
           self=self,
           state=state_,
@@ -1518,6 +1532,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
           pmap_axis_name=pmap_axis_name,
           estimation_mode=estimation_mode,
       )
+
     return jax.lax.fori_loop(0, batch_size, single_state_update, state)
 
   def update_cache(
@@ -1538,4 +1553,5 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
         eigenvalues=eigenvalues,
         pmap_axis_name=pmap_axis_name,
     )
+
     return BlockDiagonalCurvature.State(blocks_states=(block_state,))

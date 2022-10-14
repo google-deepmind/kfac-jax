@@ -960,6 +960,10 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       outputs_factor: A moving average of the estimated second moment matrix of
         the gradients of w.r.t. the outputs of the associated layer.
     """
+    # TODO(jamesmartens,botev): Consider splitting input_factor into arrays for
+    # the 1st and 2nd moments separately, for the sake of better op and memory
+    # efficiency.
+
     inputs_factor: utils.WeightedMovingAverage
     outputs_factor: utils.WeightedMovingAverage
 
@@ -1388,6 +1392,9 @@ class DenseTwoKroneckerFactored(TwoKroneckerFactored):
 
     assert utils.first_dim_is_size(batch_size, x, dy)
 
+    # TODO(jamesmartens,botev): replace this logic with einsum (which is
+    # probably more optimized)?
+
     if self.has_bias:
       x_one = jnp.ones_like(x[:, :1])
       x = jnp.concatenate([x, x_one], axis=1)
@@ -1520,11 +1527,12 @@ class Conv2DFull(Full):
     square of the tangents for the kernel of the convolution. To average over
     the batch we have two choices - vmap or loop over the batch sequentially
     using scan. This utility function provides a trade-off by being able to
-    specify the maximum number of batch size that we can vmap over. This means
-    that the maximum memory usage will be ``max_batch_size_for_vmap`` times the
-    memory needed when calling ``self.conv2d_tangent_squared``. And the actual
-    ``vmap`` will be called ``ceil(total_batch_size / max_batch_size_for_vmap)``
-    number of times in a loop to find the final average.
+    specify the maximum batch that that will be handled in a single iteration
+    of the loop. This means that the maximum memory usage will be
+    ``max_batch_size_for_vmap`` times the memory needed when calling
+    ``self.conv2d_tangent_squared``. And the actual ``vmap`` will be
+    called ``ceil(total_batch_size / max_batch_size_for_vmap)`` number of times
+    in a loop to find the final average.
 
     Args:
       layer_tag_eq: The Jax equation corresponding to the layer tag, that this
@@ -1644,27 +1652,25 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   def num_locations(
       self,
       inputs: Array,
-      params: Sequence[Array],
   ) -> int:
     """The number of spatial locations that each filter is applied to."""
 
     spatial_index = self._layer_tag_eq.params["dimension_numbers"].lhs_spec[2:]
     inputs_spatial_shape = tuple(inputs.shape[i] for i in spatial_index)
 
-    kernel_index = self._layer_tag_eq.params["dimension_numbers"].rhs_spec[2:]
-    kernel_spatial_shape = tuple(params[0].shape[i] for i in kernel_index)
-
     return psm.num_conv_locations(
-        inputs_spatial_shape, kernel_spatial_shape,
+        inputs_spatial_shape, self.weights_spatial_shape,
         self._layer_tag_eq.params["window_strides"],
         self._layer_tag_eq.params["padding"])
 
   def compute_inputs_stats(
       self,
       inputs: Array,
-      params: Sequence[Array],
-  ) -> Array:
+  ) -> chex.Array:
     """Computes the statistics for the inputs factor."""
+
+    # Note that the input statistics are computed and stored with an extra
+    # num_locations scaling factor compared to what's described in the paper.
 
     input_cov_m, input_cov_v = psm.patches_moments(
         inputs,
@@ -1681,6 +1687,9 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
         batch_group_count=self._layer_tag_eq.params.get("batch_group_count"),
     )
 
+    # TODO(jamesmartens,botev): replace this logic with einsum (which is
+    # probably more optimized)?
+
     # Flatten the kernel and channels dimensions
     k, h, c = input_cov_v.shape
     input_cov_v = jnp.reshape(input_cov_v, (k * h * c,))
@@ -1693,7 +1702,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
     if not self.has_bias:
       return input_cov_m
 
-    num_locations = jnp.full((1,), self.num_locations(inputs, params))
+    num_locations = jnp.full((1,), self.num_locations(inputs))
     input_cov = jnp.concatenate([input_cov_m, input_cov_v[None]], axis=0)
     input_cov_v = jnp.concatenate([input_cov_v, num_locations], axis=0)
 
@@ -1704,6 +1713,9 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
       tangent_of_output: Array,
   ) -> Array:
     """Computes the statistics for the outputs factor."""
+
+    # TODO(jamesmartens,botev): replace this logic with einsum (which is
+    # probably more optimized)?
 
     if self.outputs_channel_index != 3:
 
@@ -1740,7 +1752,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
 
     assert utils.first_dim_is_size(batch_size, x, dy)
 
-    input_cov = self.compute_inputs_stats(x, estimation_data["params"])
+    input_cov = self.compute_inputs_stats(x)
     output_cov = self.compute_outputs_stats(dy)
 
     state.inputs_factor.update(input_cov, ema_old, ema_new)
