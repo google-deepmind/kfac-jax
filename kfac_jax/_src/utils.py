@@ -17,6 +17,7 @@ import dataclasses
 import functools
 import numbers
 import operator
+import string
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 import chex
@@ -29,7 +30,9 @@ from jax.scipy import linalg
 import numpy as np
 import tree
 
+_ALPHABET = string.ascii_lowercase
 _CHEX_SCALAR_TYPES = (float, int)
+
 
 # Types for annotation
 T = TypeVar("T")
@@ -487,6 +490,15 @@ def product(iterable_object: Iterable[chex.Numeric]) -> chex.Numeric:
   return x
 
 
+def outer_product(*arrays: chex.Array) -> chex.Array:
+  """Computes the outer product of an arbitrary number of vectors."""
+  if not all(a.ndim == 1 for a in arrays):
+    raise ValueError("All arrays must be vectors.")
+  in_str = ",".join(_ALPHABET[:len(arrays)])
+  out_str = _ALPHABET[:len(arrays)]
+  return jnp.einsum(f"{in_str}->{out_str}", *arrays)
+
+
 def scalar_mul(obj: TPyTree, scalar: chex.Numeric) -> TPyTree:
   """Multiplies all PyTree leaves of the object by the provided scalar."""
   # The check below is in its current form because of how `jax.jit` tracing
@@ -840,6 +852,112 @@ def pi_adjusted_kronecker_inverse(
     return regular_inverse()
 
 
+def kronecker_product_axis_mul_v(
+    factors: Sequence[chex.Array],
+    v: chex.Array,
+    axis_groups: Optional[Sequence[Sequence[int]]] = None,
+    transpose: Union[bool, Sequence[bool]] = False,
+):
+  """Computes ``kron(*factors) rvec(v)`` where ``rvec`` is row-wise vectorization.
+
+  Args:
+    factors: The sequence of factors forming the Kronecker product.
+    v: A tensor whose vectorization will be multiplied by the Kronecker product.
+    axis_groups: A list whose i-th element is a sequence of consecutive integers
+      specifying the axes of the input tensor ``v`` that correspond to the i-th
+      Kronecker factor. Passing ``None`` is equivalent to passing
+      ``[[0],[1],[2],...]``.
+    transpose: A single boolean or a sequence of booleans. If it is a sequence,
+      each element specifies if the corresponding factor should be transposed.
+      If it is a single boolean, specifies if all factors should be transposed.
+
+  Returns:
+    The result, shaped as a tensor, of multiplying the vectorization of the
+    input tensor by the Kronecker-factored matrix.
+  """
+  if axis_groups is None:
+    axis_groups = tuple((i,) for i in range(v.ndim))
+  else:
+    axis_groups = tuple(tuple(group) for group in axis_groups)
+
+  # Sanity checks
+  if sum(axis_groups, ()) != tuple(range(v.ndim)):
+    raise ValueError(f"The `axis_groups={axis_groups}` are either not in "
+                     f"consecutive order or do not cover exactly the axis of "
+                     f"the input `v`..")
+  if len(factors) != len(axis_groups):
+    raise ValueError("The number of factors provided must be equal to the "
+                     "number of axis groups provided.")
+
+  if isinstance(transpose, bool):
+    transpose = [transpose] * len(factors)
+  elif len(transpose) != len(factors):
+    raise ValueError("The length of the transpose sequence must match the "
+                     "number of factors.")
+
+  factor_strs = ["yz" if t else "zy" for t in transpose]
+  general_str = _ALPHABET[:v.ndim]
+
+  result = v
+  for group, factor, f_str in zip(axis_groups, factors, factor_strs):
+
+    shape = v.shape[:min(group)] + (-1,) + v.shape[max(group) + 1:]
+    vector = result.reshape(shape)
+
+    vector_str = general_str[:min(group)] + "y" + general_str[max(group) + 1:]
+    result_str = vector_str.replace("y", "z")
+    einsum_str = f"{f_str},{vector_str}->{result_str}"
+
+    r_next = jnp.einsum(einsum_str, factor, vector)
+    result = r_next.reshape(v.shape)
+
+  return result
+
+
+def kronecker_eigen_basis_axis_mul_v(
+    q_factors: Sequence[chex.Array],
+    eigenvalues: chex.Array,
+    v: chex.Array,
+    axis_groups: Optional[Sequence[Sequence[int]]] = None,
+):
+  """Computes a matrix-vector product in a Kronecker product eigen-basis.
+
+  The function computes:
+    ``kron(*q_factors) diag(eigenvalues) kron(*q_factors)^T rvec(v)``
+
+  where all variables are appropriately sized matrices and ``rvec`` is
+  row-wise vectorization. The computation is related to the usual Kronecker
+  product ``kron(*factors) rvec(v)``, if ``factors`` are all symmetric PSD
+  matrices and ``q_factors`` are the matrices of eigenvectors of ``factors`` and
+  ``eigenvalues`` is the kronecker product of the eigenvalues of ``factors``.
+  However, the function does not assume that its inputs are of this form.
+
+  Args:
+    q_factors: A sequence of the orthonormal basis of eigenvectors of each
+      Kronecker factor.
+    eigenvalues: A tensor containing the eigenvalues (e.g. the Kronecker product
+      of eigenvalues of all factors).
+    v: The input vector as a tensor.
+    axis_groups: A list whose i-th element is a sequence of consecutive integers
+      specifying the axes of the input tensor ``v`` that correspond to the i-th
+      Kronecker factor. Passing ``None`` is equivalent to passing
+      ``[[0],[1],[2],...]``.
+
+  Returns:
+    The result of multiplying the input vector by the Kronecker product of the
+    factors, shaped as a tensor.
+  """
+  q_proj_v = kronecker_product_axis_mul_v(q_factors, v, axis_groups, True)
+
+  if eigenvalues.shape != q_proj_v.shape:
+    raise ValueError("The eigenvalues array should have the same shape as the "
+                     "projection of `v` onto `kron(*factors)`.")
+
+  eig_weighted_v = eigenvalues * q_proj_v
+
+  return kronecker_product_axis_mul_v(q_factors, eig_weighted_v, axis_groups)
+
+
 def kronecker_product_mul_v(
     a: chex.Array,
     b: chex.Array,
@@ -847,8 +965,8 @@ def kronecker_product_mul_v(
     a_is_symmetric: bool,
 ) -> chex.Array:
   """Computes `unvec[(a kron b) vec(v)]` for correctly sized input matrices."""
-  a_transpose = a if a_is_symmetric else jnp.swapaxes(a, -1, -2)
-  return (b @ v) @ a_transpose
+  del a_is_symmetric  # not used
+  return kronecker_product_axis_mul_v([b, a], v)
 
 
 def kronecker_eigen_basis_mul_v(
@@ -879,17 +997,7 @@ def kronecker_eigen_basis_mul_v(
   Returns:
     The result of the matrix-vector product.
   """
-  q_a_transpose = jnp.swapaxes(q_a, -1, -2)
-  q_b_transpose = jnp.swapaxes(q_b, -1, -2)
-  q_proj_v = kronecker_product_mul_v(q_a_transpose, q_b_transpose, v, False)
-
-  if eigenvalues.shape != q_proj_v.shape:
-    raise ValueError("The eigenvalues array should have the same shape as the "
-                     "projection of `v` onto `q_a kron q_b`.")
-
-  eig_weighted_v = eigenvalues * q_proj_v
-
-  return kronecker_product_mul_v(q_a, q_b, eig_weighted_v, False)
+  return kronecker_eigen_basis_axis_mul_v([q_b, q_a], eigenvalues, v)
 
 
 def _host_eigh(x: chex.Array, *_) -> Tuple[chex.Array, chex.Array]:
