@@ -198,7 +198,7 @@ def _normalize_padding(
 def _normalize_strides(
     kernel_spatial_shape: chex.Shape,
     strides: Union[int, chex.Shape],
-) -> chex.Shape:
+) -> Tuple[int, ...]:
   """Returns the strides as a tuple of integers."""
   n = len(kernel_spatial_shape)
   if strides is None:
@@ -227,14 +227,14 @@ def _data_format_to_dim_numbers(
 
 def _parse_simple_args(
     inputs_shape: chex.Shape,
-    kernel_shape: Union[int, chex.Shape],
+    kernel_spatial_shape: Union[int, chex.Shape],
     strides: Union[int, chex.Shape] = 1,
     padding: PaddingVariants = "VALID",
     data_format: Optional[str] = "NHWC",
     dim_numbers: Optional[Union[DimNumbers, lax.ConvDimensionNumbers]] = None,
 ) -> Tuple[
-    chex.Shape,
-    chex.Shape,
+    Tuple[int, ...],
+    Tuple[int, ...],
     Tuple[Tuple[int, int], ...],
     lax.ConvDimensionNumbers
 ]:
@@ -242,7 +242,7 @@ def _parse_simple_args(
 
   Args:
     inputs_shape: A sequence of ints specifying the input's shape.
-    kernel_shape: A sequence of ints specifying the kernel's shape.
+    kernel_spatial_shape: A sequence of ints specifying the kernel's shape.
     strides: A sequence of ints specifying strides in each spatial dimension,
       or a single int specifying the strides in every spatial dimension.
     padding: The padding can take one of the following formats:
@@ -258,6 +258,7 @@ def _parse_simple_args(
   Returns:
     A tuple of the (kernel shape, strides, padding, dim_numbers)
   """
+  spatial_dims = len(inputs_shape) - 2
   if data_format is not None and dim_numbers is not None:
     raise ValueError("At least one of `data_format` and `dim_numbers` "
                      "must be None.")
@@ -275,29 +276,22 @@ def _parse_simple_args(
       lax_dim_numbers: lax.ConvDimensionNumbers = dim_numbers
   else:
     lax_dim_numbers = _data_format_to_dim_numbers(data_format)
-  if isinstance(kernel_shape, int):
-    kernel_shape = (kernel_shape,) * (len(lax_dim_numbers.rhs_spec) - 2)
-  if len(kernel_shape) != len(lax_dim_numbers.rhs_spec):
-    if len(kernel_shape) != len(lax_dim_numbers.rhs_spec) - 2:
-      raise ValueError("The provided argument kernel_shape must be have length"
-                       " equal to either the number of dimensions "
-                       f"{len(lax_dim_numbers.rhs_spec)}, or the number of "
-                       f"spatial dimensions {len(lax_dim_numbers.rhs_spec) - 2}"
-                       f", but got {len(kernel_shape)}.")
-    shape = [1] * len(lax_dim_numbers.rhs_spec)
-    for i in lax_dim_numbers.rhs_spec[2:]:
-      shape[i] = kernel_shape[i]
-    kernel_shape = tuple(shape)
+  if isinstance(kernel_spatial_shape, int):
+    kernel_spatial_shape = (kernel_spatial_shape,) * spatial_dims
+  if len(kernel_spatial_shape) != spatial_dims:
+    raise ValueError("The provided argument `kernel_spatial_shape` must have "
+                     f"length equal to the spatial dimensions {spatial_dims} of"
+                     f" the inputs, but got {len(kernel_spatial_shape)}.")
 
   inputs_spatial_shape = _ConvSpec(lax_dim_numbers.lhs_spec).get_spatial(
       inputs_shape)
   kernel_spatial_shape = _ConvSpec(lax_dim_numbers.rhs_spec).get_spatial(
-      kernel_shape)
+      kernel_spatial_shape)
   strides = _normalize_strides(kernel_spatial_shape, strides)
   padding = _normalize_padding(
       inputs_spatial_shape, kernel_spatial_shape, strides, padding)
 
-  return kernel_shape, strides, padding, lax_dim_numbers
+  return kernel_spatial_shape, strides, padding, lax_dim_numbers
 
 
 def _num_conv_locations_full_spec(
@@ -377,7 +371,6 @@ def _the_conv4d(
     rhs_spec = rhs_spec.swap_n_and_c()
     dim_specs = (lhs_spec.order, rhs_spec.order, lhs_spec.order)
     if per_channel:
-
       @functools.partial(jax.vmap,
                          in_axes=(lhs_spec.n_axis, rhs_spec.n_axis),
                          out_axes=-1)
@@ -476,67 +469,102 @@ def _the_conv4d(
 
 def _validate_inputs_lengths(
     inputs: chex.Array,
-    kernel_shape: chex.Shape,
+    kernel_spatial_shape: chex.Shape,
     strides: chex.Shape,
     padding: Tuple[Tuple[int, int], ...],
 ) -> None:
   """Checks that the provided arguments are valid."""
-  if inputs.ndim != 4:
-    raise ValueError("Currently `patches_moments_explicit` supports only 2D "
+  spatial_dims = inputs.ndim - 2
+  if spatial_dims != 2:
+    raise ValueError("Currently `patches_second_moment` supports only 2D "
                      "convolution, hence the input is expected to have rank 4,"
                      f" but has rank {inputs.ndim}.")
-  if len(kernel_shape) != inputs.ndim:
-    raise ValueError("The argument `kernel_shape` must have the same length "
-                     "{inputs.ndim} as the rank of the images, but has length "
-                     f"{len(kernel_shape)}.")
-  if len(padding) != 2:
-    raise ValueError("The argument `padding` must have the same length "
-                     f"{inputs.ndim - 2} as the spatial rank of the images, but"
-                     f" has length {len(padding)}.")
+  if len(kernel_spatial_shape) != spatial_dims:
+    raise ValueError("The argument `kernel_spatial_shape` must have length "
+                     f"equal to the number of spatial dimensions of the input -"
+                     f" {spatial_dims}, but instead has length "
+                     f"{len(kernel_spatial_shape)}.")
+  if len(padding) != spatial_dims:
+    raise ValueError("The argument `padding` must have length equal to the "
+                     "number of spatial dimensions of the input - "
+                     f"{spatial_dims}, but instead has length "
+                     f"{len(kernel_spatial_shape)}.")
   if len(strides) != 2:
-    raise ValueError("The argument `strides` must have the same length "
-                     f"{inputs.ndim - 2} as the spatial rank of the images, but"
-                     f" has length {len(strides)}.")
+    raise ValueError("The argument `strides` must have length equal to the "
+                     "number of spatial dimensions of the input - "
+                     f"{spatial_dims}, but instead has length "
+                     f"{len(kernel_spatial_shape)}.")
 
 
-@functools.partial(jax.jit, static_argnums=list(range(1, 9)),
-                   static_argnames=("kernel_shape", "strides", "padding",
-                                    "data_format", "dim_numbers", "per_channel",
-                                    "unroll_loop", "precision"))
+@functools.partial(jax.jit, static_argnums=list(range(1, 12)),
+                   static_argnames=(
+                       "kernel_spatial_shape", "strides", "padding",
+                       "data_format", "dim_numbers", "inputs_dilation",
+                       "kernel_dilation", "feature_group_count",
+                       "batch_group_count", "unroll_loop", "precision"))
 def patches_moments_explicit(
     inputs: chex.Array,
-    kernel_shape: Union[int, chex.Shape],
+    kernel_spatial_shape: Union[int, chex.Shape],
     strides: Union[int, chex.Shape] = 1,
     padding: PaddingVariants = "VALID",
     data_format: Optional[str] = "NHWC",
     dim_numbers: Optional[Union[DimNumbers, lax.ConvDimensionNumbers]] = None,
-    per_channel: bool = False,
+    inputs_dilation: Optional[Sequence[int]] = None,
+    kernel_dilation: Optional[Sequence[int]] = None,
+    feature_group_count: int = 1,
+    batch_group_count: int = 1,
     unroll_loop: bool = False,
     precision: Optional[jax.lax.Precision] = None,
+    weighting_array: Optional[chex.Array] = None,
 ) -> Tuple[chex.Array, chex.Array]:
   """The exact same functionality as :func:`~patches_moments`, but explicitly extracts the patches via :func:`jax.lax.conv_general_dilated_patches`, potentially having a higher memory usage."""
-  kernel_shape, strides, padding, dim_numbers = _parse_simple_args(
-      inputs.shape, kernel_shape, padding=padding, strides=strides,
+  kernel_spatial_shape, strides, padding, dim_numbers = _parse_simple_args(
+      inputs.shape, kernel_spatial_shape, padding=padding, strides=strides,
       data_format=data_format, dim_numbers=dim_numbers)
-  _validate_inputs_lengths(inputs, kernel_shape, strides, padding)
+  _validate_inputs_lengths(inputs, kernel_spatial_shape, strides, padding)
 
   in_spec = _ConvSpec(dim_numbers.lhs_spec)
-  kernel_spec = _ConvSpec(dim_numbers.rhs_spec)
   out_spec = _ConvSpec(dim_numbers.out_spec)
   n = in_spec.get_n(inputs.shape)
   c = in_spec.get_c(inputs.shape)
   inputs_spatial_shape = in_spec.get_spatial(inputs.shape)
-  kernel_spatial_shape = kernel_spec.get_spatial(kernel_shape)
   spec = _ConvSpec(dim_numbers.out_spec).swap_n_and_c().order
   matmul_dim_numbers = lax.ConvDimensionNumbers(spec, spec, spec)
+
+  if feature_group_count not in (1, in_spec.get_c(inputs.shape)):
+    raise ValueError("`patches_moments_explicit` does not support "
+                     "`feature_group_count` different from 1 or the number of "
+                     "channels of the inputs.")
+  if batch_group_count != 1:
+    raise ValueError("`patches_moments_explicit` does not support "
+                     "`batch_group_count` different from 1.")
+
+  per_channel = feature_group_count != 1
   vector_target_shape = kernel_spatial_shape + (c,)
   leading_shape = kernel_spatial_shape if per_channel else vector_target_shape
   matrix_target_shape = leading_shape + vector_target_shape
   vector_axis = tuple(a for a in range(4) if a != out_spec.c_axis)
 
+  # Broadcast the weighting function
+  if weighting_array is not None:
+    if weighting_array.ndim == inputs.ndim:
+      pass
+    elif weighting_array.ndim == inputs.ndim - 1:
+      axis = dim_numbers.lhs_spec[1]
+      weighting_array = jnp.expand_dims(weighting_array, axis=axis)
+    elif weighting_array.ndim == 1:
+      while weighting_array.ndim < inputs.ndim:
+        weighting_array = weighting_array[:, None]
+    else:
+      raise ValueError(f"`weighting_array` shape {weighting_array.shape} is "
+                       f"not compatible with the inputs shape {inputs.shape}"
+                       ".")
+
   if not per_channel:
     vector_shape = (c,) + kernel_spatial_shape
     matrix_shape = vector_shape + vector_shape
+    if weighting_array is None:
+      weighting_array = jnp.ones([], dtype=inputs.dtype)
 
     # Standard explicit patches calculation
     extracted_patches = lax.conv_general_dilated_patches(
@@ -544,13 +572,16 @@ def patches_moments_explicit(
         filter_shape=kernel_spatial_shape,
         window_strides=strides,
         padding=padding,
+        lhs_dilation=inputs_dilation,
+        rhs_dilation=kernel_dilation,
         dimension_numbers=dim_numbers,
         precision=precision,
     )
 
+    weighted_patches = extracted_patches * weighting_array
     matrix_results = lax.conv_general_dilated(
         extracted_patches,
-        extracted_patches,
+        weighted_patches,
         window_strides=strides,
         padding="VALID",
         dimension_numbers=matmul_dim_numbers,
@@ -558,7 +589,7 @@ def patches_moments_explicit(
     )
     matrix_results = jnp.reshape(matrix_results, matrix_shape)
     vector_results = jnp.reshape(
-        jnp.sum(extracted_patches, axis=vector_axis), vector_shape)
+        jnp.sum(weighted_patches, axis=vector_axis), vector_shape)
 
     if c > 1:
       # The output of `conv_general_dilated_patches` is ordered `chw`
@@ -573,15 +604,28 @@ def patches_moments_explicit(
     index = in_spec.create_shape(0, i, 0, 0)
     sizes = in_spec.create_shape(n, 1, *inputs_spatial_shape)
     image_channel = _slice_array(image, index, sizes)
+
+    # Index the weighting function
+    if weighting_array is not None:
+      if weighting_array.shape[in_spec.c_axis] == 1:
+        wf_i = weighting_array
+      else:
+        wf_n = weighting_array[in_spec.n_axis]
+        wf_spatial = [weighting_array.shape[a] for a in in_spec.spatial_axes]
+        wf_sizes = in_spec.create_shape(wf_n, 1, *wf_spatial)
+        wf_i = _slice_array(weighting_array, index, wf_sizes)
+    else:
+      wf_i = None
+
     matrix, vector = patches_moments_explicit(
         image_channel,
-        kernel_shape=kernel_shape,
+        kernel_spatial_shape=kernel_spatial_shape,
         strides=strides,
         padding=padding,
         data_format=None,
         dim_numbers=dim_numbers,
-        per_channel=False,
         precision=precision,
+        weighting_array=wf_i,
     )
     return jnp.squeeze(matrix, axis=2), vector
 
@@ -608,15 +652,26 @@ def patches_moments_explicit(
   return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]
 
 
-def _patches_moments_full_spec(
+@functools.partial(jax.jit, static_argnums=list(range(1, 12)),
+                   static_argnames=(
+                       "kernel_spatial_shape", "strides", "padding",
+                       "data_format", "dim_numbers", "inputs_dilation",
+                       "kernel_dilation", "feature_group_count",
+                       "batch_group_count", "unroll_loop", "precision"))
+def patches_moments(
     inputs: chex.Array,
-    kernel_shape: chex.Shape,
-    strides: chex.Shape,
-    padding: Tuple[Tuple[int, int], ...],
-    dim_numbers: lax.ConvDimensionNumbers,
-    per_channel: bool = False,
+    kernel_spatial_shape: Union[int, chex.Shape],
+    strides: Union[int, chex.Shape] = 1,
+    padding: PaddingVariants = "VALID",
+    data_format: Optional[str] = "NHWC",
+    dim_numbers: Optional[Union[DimNumbers, lax.ConvDimensionNumbers]] = None,
+    inputs_dilation: Optional[Sequence[int]] = None,
+    kernel_dilation: Optional[Sequence[int]] = None,
+    feature_group_count: int = 1,
+    batch_group_count: int = 1,
     unroll_loop: bool = False,
     precision: Optional[jax.lax.Precision] = None,
+    weighting_array: Optional[chex.Array] = None,
 ) -> Tuple[chex.Array, chex.Array]:
   """Computes the first and second moment of the convolutional patches.
 
@@ -627,15 +682,29 @@ def _patches_moments_full_spec(
 
   Args:
     inputs: The batch of images.
-    kernel_shape: The spatial dimensions of the filter as a tuple of ints.
-    strides: The spatial dimensions of the strides as a tuple of ints.
-    padding: The spatial dimensions of the padding as a tuple of pairs of ints.
-    dim_numbers: Instance of `lax.ConvDimensionNumbers`
-    per_channel: Whether to compute the moments only per channel, excluding
-      cross-channel correlations.
+    kernel_spatial_shape: The spatial dimensions of the filter (int or list of
+      ints).
+    strides: The spatial dimensions of the strides (int or list of ints).
+    padding: The padding (str or list of pairs of ints).
+    data_format: The data format of the inputs (None, NHWC, NCHW).
+    dim_numbers: Instance of :class:`jax.lax.ConvDimensionNumbers` instead of
+      data_format.
+    inputs_dilation: An integer or sequence of integers, specifying the dilation
+      for the image. Currently, `patches_moments` does not support dilation, so
+      the only allowed values are `None, 1, (1,1)`.
+    kernel_dilation: An integer or sequence of integers, specifying the dilation
+      for the kernel. Currently, `patches_moments` does not support dilation, so
+      the only allowed values are `None, 1, (1,1)`.
+    feature_group_count: The feature grouping for grouped convolutions.
+      Currently, `patches_moments` supports only 1 and number of channels of the
+      inputs.
+    batch_group_count: The batch grouping for grouped convolutions. Currently,
+      `patches_moments` supports only 1.
     unroll_loop: Whether to unroll the loop in python.
     precision: In what precision to run the computation. For more details please
-      read Jax documentation of `jax.lax.conv_general_dilated`.
+      read Jax documentation of :func:`jax.lax.conv_general_dilated`.
+    weighting_array: A tensor specifying additional weighting of each element
+      of the moment's average.
 
   Returns:
     The matrix of the patches' second and first moment as a pair. The tensor of
@@ -643,19 +712,36 @@ def _patches_moments_full_spec(
     + kernel_spatial_shape + (, channels)`. The tensor of the patches' first
     moment has a shape `kernel_spatial_shape + (, channels)`.
   """
-  _validate_inputs_lengths(inputs, kernel_shape, strides, padding)
+  kernel_spatial_shape, strides, padding, dim_numbers = _parse_simple_args(
+      inputs.shape, kernel_spatial_shape, padding=padding, strides=strides,
+      data_format=data_format, dim_numbers=dim_numbers)
+  _validate_inputs_lengths(inputs, kernel_spatial_shape, strides, padding)
 
   # Extract useful fixed integer values from the inputs
   in_spec = _ConvSpec(dim_numbers.lhs_spec)
   rhs_spec = _ConvSpec(dim_numbers.rhs_spec)
   inputs_spatial_shape = in_spec.get_spatial(inputs.shape)
-  kernel_spatial_shape = rhs_spec.get_spatial(kernel_shape)
   n = in_spec.get_n(inputs.shape)
   c = in_spec.get_c(inputs.shape)
   in_h, in_w = inputs_spatial_shape
   ker_h, ker_w = kernel_spatial_shape
   pad_h, pad_w = padding
   s_h, s_w = strides
+
+  if inputs_dilation not in (None, 1, (1, 1)):
+    raise ValueError("`patches_second_moment` does not support input dilation.")
+  if kernel_dilation not in (None, 1, (1, 1)):
+    raise ValueError("`patches_second_moment` does not support kernel "
+                     "dilation.")
+  if feature_group_count not in (1, in_spec.get_c(inputs.shape)):
+    raise ValueError("`patches_second_moment` does not support "
+                     "`feature_group_count` different from 1 or the number of "
+                     "channels of the inputs.")
+  if batch_group_count != 1:
+    raise ValueError("PSM does not support `batch_group_count` different from "
+                     "1.")
+  per_channel = feature_group_count != 1
+
   # Sanity check
   if in_h + pad_h[0] + pad_h[1] < ker_h or in_w + pad_w[0] + pad_w[1] < ker_w:
     padded_h = in_h + pad_h[0] + pad_h[1]
@@ -673,7 +759,7 @@ def _patches_moments_full_spec(
   # a VALID convolution with the kernel, provided the padding.
   out_h = _ceil(ker_max_h, s_h) * s_h - s_h + ker_h
   out_w = _ceil(ker_max_w, s_w) * s_w - s_w + ker_w
-  # Finally we potentially add extra padding on the right in order to make the
+  # Finally, we potentially add extra padding on the right in order to make the
   # padded image sizes divisible by their strides. This is needed so we can use
   # later reshape the image into multiples of the strides, which allows us to
   # execute a strided slice via XLA's dynamic slice.  Note that
@@ -696,6 +782,27 @@ def _patches_moments_full_spec(
   rhs_shape = rhs_spec.create_shape(
       n, c, padded_h // s_h, s_h, padded_w // s_w, s_w)
 
+  # sizes = (n, rhs_h, 1, rhs_w, 1, c)
+  rhs_h = (padded_h - ker_h) // s_h + 1
+  rhs_w = (padded_w - ker_w) // s_w + 1
+  sizes = rhs_spec.create_shape(n, c, rhs_h, 1, rhs_w, 1)
+
+  # Broadcast the weighting function
+  if weighting_array is not None:
+    if weighting_array.ndim == inputs.ndim:
+      shape = rhs_spec.create_shape(n, c, rhs_h, 1, rhs_w, 1)
+    elif weighting_array.ndim == inputs.ndim - 1:
+      shape = rhs_spec.create_shape(n, 1, rhs_h, 1, rhs_w, 1)
+    elif weighting_array.ndim == 1:
+      shape = rhs_spec.create_shape(n, 1, 1, 1, 1, 1)
+    else:
+      raise ValueError(f"`weighting_array` shape {weighting_array.shape} is "
+                       f"not compatible with the inputs shape {inputs.shape}"
+                       ".")
+    reshaped_weighting_array = jnp.reshape(weighting_array, shape)
+  else:
+    reshaped_weighting_array = 1
+
   def general_loop_body(i, image):
     reshaped_image = jnp.reshape(image, rhs_shape)
 
@@ -706,11 +813,8 @@ def _patches_moments_full_spec(
     # index = (0, ih // sh, ih % sh, iw // sw, iw % sw, 0)
     index = rhs_spec.create_shape(
         0, 0, ih // s_h, ih % s_h, iw // s_w, iw % s_w)
-    # sizes = (n, rhs_h, 1, rhs_w, 1, c)
-    rhs_h = (padded_h - ker_h) // s_h + 1
-    rhs_w = (padded_w - ker_w) // s_w + 1
-    sizes = rhs_spec.create_shape(n, c, rhs_h, 1, rhs_w, 1)
     conv_rhs = _slice_array(reshaped_image, index, sizes)
+    conv_rhs = conv_rhs * reshaped_weighting_array
 
     # Compute the correct padding for the convolution
     dilated_bound_h = 0 if rhs_h == 0 else (rhs_h - 1) * s_h + 1
@@ -771,63 +875,3 @@ def _patches_moments_full_spec(
     vector_init = jnp.zeros(vector_shape, dtype=inputs.dtype)
     init_vals = (0, padded_image, matrix_init, vector_init)
     return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]
-
-
-@functools.partial(jax.jit, static_argnums=list(range(1, 9)),
-                   static_argnames=("kernel_shape", "strides", "padding",
-                                    "data_format", "dim_numbers", "per_channel",
-                                    "unroll_loop", "precision"))
-def patches_moments(
-    inputs: chex.Array,
-    kernel_shape: Union[int, chex.Shape],
-    strides: Union[int, chex.Shape] = 1,
-    padding: PaddingVariants = "VALID",
-    data_format: Optional[str] = "NHWC",
-    dim_numbers: Optional[Union[DimNumbers, lax.ConvDimensionNumbers]] = None,
-    per_channel: bool = False,
-    unroll_loop: bool = False,
-    precision: Optional[jax.lax.Precision] = None,
-) -> Tuple[chex.Array, chex.Array]:
-  """Computes the first and second moment of the convolutional patches.
-
-  Since the code is written to support arbitrary convolution data formats, e.g.
-  both NHWC and NCHW, in comments above any of the procedures is written the
-  simplified version of what the statements below do, if the data format
-  was fixed to NHWC.
-
-  NOTE: The code supports computing the moments per single channel via the
-  ``per_channel`` argument, which is useful for depthwise convolutions.
-
-  Args:
-    inputs: The batch of images.
-    kernel_shape: The spatial dimensions of the filter (int or list of ints).
-    strides: The spatial dimensions of the strides (int or list of ints).
-    padding: The padding (str or list of pairs of ints).
-    data_format: The data format of the inputs (None, NHWC, NCHW).
-    dim_numbers: Instance of :class:`jax.lax.ConvDimensionNumbers` instead of
-      data_format.
-    per_channel: Whether to compute the moments only per channel, excluding
-      cross-channel correlations.
-    unroll_loop: Whether to unroll the loop in python.
-    precision: In what precision to run the computation. For more details please
-      read Jax documentation of :func:`jax.lax.conv_general_dilated`.
-
-  Returns:
-    The matrix of the patches' second and first moment as a pair. The tensor of
-    the patches second moment has a shape ``kernel_spatial_shape + (, channels)
-    + kernel_spatial_shape + (, channels)``. The tensor of the patches first
-    moment has a shape ``kernel_spatial_shape + (, channels)``.
-  """
-  kernel_shape, strides, padding, dim_numbers = _parse_simple_args(
-      inputs.shape, kernel_shape, padding=padding, strides=strides,
-      data_format=data_format, dim_numbers=dim_numbers)
-  return _patches_moments_full_spec(
-      inputs,
-      kernel_shape=kernel_shape,
-      strides=strides,
-      padding=padding,
-      per_channel=per_channel,
-      dim_numbers=dim_numbers,
-      unroll_loop=unroll_loop,
-      precision=precision,
-  )

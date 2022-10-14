@@ -1614,9 +1614,12 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   @property
   def weights_spatial_size(self) -> int:
     """The spatial filter size of the weights."""
-    weights_shape = self._layer_tag_eq.params["rhs_shape"]
-    indices = self._layer_tag_eq.params["dimension_numbers"].rhs_spec[2:4]
-    return weights_shape[indices[0]] * weights_shape[indices[1]]
+    return utils.product(self.weights_spatial_shape)
+
+  @property
+  def weights_spatial_shape(self) -> chex.Shape:
+    spatial_index = self._layer_tag_eq.params["dimension_numbers"].rhs_spec[2:]
+    return tuple(self.parameters_shapes[0][i] for i in spatial_index)
 
   def input_size(self) -> int:
     if self.has_bias:
@@ -1665,12 +1668,17 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
 
     input_cov_m, input_cov_v = psm.patches_moments(
         inputs,
-        kernel_shape=params[0].shape,
+        kernel_spatial_shape=self.weights_spatial_shape,
         strides=self._layer_tag_eq.params["window_strides"],
         padding=self._layer_tag_eq.params["padding"],
         data_format=None,
         dim_numbers=self._layer_tag_eq.params["dimension_numbers"],
         precision=self._layer_tag_eq.params.get("precision"),
+        inputs_dilation=self._layer_tag_eq.params.get("lhs_dilation"),
+        kernel_dilation=self._layer_tag_eq.params.get("rhs_dilation"),
+        feature_group_count=self._layer_tag_eq.params.get(
+            "feature_group_count"),
+        batch_group_count=self._layer_tag_eq.params.get("batch_group_count"),
     )
 
     # Flatten the kernel and channels dimensions

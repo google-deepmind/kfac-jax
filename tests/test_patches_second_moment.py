@@ -119,6 +119,7 @@ class TestPatchesMoments(parameterized.TestCase):
         kernel_spatial_shape=kernel_shape,
         spatial_strides=strides,
         spatial_padding=padding)
+    feature_group_count = c if per_channel else 1
 
     ones_inputs = jnp.ones(shape)
     key, rng = jax.random.split(rng)
@@ -127,21 +128,21 @@ class TestPatchesMoments(parameterized.TestCase):
     for inputs in (ones_inputs, random_inputs):
       matrix, vector = psm.patches_moments_explicit(
           inputs,
-          kernel_shape=kernel_shape,
+          kernel_spatial_shape=kernel_shape,
           strides=strides,
           padding=padding,
           data_format=data_format,
-          per_channel=per_channel,
+          feature_group_count=feature_group_count,
           unroll_loop=True,
           precision=jax.lax.Precision.HIGHEST,
       )
       matrix_fast, vector_fast = psm.patches_moments(
           inputs,
-          kernel_shape=kernel_shape,
+          kernel_spatial_shape=kernel_shape,
           strides=strides,
           padding=padding,
           data_format=data_format,
-          per_channel=per_channel,
+          feature_group_count=feature_group_count,
           precision=jax.lax.Precision.HIGHEST,
       )
 
