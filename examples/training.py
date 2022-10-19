@@ -297,6 +297,9 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     """Initializes all the experiment's state variables."""
     init_rng, seed_rng = jax.random.split(self.init_rng)
     init_rng = kfac_jax.utils.replicate_all_local_devices(init_rng)
+
+    # Beause we fold in the process index here, it's important that any sharding
+    # happen *before* shuffling
     seed_rng = jax.random.fold_in(seed_rng, jax.process_index())
     seed = int(seed_rng[0])
 

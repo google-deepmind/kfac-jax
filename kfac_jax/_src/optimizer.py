@@ -763,8 +763,8 @@ class Optimizer(utils.WithStagedMethods):
         ),
         damping=(jnp.array(self._initial_damping)
                  if self._use_adaptive_damping else None),
-        data_seen=jnp.asarray(0, dtype=jnp.int32),
-        step_counter=jnp.asarray(0, dtype=jnp.int32)
+        data_seen=jnp.asarray(0, dtype=jnp.int64),
+        step_counter=jnp.asarray(0, dtype=jnp.int64)
     )
 
   def _finalize(
@@ -948,7 +948,8 @@ class Optimizer(utils.WithStagedMethods):
       total_batch_size = batch_size * jax.device_count()
 
     # Update data seen and step counter
-    state.data_seen = state.data_seen + total_batch_size
+    state.data_seen = state.data_seen + jnp.asarray(total_batch_size,
+                                                    dtype=jnp.int64)
     state.step_counter = state.step_counter + 1
 
     # Statistics with useful information

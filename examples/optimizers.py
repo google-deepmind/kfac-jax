@@ -258,17 +258,24 @@ def cosine_schedule(
     global_step: chex.Numeric,
     dataset_size: int,
     train_total_batch_size: int,
-    epochs: Optional[int],
+    epochs: Optional[float],
     steps: Optional[int],
     initial_learning_rate: float,
-    warmup_epochs: int,
+    warmup_epochs: Optional[float] = None,
+    warmup_steps: Optional[int] = None,
     **_: Any,
 ) -> chex.Array:
   """A cosine schedule described in the TAT paper."""
+
   if (steps is None) == (epochs is None):
     raise ValueError("Only one of `steps` and `epochs` can be set.")
 
-  warmup_steps = warmup_epochs * dataset_size / train_total_batch_size
+  if (warmup_steps is None) == (warmup_epochs is None):
+    raise ValueError("Only one of `warmup_steps` and `warmup_epochs` can be "
+                     "set.")
+
+  if warmup_steps is None:
+    warmup_steps = warmup_epochs * dataset_size / train_total_batch_size
 
   if epochs is not None:
     total_steps = epochs * dataset_size / train_total_batch_size
@@ -291,7 +298,7 @@ def stepwise_schedule(
     lr_decay_factors: Sequence[float],
     initial_learning_rate: float,
     epoch_boundaries: Optional[Sequence[float]] = None,
-    warmup_epochs: Optional[int] = None,
+    warmup_epochs: Optional[float] = None,
     step_boundaries: Optional[Sequence[float]] = None,
     warmup_steps: Optional[int] = None,
     **_: Any,
@@ -371,9 +378,10 @@ def create_optimizer(
     dataset_size: int,
     train_total_batch_size: int,
     steps: Optional[int],
-    epochs: Optional[int],
+    epochs: Optional[float],
 ) -> Union[OptaxWrapper, kfac_jax.Optimizer]:
   """Creates an optimizer from the provided configuration."""
+
   value_and_grad_func = jax.value_and_grad(train_model_func, has_aux=has_aux)
 
   kwargs = dict(**config[name])
