@@ -400,6 +400,11 @@ class Optimizer(utils.WithStagedMethods):
         batch_size_extractor=batch_size_extractor,
     )
 
+    # Each subclass should call finalize on its own, so this gets called only
+    # for instances of exactly this class type.
+    if type(self) == Optimizer:  # pylint: disable=unidiomatic-typecheck
+      self.finalize()
+
   @property
   def num_burnin_steps(self) -> int:
     """The number of burnin steps to run before the first parameter update."""
@@ -767,15 +772,6 @@ class Optimizer(utils.WithStagedMethods):
         step_counter=jnp.asarray(0, dtype=jnp.int64)
     )
 
-  def _finalize(
-      self,
-      params: utils.Params,
-      rng: chex.PRNGKey,
-      batch: utils.Batch,
-      func_state: Optional[utils.FuncState] = None,
-  ):
-    return jax.make_jaxpr(self._init)(params, rng, batch, func_state)
-
   def init(
       self,
       params: utils.Params,
@@ -1036,16 +1032,6 @@ class Optimizer(utils.WithStagedMethods):
     if (data_iterator is None) == (batch is None):
       raise ValueError("Exactly one of the arguments ``data_iterator`` and "
                        "``batch`` must be provided.")
-
-    if not self.finalized:
-
-      if batch is not None:
-        fake_batch = jax.tree_util.tree_map(jnp.zeros_like, batch)
-      else:
-        fake_batch, data_iterator = utils.fake_element_from_iterator(
-            data_iterator)
-
-      self.finalize(params, rng, fake_batch, func_state)
 
     step_counter_int = self.verify_args_and_get_step_counter(
         step_counter=state.step_counter,

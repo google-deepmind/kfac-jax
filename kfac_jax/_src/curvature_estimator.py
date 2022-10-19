@@ -881,14 +881,20 @@ class BlockDiagonalCurvature(CurvatureEstimator):
         **auto_register_kwargs
     )
     # Initialized during finalization
-    self._jaxpr: tracer.ProcessedJaxpr = None
-    self._blocks: Tuple[curvature_blocks.CurvatureBlock] = None
+    self._jaxpr: Optional[tracer.ProcessedJaxpr] = None
+    self._blocks: Optional[Tuple[curvature_blocks.CurvatureBlock]] = None
 
     self._distributed_multiplies = distributed_multiplies
     self._distributed_cache_updates = distributed_cache_updates
 
+  def _check_finalized(self):
+    if not self.finalized:
+      raise ValueError("The estimator has not been finalized. Call `init` or "
+                       "`finalize` first.")
+
   def _create_blocks(self):
     """Creates all the curvature blocks instances in ``self._blocks``."""
+    assert self._jaxpr is not None
 
     blocks_list = []
     counters = dict()
@@ -932,6 +938,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
   @property
   def blocks(self) -> Optional[Tuple[curvature_blocks.CurvatureBlock]]:
     """The tuple of :class:`~CurvatureBlock` instances used for each layer."""
+    self._check_finalized()
     return self._blocks
 
   @property
@@ -950,10 +957,15 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     return sum(self.block_dims)
 
   @property
+  def jaxpr(self) -> tracer.ProcessedJaxpr:
+    self._check_finalized()
+    return self._jaxpr
+
+  @property
   def params_structure_vector_of_indices(self) -> utils.Params:
     """A tree structure with parameters replaced by their indices."""
     return jax.tree_util.tree_unflatten(
-        self._jaxpr.params_tree, range(len(self._jaxpr.params_vars_flat))
+        self.jaxpr.params_tree, range(len(self.jaxpr.params_vars_flat))
     )
 
   @property
@@ -961,7 +973,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       self
   ) -> Mapping[Tuple[int, ...], curvature_blocks.CurvatureBlock]:
     """A mapping of parameter indices to their associated blocks."""
-    return dict(zip(self._jaxpr.layer_indices, self.blocks))
+    return dict(zip(self.jaxpr.layer_indices, self.blocks))
 
   @property
   def params_block_index(self) -> utils.Params:
@@ -975,21 +987,21 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     """
     params_block_index: List[Optional[int]] = [None] * self.num_params_variables
 
-    for i, block_indices in enumerate(self._jaxpr.layer_indices):
+    for i, block_indices in enumerate(self.jaxpr.layer_indices):
       for index in block_indices:
         params_block_index[index] = i
 
     assert all(x is not None for x in params_block_index)
 
     return jax.tree_util.tree_unflatten(
-        self._jaxpr.params_tree, params_block_index)
+        self.jaxpr.params_tree, params_block_index)
 
   @property
   def num_params_variables(self) -> int:
     """The number of separate parameter variables of the model."""
-    return len(self._jaxpr.params_vars_flat)
+    return len(self.jaxpr.params_vars_flat)
 
-  def _compute_losses_vjp(self, func_args):
+  def _compute_losses_vjp(self, func_args: utils.FuncArgs):
     """Computes all model statistics needed for estimating the curvature."""
     return self._vjp(func_args)
 
@@ -1000,7 +1012,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     """Splits the parameters to values for each corresponding block."""
     params_values_flat = jax.tree_util.tree_leaves(parameter_structured_vector)
     blocks_vectors: List[Tuple[chex.Array, ...]] = []
-    for indices in self._jaxpr.layer_indices:
+    for indices in self.jaxpr.layer_indices:
       blocks_vectors.append(tuple(params_values_flat[i] for i in indices))
     return tuple(blocks_vectors)
 
@@ -1017,7 +1029,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     values_flat: List[Optional[chex.Array]] = [None] * self.num_params_variables
 
     for idx, (indices, vectors) in enumerate(
-        zip(self._jaxpr.layer_indices, blocks_vectors)):
+        zip(self.jaxpr.layer_indices, blocks_vectors)):
 
       if len(indices) != len(vectors):
         raise ValueError(f"Expected len(block_vectors[{idx}])=={len(indices)}, "
@@ -1029,7 +1041,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
 
     assert not any(v is None for v in values_flat)
 
-    return jax.tree_util.tree_unflatten(self._jaxpr.params_tree, values_flat)
+    return jax.tree_util.tree_unflatten(self.jaxpr.params_tree, values_flat)
 
   def _finalize(self, func_args: utils.FuncArgs):
     self._jaxpr = self._vjp(func_args, return_only_jaxpr=True)
@@ -1152,6 +1164,8 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
   ) -> "BlockDiagonalCurvature.State":
+    if not self.finalized:
+      self.finalize(func_args)
 
     estimation_mode = estimation_mode or self.default_estimation_mode
 
@@ -1420,6 +1434,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
   def _create_blocks(self):
     # Here in order to be able to have a block together for all parameters, we
     # create a non-existing (in the original graph) generic layer tag equation.
+    assert self._jaxpr is not None
 
     jax_version = (
         jax.__version_info__ if hasattr(jax, "__version_info__")
@@ -1466,7 +1481,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       # Need to reorder all of the block information to follow the canonical
       # order of variables
       params_vars = BlockDiagonalCurvature.params_vector_to_blocks_vectors(
-          self, self._jaxpr.params_vars)
+          self, self.jaxpr.params_vars)
       order = np.argsort([p.count
                           for p in jax.tree_util.tree_leaves(params_vars)])
 
@@ -1487,13 +1502,8 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
 
     assert len(blocks_vectors) == self.num_blocks
 
-    if self._jaxpr is not None:
-
-      return jax.tree_util.tree_unflatten(
-          self._jaxpr.params_tree, blocks_vectors[0])
-
-    else:
-      raise ValueError("You must initialize the estimator first.")
+    return jax.tree_util.tree_unflatten(
+        self.jaxpr.params_tree, blocks_vectors[0])
 
   def update_curvature_matrix_estimate(
       self,
