@@ -96,7 +96,7 @@ def set_default_tag_to_block_ctor(
   _DEFAULT_TAG_TO_BLOCK_CTOR[tag_name] = block_ctor
 
 
-def set_multy_default_tag_to_block_ctor(
+def set_multi_default_tag_to_block_ctor(
     tags_to_block_ctor: Mapping[str, CurvatureBlockCtor]
 ):
   _DEFAULT_TAG_TO_BLOCK_CTOR.update(tags_to_block_ctor)

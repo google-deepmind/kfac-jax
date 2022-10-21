@@ -212,9 +212,31 @@ class CurvatureBlock(utils.Finalizable):
     """The number of elements of all parameter variables together."""
     return sum(utils.product(shape) for shape in self.parameters_shapes)
 
-  @property
-  def scale(self) -> Numeric:
-    """Any additional scaling factor, not present in the Jax equation."""
+  def scale(self, state: "CurvatureBlock.State", use_cache: bool) -> Numeric:
+    """A scalar pre-factor of the curvature approximation.
+
+    Importantly, all methods assume that whenever a user requests cached values,
+    any state dependant scale is taken into account by the cache (e.g. either
+    stored explicitly and used or mathematically added to values).
+
+    Args:
+      state: The state for this block.
+      use_cache: Whether the method requesting this is using cached values or
+        not.
+
+    Returns:
+      A scalar value to be multiplied with any unscaled block representation.
+    """
+    if use_cache:
+      return self.fixed_scale()
+    return self.fixed_scale() * self.state_dependent_scale(state)
+
+  def fixed_scale(self) -> Numeric:
+    """A fixed scalar pre-factor of the curvature (e.g. constant)."""
+    return 1.0
+
+  def state_dependent_scale(self, state: "CurvatureBlock.State") -> Numeric:
+    """A scalar pre-factor of the curvature, computed from the most fresh curvature estimate."""
     return 1.0
 
   def __str__(self):
@@ -307,17 +329,18 @@ class CurvatureBlock(utils.Finalizable):
     Returns:
       A tuple of arrays, representing the result of the matrix-vector product.
     """
+    scale = self.scale(state, use_cached)
     result = self._multiply_matpower_unscaled(
         state=state,
         vector=vector,
-        identity_weight=identity_weight / self.scale,
+        identity_weight=identity_weight / scale,
         power=power,
         exact_power=exact_power,
         use_cached=use_cached,
         pmap_axis_name=pmap_axis_name,
     )
 
-    return utils.scalar_mul(result, jnp.power(self.scale, power))
+    return utils.scalar_mul(result, jnp.power(scale, power))
 
   @abc.abstractmethod
   def _multiply_matpower_unscaled(
@@ -395,7 +418,7 @@ class CurvatureBlock(utils.Finalizable):
 
     assert eigenvalues.size == self.dim
 
-    return self.scale * eigenvalues
+    return self.scale(state, use_cached) * eigenvalues
 
   @abc.abstractmethod
   def _eigenvalues_unscaled(
@@ -464,10 +487,9 @@ class CurvatureBlock(utils.Finalizable):
     Returns:
         The updated state.
     """
-    scale = self.scale
     return self._update_cache(
         state=state,
-        identity_weight=identity_weight / scale,
+        identity_weight=identity_weight / self.scale(state, False),
         exact_powers=_to_real_set(exact_powers),
         approx_powers=_to_real_set(approx_powers),
         eigenvalues=eigenvalues,
@@ -488,7 +510,7 @@ class CurvatureBlock(utils.Finalizable):
 
   def to_dense_matrix(self, state: "CurvatureBlock.State") -> Array:
     """Returns a dense representation of the approximate curvature matrix."""
-    return self.scale * self._to_dense_unscaled(state)
+    return self.scale(state, False) * self._to_dense_unscaled(state)
 
   @abc.abstractmethod
   def _to_dense_unscaled(self, state: "CurvatureBlock.State") -> Array:
@@ -515,8 +537,7 @@ class ScaledIdentity(CurvatureBlock):
     self._scale = scale
     super().__init__(layer_tag_eq, name)
 
-  @property
-  def scale(self) -> chex.Numeric:
+  def fixed_scale(self) -> Numeric:
     return self._scale
 
   def _init(

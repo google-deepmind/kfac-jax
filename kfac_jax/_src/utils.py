@@ -912,15 +912,17 @@ def kronecker_product_axis_mul_v(
 
   result = v
   for group, factor, f_str in zip(axis_groups, factors, factor_strs):
-
+    # This flattens all axis in `group` of `result` into a single one.
     shape = v.shape[:min(group)] + (-1,) + v.shape[max(group) + 1:]
     vector = result.reshape(shape)
 
+    # This contracts `result` with `factor` along the single axis.
     vector_str = general_str[:min(group)] + "y" + general_str[max(group) + 1:]
     result_str = vector_str.replace("y", "z")
     einsum_str = f"{f_str},{vector_str}->{result_str}"
-
     r_next = jnp.einsum(einsum_str, factor, vector)
+
+    # This reshapes back to the original shape.
     result = r_next.reshape(v.shape)
 
   return result
