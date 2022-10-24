@@ -796,7 +796,7 @@ def pi_adjusted_kronecker_inverse(
   # inverting them.
 
   # Need the a[None] in order to support a scalar input, with shape ().
-  norms = [jnp.sum(a[None]) if a.ndim <= 2 else jnp.trace(a) for a in arrays]
+  norms = [jnp.sum(a[None]) if a.ndim < 2 else jnp.trace(a) for a in arrays]
   # We need to sync the norms here, because reduction can be non-deterministic.
   # They specifically are on GPUs by default for better performance.
   norms = pmean_if_pmap(norms, pmap_axis_name)
