@@ -270,6 +270,21 @@ class JaxprGraph:
   @property
   def outvars(self) -> Vars:
     return self.jaxpr.outvars  # pytype:disable=bad-return-type
+
+  def sub_graph_eqns(self, root_vars: Vars, leaf_vars: Vars) -> JaxprEqns:
+    """Returns the sub-graph equations between root vars and leaf vars."""
+    eqns = []
+    # Extract the subgraph equations such that they both depend on root_vars and
+    # leaf_vars depends on them
+
+    to_process_eqns = [self.var_to_creation_op[v] for v in leaf_vars]
+    while to_process_eqns:
+      next_eqn = to_process_eqns.pop()
+      eqns.append(next_eqn)
+      for v in next_eqn.invars:
+        if v not in root_vars and v in self.var_to_creation_op:
+          to_process_eqns.append(self.var_to_creation_op[v])
+    return tuple(eqns)
   #
   # @functools.cached_property
   # def losses_eqns(self) -> Tuple[tags.LossTagEqn, ...]:
@@ -740,12 +755,13 @@ def find_layer_tags_and_patterns(
   # This list keeps track to any equations that are already in a pattern and
   # hence should not be part of any other.
   registered_equations = []
+
   # First add any manual registrations to this.
   for eqn in graph.manual_registrations:
     assert isinstance(eqn.primitive, tags.LayerTag)
-    for root_var in eqn.primitive.split_all_inputs(eqn.invars)[0]:
-      assert root_var in graph.var_to_creation_op
-      registered_equations.append(graph.var_to_creation_op[root_var])
+    outputs, inputs, params = eqn.primitive.split_all_inputs(eqn.invars)
+    for manual_eqn in graph.sub_graph_eqns(inputs + params, outputs):
+      registered_equations.append(manual_eqn)
 
   matches = {}
   # Loop through all equations in reverse and for each one check every pattern
