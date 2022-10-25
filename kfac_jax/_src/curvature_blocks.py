@@ -160,58 +160,73 @@ class CurvatureBlock(utils.Finalizable):
   @property
   def layer_tag_primitive(self) -> tags.LayerTag:
     """The :class:`jax.core.Primitive` corresponding to the block's tag equation."""
+
     primitive = self._layer_tag_eq.primitive
     assert isinstance(primitive, tgm.tags.LayerTag)
+
     return primitive
 
   @property
   def parameter_variables(self) -> Tuple[jax.core.Var, ...]:
     """The parameter variables of the underlying Jax equation."""
+
     param_vars = []
+
     for p in self.layer_tag_primitive.split_all_inputs(
         self._layer_tag_eq.invars)[2]:
+
       assert isinstance(p, jax.core.Var)
       param_vars.append(p)
+
     return tuple(param_vars)
 
   @property
   def outputs_shapes(self) -> Tuple[Shape, ...]:
     """The shapes of the output variables of the block's tag equation."""
+
     output_vars = self.layer_tag_primitive.split_all_inputs(
         self._layer_tag_eq.invars)[0]
+
     return jax.tree_util.tree_map(lambda x: x.aval.shape, output_vars)
 
   @property
   def inputs_shapes(self) -> Tuple[Shape, ...]:
     """The shapes of the input variables of the block's tag equation."""
+
     input_vars = self.layer_tag_primitive.split_all_inputs(
         self._layer_tag_eq.invars)[1]
+
     return jax.tree_util.tree_map(lambda x: x.aval.shape, input_vars)
 
   @property
   def parameters_shapes(self) -> Tuple[Shape, ...]:
     """The shapes of the parameter variables of the block's tag equation."""
+
     return tuple(jax.tree_util.tree_map(
         lambda x: tuple(x.aval.shape), self.parameter_variables))
 
   @property
   def parameters_canonical_order(self) -> Tuple[int, ...]:
     """The canonical order of the parameter variables."""
+
     return tuple(np.argsort([p.count for p in self.parameter_variables]))
 
   @property
   def layer_tag_extra_params(self) -> Dict[str, Any]:
     """Any extra parameters of passed into the Jax primitive of this block."""
+
     return self._layer_tag_eq.params
 
   @property
   def number_of_parameters(self) -> int:
     """Number of parameter variables of this block."""
+
     return len(self.parameters_shapes)
 
   @property
   def dim(self) -> int:
     """The number of elements of all parameter variables together."""
+
     return sum(utils.product(shape) for shape in self.parameters_shapes)
 
   def scale(self, state: "CurvatureBlock.State", use_cache: bool) -> Numeric:
@@ -242,6 +257,7 @@ class CurvatureBlock(utils.Finalizable):
     return 1.0
 
   def __str__(self):
+
     return f"{self._name!r}[{self.parameters_shapes!r}]"
 
   def init(
@@ -1488,8 +1504,10 @@ class Conv2DDiagonal(Diagonal):
       output_tangent: Array,
   ) -> Array:
     """Computes the elementwise square of a tangent for a single feature map."""
+
     extra_params = {k: v for k, v in self.layer_tag_extra_params.items()
                     if k not in ("lhs_shape", "rhs_shape")}
+
     _, vjp = jax.vjp(
         functools.partial(
             jax.lax.conv_general_dilated,
@@ -1497,7 +1515,7 @@ class Conv2DDiagonal(Diagonal):
         ),
         image_features_map[None], jnp.zeros(self.parameters_shapes[0])
     )
-    # Note the first tangent is w.r.t. inputs
+
     return jnp.square(vjp(output_tangent[None])[1])
 
   def _update_curvature_matrix_estimate(
@@ -1566,10 +1584,12 @@ class Conv2DFull(Full):
         ``None`` will use the value returned by
         :func:`~get_max_parallel_elements`.
     """
+
     self._averaged_tangents_outer_product = utils.loop_and_parallelize_average(
         func=self.conv2d_tangent_outer_product,
         max_parallel_size=max_elements_for_vmap or get_max_parallel_elements(),
     )
+
     super().__init__(layer_tag_eq, name)
 
   def conv2d_tangent_outer_product(
@@ -1590,7 +1610,6 @@ class Conv2DFull(Full):
         inputs[None], jnp.zeros(self.parameters_shapes[0])
     )
 
-    # Note the first tangent is w.r.t. inputs
     tangents = (vjp(tangent_of_outputs[None])[1],)
 
     if self.number_of_parameters == 2:
@@ -1621,6 +1640,7 @@ class Conv2DFull(Full):
 
     matrix_update = self._averaged_tangents_outer_product(x, dy)
     state.matrix.update(matrix_update, ema_old, ema_new)
+
     return state
 
 

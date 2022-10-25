@@ -419,16 +419,21 @@ class ImplicitExactCurvature:
     """
     losses: Sequence[loss_functions.NegativeLogProbLoss]
     losses, vjp = self._loss_tags_vjp(func_args)
+
     if any(not isinstance(l, loss_functions.NegativeLogProbLoss)
            for l in losses):
       raise ValueError("To use `multiply_fisher` all registered losses must "
                        "be a subclass of `NegativeLogProbLoss`.")
+
     fisher_factor_vectors = self._multiply_loss_fisher_factor(
         losses, loss_inner_vectors)
+
     if put_stop_grad_on_loss_factor:
       fisher_factor_vectors = jax.lax.stop_gradient(fisher_factor_vectors)
+
     vectors = vjp(fisher_factor_vectors)
     batch_size = self.batch_size(func_args)
+
     return utils.scalar_div(vectors, jnp.sqrt(batch_size))
 
   def multiply_ggn_factor(

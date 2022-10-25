@@ -108,7 +108,7 @@ def loop_and_parallelize_average(
 ) -> Callable[..., PyTree]:
   """Returns a function that computes the average of `func` over any arguments.
 
-  The returned function is mathematically equivalent to:
+  The returned function is mathematically equivalent to
     jnp.mean(jax.vmap(func)(*args), axis=0).
   However, naively using the above code could lead to prohibitively large memory
   usage, as it scales linearly with the leading axis size of `args`, because of
@@ -130,22 +130,30 @@ def loop_and_parallelize_average(
 
   @functools.wraps(func)
   def average_func(*args) -> PyTree:
+
     lead_axis_sizes = set(x.shape[0] for x in jax.tree_util.tree_leaves(args))
+
     if not lead_axis_sizes:
       raise ValueError("You must pass in at least one argument with a PyTree "
                        "leaf node.")
+
     elif len(lead_axis_sizes) != 1:
       raise ValueError(f"Inconsistent leading axis sizes seen: "
                        f"{lead_axis_sizes!r}.")
+
     leading_size = next(iter(lead_axis_sizes))
+
     singleton_args = jax.tree_util.tree_map(lambda _x: _x[0], args)
     _, output_tree = jax.make_jaxpr(func, return_shape=True)(*singleton_args)
+
     singleton_size = sum(x.size for x in jax.tree_util.tree_leaves(output_tree))
     output_size = singleton_size * leading_size
 
     # Compute the loop size and any remainder size
     if max_parallel_size is None or output_size <= max_parallel_size:
+
       parallel_size = leading_size
+
     else:
       parallel_size = max(
           min(max_parallel_size // singleton_size, leading_size), 1)
@@ -163,14 +171,20 @@ def loop_and_parallelize_average(
 
     if num_parallel_chunks == 1:
       averaged_value = jnp.mean(vmap_fn(*loop_args), axis=0)
+
     else:
+
       def scan_fn(accumulator, args_):
+
         vmap_value = vmap_fn(*args_)
+
         avg_value = jax.tree_util.tree_map(
             lambda x: jnp.mean(x, axis=0), vmap_value)
+
         return jax.tree_util.tree_map(jnp.add, accumulator, avg_value), None
 
       loop_shape = (num_parallel_chunks, parallel_size)
+
       loop_args = jax.tree_util.tree_map(
           lambda x: x.reshape(loop_shape + x.shape[1:]),
           loop_args)
@@ -180,6 +194,7 @@ def loop_and_parallelize_average(
           init=jax.tree_util.tree_map(
               lambda x: jnp.zeros(x.shape), output_tree),
           xs=loop_args)
+
       averaged_value = scalar_div(summed_value, num_parallel_chunks)
 
     if remainder_size == 0:
@@ -191,6 +206,7 @@ def loop_and_parallelize_average(
 
     avg_weight = all_chunks_size / leading_size
     remainder_weight = remainder_size / leading_size
+
     return weighted_sum_of_objects(
         [averaged_value, remainder_value], [avg_weight, remainder_weight])
 
