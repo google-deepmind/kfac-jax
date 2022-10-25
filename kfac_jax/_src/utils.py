@@ -823,11 +823,11 @@ def pi_adjusted_kronecker_inverse(
     a_hats_inv = []
     for a in us:
 
-      if a.ndim == 2:
-        inv = psd_inv_cholesky(a, d_hat)
-
-      elif a.size == 1:
+      if a.size == 1:
         inv = jnp.ones_like(a)
+
+      elif a.ndim == 2:
+        inv = psd_inv_cholesky(a, d_hat)
 
       else:
         inv = 1.0 / (a + d_hat)

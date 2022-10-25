@@ -105,6 +105,8 @@ def _to_real_set(
   """Converts the optional number or sequence to a set."""
   if number_or_sequence is None:
     return set()
+  elif isinstance(number_or_sequence, set):
+    return number_or_sequence
   elif isinstance(number_or_sequence, (float, int)):
     return {number_or_sequence}  # pytype: disable=bad-return-type
   elif (isinstance(number_or_sequence, collections.abc.Sequence) and
