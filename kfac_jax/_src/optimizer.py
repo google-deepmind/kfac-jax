@@ -749,6 +749,7 @@ class Optimizer(utils.WithStagedMethods):
       func_state: Optional[utils.FuncState] = None,
   ) -> "Optimizer.State":
     """A staged function to initialize the optimizer state ."""
+    dtype = jnp.int64 if jax.config.jax_enable_x64 else jnp.int32
 
     return Optimizer.State(
         velocities=jax.tree_util.tree_map(jnp.zeros_like, params),
@@ -768,8 +769,8 @@ class Optimizer(utils.WithStagedMethods):
         ),
         damping=(jnp.array(self._initial_damping)
                  if self._use_adaptive_damping else None),
-        data_seen=jnp.asarray(0, dtype=jnp.int64),
-        step_counter=jnp.asarray(0, dtype=jnp.int64)
+        data_seen=jnp.asarray(0, dtype=dtype),
+        step_counter=jnp.asarray(0, dtype=dtype)
     )
 
   def init(
@@ -944,8 +945,7 @@ class Optimizer(utils.WithStagedMethods):
       total_batch_size = batch_size * jax.device_count()
 
     # Update data seen and step counter
-    state.data_seen = state.data_seen + jnp.asarray(total_batch_size,
-                                                    dtype=jnp.int64)
+    state.data_seen = state.data_seen + total_batch_size
     state.step_counter = state.step_counter + 1
 
     # Statistics with useful information
