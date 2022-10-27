@@ -1015,10 +1015,13 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       parameter_structured_vector: utils.Params,
   ) -> Tuple[Tuple[chex.Array, ...]]:
     """Splits the parameters to values for each corresponding block."""
+
     params_values_flat = jax.tree_util.tree_leaves(parameter_structured_vector)
     blocks_vectors: List[Tuple[chex.Array, ...]] = []
+
     for indices in self.jaxpr.layer_indices:
       blocks_vectors.append(tuple(params_values_flat[i] for i in indices))
+
     return tuple(blocks_vectors)
 
   def blocks_vectors_to_params_vector(
@@ -1498,7 +1501,8 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       self,
       parameter_structured_vector: utils.Params,
   ) -> Tuple[Tuple[chex.Array, ...]]:
-    return jax.tree_util.tree_leaves(parameter_structured_vector),
+
+    return (tuple(jax.tree_util.tree_leaves(parameter_structured_vector)),)
 
   def blocks_vectors_to_params_vector(
       self,
