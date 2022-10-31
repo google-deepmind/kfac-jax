@@ -254,15 +254,16 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   def progress(
       self,
       global_step: chex.Numeric,
-      opt_state: Optional[kfac_jax.Optimizer.State] = None,
   ) -> chex.Numeric:
-    """Computes the current progress of the optimization."""
-    # del opt_state  # not used
+    """Computes the current progress of the training as a number in [0,1]."""
+
     if self.config.training.steps is not None:
       return global_step / self.config.training.steps
+
     else:
       data_seen = self.train_total_batch_size * global_step
       total_data = self.dataset_size * self.config.training.epochs
+
       return data_seen / total_data
 
   def should_run_step(
@@ -270,8 +271,10 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       global_step: int,
       config: config_dict.ConfigDict,
   ) -> bool:
+
     del config  # not used
-    return int(self.progress(global_step, self._opt_state)) < 1
+
+    return int(self.progress(global_step)) < 1
 
   def create_optimizer(self) -> Union[
       optimizers.OptaxWrapper,
@@ -398,9 +401,10 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       # Average everything in aux and then put it in stats
       stats.update(kfac_jax.utils.compute_mean(stats.pop("aux")))
 
-    stats["progress"] = self.progress(self._python_step, self._opt_state)
+    stats["progress"] = self.progress(self._python_step)
 
     self._python_step += 1
+
     return kfac_jax.utils.get_first(stats)
 
   #                  _
@@ -469,7 +473,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       logging.info("Evaluation for %s is completed with %d number of batches.",
                    name, int(averaged_stats.weight[0]))
 
-    all_stats["progress"] = self.progress(self._python_step, self._opt_state)
+    all_stats["progress"] = self.progress(self._python_step)
     return jax.tree_util.tree_map(np.array, all_stats)
 
 
@@ -481,35 +485,47 @@ def train_standalone_supervised(
     storage_folder: Optional[str],
 ) -> Dict[str, chex.Array]:
   """Run an experiment without the Jaxline runtime."""
+
   rng = jax.random.PRNGKey(random_seed)
   rng, init_rng = jax.random.split(rng)
+
   experiment_instance = experiment_ctor(
       "train", init_rng, full_config.experiment_kwargs.config,
   )
+
   if storage_folder is not None:
     os.makedirs(storage_folder, exist_ok=True)
 
   rng = jax.random.fold_in(rng, jax.process_index())
   rng = jax.random.split(rng, jax.local_device_count())
   rng = kfac_jax.utils.broadcast_all_local_devices(rng)
+
   global_step = jnp.zeros([], dtype=jnp.int32)
   global_step = kfac_jax.utils.replicate_all_local_devices(global_step)
+
   stats = {}
   start_time = time.time()
+
   i = 0
   while experiment_instance.should_run_step(i, full_config):
+
     if (i % full_config.save_checkpoint_interval == 0 and
         storage_folder is not None):
+
       # Optional save to file
       jnp.savez(
           f"{storage_folder}/snapshot_{i}.npz",
           *jax.tree_util.tree_leaves(experiment_instance.snapshot_state())
       )
-    # Run a step
+
     rng, step_rng = kfac_jax.utils.p_split(rng)
+
+    # Run a step
     scalars = experiment_instance.step(global_step, step_rng)
+
     elapsed_time = jnp.asarray(time.time() - start_time)
     stats["time"] = stats.get("time", []) + [elapsed_time]
+
     for k in sorted(scalars):
       stats.setdefault(k, []).append(scalars[k])
 
