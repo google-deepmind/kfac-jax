@@ -441,6 +441,7 @@ class Optimizer(utils.WithStagedMethods):
     """Splits the ``rng`` key."""
     return tuple(jax.random.split(rng, num))
 
+  @utils.auto_scope_method
   def compute_loss_value(self, func_args: FuncArgsVariants) -> chex.Array:
     """Computes the value of the loss function being optimized."""
     return self._value_func(*func_args)
@@ -588,6 +589,7 @@ class Optimizer(utils.WithStagedMethods):
     )
     return state
 
+  @utils.auto_scope_method
   def _compute_loss_and_grads(
       self,
       func_args: FuncArgsVariants,
@@ -723,6 +725,7 @@ class Optimizer(utils.WithStagedMethods):
 
       return coefficients, quad_change
 
+  @utils.auto_scope_method
   def _update_damping(
       self,
       old_damping: chex.Array,
@@ -845,6 +848,7 @@ class Optimizer(utils.WithStagedMethods):
     return state, func_state
 
   @functools.partial(utils.staged, donate_argnums=(0, 1, 4))
+  @utils.auto_scope_method
   def _step(
       self,
       params: utils.Params,
@@ -1076,6 +1080,7 @@ class Optimizer(utils.WithStagedMethods):
     """
     return self.l2_reg * utils.matrix_of_inner_products(vectors)
 
+  @utils.auto_scope_method
   def compute_exact_quad_model(
       self,
       vectors: Sequence[utils.Params],
@@ -1101,6 +1106,7 @@ class Optimizer(utils.WithStagedMethods):
             utils.vector_of_inner_products(grads, vectors))
 
   @functools.partial(utils.staged, donate_argnums=2)
+  @utils.auto_scope_method
   def compute_approx_quad_model(
       self,
       state: "Optimizer.State",

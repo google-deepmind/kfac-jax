@@ -260,6 +260,7 @@ class CurvatureBlock(utils.Finalizable):
 
     return f"{self._name!r}[{self.parameters_shapes!r}]"
 
+  @utils.auto_scope_method
   def init(
       self,
       rng: PRNGKey,
@@ -306,6 +307,7 @@ class CurvatureBlock(utils.Finalizable):
   ) -> "CurvatureBlock.State":
     """The non-public interface of ``init``."""
 
+  @utils.auto_scope_method
   def multiply_matpower(
       self,
       state: "CurvatureBlock.State",
@@ -415,6 +417,7 @@ class CurvatureBlock(utils.Finalizable):
         pmap_axis_name=pmap_axis_name,
     )
 
+  @utils.auto_scope_method
   def eigenvalues(
       self,
       state: "CurvatureBlock.State",
@@ -478,6 +481,7 @@ class CurvatureBlock(utils.Finalizable):
           computing the updates.
     """
 
+  @utils.auto_scope_method
   def update_cache(
       self,
       state: "CurvatureBlock.State",
@@ -526,6 +530,7 @@ class CurvatureBlock(utils.Finalizable):
   ) -> "CurvatureBlock.State":
     """The cache updating function, ignoring ``self.scale``."""
 
+  @utils.auto_scope_method
   def to_dense_matrix(self, state: "CurvatureBlock.State") -> Array:
     """Returns a dense representation of the approximate curvature matrix."""
     return self.scale(state, False) * self._to_dense_unscaled(state)
@@ -604,6 +609,7 @@ class ScaledIdentity(CurvatureBlock):
   ) -> Array:
     return jnp.ones([self.dim])
 
+  @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
       state: CurvatureBlock.State,
@@ -695,6 +701,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
     return jnp.concatenate([f.value.flatten() for f in state.diagonal_factors],
                            axis=0)
 
+  @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
       state: "Diagonal.State",
@@ -913,6 +920,7 @@ class Full(CurvatureBlock, abc.ABC):
     else:
       return state.cache["eigenvalues"]
 
+  @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
       state: "Full.State",
@@ -1161,6 +1169,7 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       s_o, _ = utils.safe_psd_eigh(state.outputs_factor.value)
     return jnp.outer(s_o, s_i)
 
+  @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
       state: "TwoKroneckerFactored.State",

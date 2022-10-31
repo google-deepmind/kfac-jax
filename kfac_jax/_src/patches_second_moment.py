@@ -21,6 +21,8 @@ from jax import interpreters
 from jax import lax
 import jax.numpy as jnp
 
+from kfac_jax._src import utils
+
 # Types for annotation
 T = TypeVar("T")
 TracedType = interpreters.partial_eval.DynamicJaxprTracer
@@ -41,7 +43,6 @@ def set_use_4d_convolution_in_psm_loop(value: bool):
 
 def get_use_4d_convolution_in_psm_loop() -> bool:
   """Returns whether a 4D convolution is used for the PSM computation."""
-  global _USE_4D_CONVOLUTION
   return _USE_4D_CONVOLUTION
 
 
@@ -357,6 +358,7 @@ def num_conv_locations(
       spatial_strides, spatial_padding)
 
 
+@utils.auto_scope_function
 def _the_conv4d(
     lhs: chex.Array,
     lhs_spec: _ConvSpec,
@@ -514,6 +516,7 @@ def _validate_inputs_lengths(
                        "data_format", "dim_numbers", "inputs_dilation",
                        "kernel_dilation", "feature_group_count",
                        "batch_group_count", "unroll_loop", "precision"))
+@utils.auto_scope_function
 def patches_moments_explicit(
     inputs: chex.Array,
     kernel_spatial_shape: Union[int, chex.Shape],
@@ -670,6 +673,7 @@ def patches_moments_explicit(
                        "data_format", "dim_numbers", "inputs_dilation",
                        "kernel_dilation", "feature_group_count",
                        "batch_group_count", "unroll_loop", "precision"))
+@utils.auto_scope_function
 def patches_moments(
     inputs: chex.Array,
     kernel_spatial_shape: Union[int, chex.Shape],

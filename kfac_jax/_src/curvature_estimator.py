@@ -260,6 +260,7 @@ class ImplicitExactCurvature:
         assert in1.shape == in2.shape
         assert in1.dtype == in2.dtype
 
+  @utils.auto_scope_method
   def multiply_hessian(
       self,
       func_args: utils.FuncArgs,
@@ -283,6 +284,7 @@ class ImplicitExactCurvature:
 
     return utils.scalar_div(vector, batch_size)
 
+  @utils.auto_scope_method
   def multiply_fisher(
       self,
       func_args: utils.FuncArgs,
@@ -318,6 +320,7 @@ class ImplicitExactCurvature:
 
     return utils.scalar_div(vector, batch_size)
 
+  @utils.auto_scope_method
   def multiply_ggn(
       self,
       func_args: utils.FuncArgs,
@@ -348,6 +351,7 @@ class ImplicitExactCurvature:
 
     return utils.scalar_div(vector, batch_size)
 
+  @utils.auto_scope_method
   def multiply_fisher_factor_transpose(
       self,
       func_args: utils.FuncArgs,
@@ -376,6 +380,7 @@ class ImplicitExactCurvature:
     batch_size = self.batch_size(func_args)
     return utils.scalar_div(loss_vectors, jnp.sqrt(batch_size))
 
+  @utils.auto_scope_method
   def multiply_ggn_factor_transpose(
       self,
       func_args: utils.FuncArgs,
@@ -398,6 +403,7 @@ class ImplicitExactCurvature:
     batch_size = self.batch_size(func_args)
     return utils.scalar_div(vectors, jnp.sqrt(batch_size))
 
+  @utils.auto_scope_method
   def multiply_fisher_factor(
       self,
       func_args: utils.FuncArgs,
@@ -436,6 +442,7 @@ class ImplicitExactCurvature:
 
     return utils.scalar_div(vectors, jnp.sqrt(batch_size))
 
+  @utils.auto_scope_method
   def multiply_ggn_factor(
       self,
       func_args: utils.FuncArgs,
@@ -464,6 +471,7 @@ class ImplicitExactCurvature:
     batch_size = self.batch_size(func_args)
     return utils.scalar_div(vectors, jnp.sqrt(batch_size))
 
+  @utils.auto_scope_method
   def multiply_jacobian_transpose(
       self,
       func_args: utils.FuncArgs,
@@ -1006,6 +1014,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     """The number of separate parameter variables of the model."""
     return len(self.jaxpr.params_vars_flat)
 
+  @utils.auto_scope_method
   def _compute_losses_vjp(self, func_args: utils.FuncArgs):
     """Computes all model statistics needed for estimating the curvature."""
     return self._vjp(func_args)
@@ -1055,6 +1064,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     self._jaxpr = self._vjp(func_args, return_only_jaxpr=True)
     self._create_blocks()
 
+  @utils.auto_scope_method
   def init(
       self,
       rng: chex.PRNGKey,
@@ -1081,6 +1091,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
 
     return BlockDiagonalCurvature.State(blocks_states=tuple(blocks_init))
 
+  @utils.auto_scope_method
   def multiply_matpower(
       self,
       state: "BlockDiagonalCurvature.State",
@@ -1129,6 +1140,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
 
     return parameter_structured_result
 
+  @utils.auto_scope_method
   def block_eigenvalues(
       self,
       state: "BlockDiagonalCurvature.State",
@@ -1152,6 +1164,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     return tuple(block.eigenvalues(b_state, use_cached=use_cached)
                  for block, b_state in zip(self.blocks, state.blocks_states))
 
+  @utils.auto_scope_method
   def eigenvalues(
       self,
       state: "BlockDiagonalCurvature.State",
@@ -1161,6 +1174,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     blocks_eigenvalues = self.block_eigenvalues(state, use_cached)
     return jnp.concatenate(blocks_eigenvalues, axis=0)
 
+  @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
       state: "BlockDiagonalCurvature.State",
@@ -1294,6 +1308,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     else:
       raise ValueError(f"Unrecognised estimation_mode {estimation_mode}.")
 
+  @utils.auto_scope_method
   def update_cache(
       self,
       state: "BlockDiagonalCurvature.State",
@@ -1356,6 +1371,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
 
     return BlockDiagonalCurvature.State(blocks_states=new_states)
 
+  @utils.auto_scope_method
   def to_diagonal_block_dense_matrix(
       self,
       state: "BlockDiagonalCurvature.State",
@@ -1364,6 +1380,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     return tuple(block.to_dense_matrix(block_state) for block, block_state in
                  zip(self.blocks, state.blocks_states))
 
+  @utils.auto_scope_method
   def to_dense_matrix(
       self,
       state: "BlockDiagonalCurvature.State"
@@ -1541,7 +1558,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
           lambda x: x[index][None], args[self._batch_index])
 
       return BlockDiagonalCurvature.update_curvature_matrix_estimate(
-          self=self,
+          self,
           state=state_,
           ema_old=is_first * ema_old + (1 - is_first) * 1.0,
           ema_new=ema_new / batch_size,

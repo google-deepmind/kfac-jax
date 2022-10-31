@@ -1665,6 +1665,30 @@ def staged(
   return decorated
 
 
+def auto_scope_method(method):
+  """Wraps the method call to have automatically generated Jax name scope."""
+  @functools.wraps(method)
+  def wrapped(instance, *args, **kwargs):
+    class_name = type(instance).__name__
+    method_name = method.__name__
+    if method_name.startswith("_"):
+      method_name = method_name[1:]
+    with jax.named_scope(f"{class_name}:{method_name}"):
+      return method(instance, *args, **kwargs)
+
+  return wrapped
+
+
+def auto_scope_function(function):
+  """Wraps the function call to have automatically generated Jax name scope."""
+  @functools.wraps(function)
+  def wrapped(*args, **kwargs):
+    with jax.named_scope(function.__name__):
+      return function(*args, **kwargs)
+
+  return wrapped
+
+
 def default_batch_size_extractor(
     batch: Batch,
     multi_device: bool = False,
