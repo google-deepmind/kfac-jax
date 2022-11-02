@@ -1673,7 +1673,7 @@ def auto_scope_method(method):
     method_name = method.__name__
     if method_name.startswith("_"):
       method_name = method_name[1:]
-    with jax.named_scope(f"{class_name}:{method_name}"):
+    with jax.named_scope(f"{class_name}_{method_name}"):
       return method(instance, *args, **kwargs)
 
   return wrapped
