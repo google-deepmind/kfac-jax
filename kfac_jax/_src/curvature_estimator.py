@@ -1186,6 +1186,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
       pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
   ) -> "BlockDiagonalCurvature.State":
+
     if not self.finalized:
       self.finalize(func_args)
 
@@ -1305,6 +1306,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
           ema_old = 1.0
 
       return state
+
     else:
       raise ValueError(f"Unrecognised estimation_mode {estimation_mode}.")
 

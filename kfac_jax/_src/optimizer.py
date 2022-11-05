@@ -257,12 +257,12 @@ class Optimizer(utils.WithStagedMethods):
         ``None``)
       multi_device: Boolean. Whether to use pmap and run the optimizer on
         multiple devices. (Default: ``False``)
-      debug: Boolean. If non of the step or init functions would be jitted. Note
-        that this also overrides ``multi_device`` and prevents using pmap.
+      debug: Boolean. If neither the step or init functions should be jitted.
+        Note that this also overrides ``multi_device`` and prevents using pmap.
         (Default: ``False``)
       batch_size_extractor: A function that takes as input the function
-        arguments (and a boolean specifying whether the batch is replicated over
-        multiple devices) and returns the batch size for a single device.
+        arguments, and a boolean specifying whether the batch is replicated over
+        multiple devices, and returns the batch size for a single device.
         (Default: ``kfac.utils.default_batch_size_extractor``)
       pmap_axis_name: String. The name of the pmap axis to use when
         ``multi_device`` is set to True. (Default: ``kfac_axis``)
@@ -566,19 +566,16 @@ class Optimizer(utils.WithStagedMethods):
 
   def _update_estimator_curvature(
       self,
-      state: "Optimizer.State",
+      estimator_state: curvature_estimator.BlockDiagonalCurvature.State,
       func_args: FuncArgsVariants,
       rng: chex.PRNGKey,
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-  ) -> "Optimizer.State":
-    """Updates the curvature estimator state from ``state``."""
+  ) -> curvature_estimator.BlockDiagonalCurvature.State:
+    """Updates the curvature estimator state."""
 
-    # Copy this first since we mutate it later in this function.
-    state = state.copy()
-
-    state.estimator_state = self.estimator.update_curvature_matrix_estimate(
-        state=state.estimator_state,
+    return self.estimator.update_curvature_matrix_estimate(
+        state=estimator_state,
         ema_old=ema_old,
         ema_new=ema_new,
         # Note that the batch is always the last entry of FuncArgsVariantsdef
@@ -587,7 +584,6 @@ class Optimizer(utils.WithStagedMethods):
         func_args=func_args,
         pmap_axis_name=self.pmap_axis_name
     )
-    return state
 
   @utils.auto_scope_method
   def _compute_loss_and_grads(
@@ -809,7 +805,8 @@ class Optimizer(utils.WithStagedMethods):
         params, rng, batch, func_state)
 
     # Update curvature estimate
-    state = self._update_estimator_curvature(state, func_args, rng, 1.0, 1.0)
+    state.estimator_state = self._update_estimator_curvature(
+        state.estimator_state, func_args, rng, 1.0, 1.0)
 
     # Optionally update func_state
     if func_state is not None:
@@ -818,6 +815,7 @@ class Optimizer(utils.WithStagedMethods):
           out, self._value_func_has_aux, self._value_func_has_state)
 
     accumulator.add(func_state)
+
     return state, accumulator
 
   def burnin(
@@ -874,8 +872,9 @@ class Optimizer(utils.WithStagedMethods):
         params, rng, batch, func_state)
 
     # Update curvature estimate
-    state = self._update_estimator_curvature(state, func_args, rng,
-                                             self._curvature_ema, 1.0)
+    state.estimator_state = self._update_estimator_curvature(
+        state.estimator_state, func_args, rng, self._curvature_ema, 1.0)
+
     del rng  # should not be used after this point!
 
     if self._include_norms_in_stats:
