@@ -569,6 +569,8 @@ class Optimizer(utils.WithStagedMethods):
         use_cached=True
     )
 
+
+    max_coefficient = None
     if self._norm_constraint is not None:
       assert not self._use_adaptive_learning_rate
       assert coefficient is not None
