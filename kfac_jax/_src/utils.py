@@ -17,6 +17,7 @@ import dataclasses
 import functools
 import numbers
 import operator
+import string
 from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, Tuple, Type, TypeVar, Union
 
 import chex
@@ -27,20 +28,24 @@ from jax import tree_util
 import jax.numpy as jnp
 from jax.scipy import linalg
 import numpy as np
+import tree
 
+_ALPHABET = string.ascii_lowercase
 _CHEX_SCALAR_TYPES = (float, int)
+
 
 # Types for annotation
 T = TypeVar("T")
-Params = Any
-Batch = Any
-FuncState = Any
-FuncAux = Any
+Params = chex.ArrayTree
+Batch = chex.ArrayTree
+FuncState = chex.ArrayTree
+FuncAux = chex.ArrayTree
 PyTreeDef = chex.PyTreeDef
 PyTreeType = Any
 PyTree = chex.ArrayTree
+TPyTree = TypeVar("TPyTree", bound=PyTree)
 FuncArgs = Sequence[PyTree]
-Func = Callable[..., Any]
+Func = Callable[..., Union[chex.Array, Tuple[chex.Array, FuncAux]]]
 ValueFunc = Callable[..., chex.Array]
 ValueAndGradFunc = Callable[..., Tuple[chex.Array, Params]]
 
@@ -64,7 +69,6 @@ def set_special_case_zero_inv(value: bool):
 
 def get_special_case_zero_inv() -> bool:
   """Returns whether `pi_adjusted_inverse` handles zero and nan matrices."""
-  global _SPECIAL_CASE_ZERO_INV
   return _SPECIAL_CASE_ZERO_INV
 
 
@@ -104,7 +108,7 @@ def loop_and_parallelize_average(
 ) -> Callable[..., PyTree]:
   """Returns a function that computes the average of `func` over any arguments.
 
-  The returned function is mathematically equivalent to:
+  The returned function is mathematically equivalent to
     jnp.mean(jax.vmap(func)(*args), axis=0).
   However, naively using the above code could lead to prohibitively large memory
   usage, as it scales linearly with the leading axis size of `args`, because of
@@ -126,22 +130,30 @@ def loop_and_parallelize_average(
 
   @functools.wraps(func)
   def average_func(*args) -> PyTree:
+
     lead_axis_sizes = set(x.shape[0] for x in jax.tree_util.tree_leaves(args))
+
     if not lead_axis_sizes:
       raise ValueError("You must pass in at least one argument with a PyTree "
                        "leaf node.")
+
     elif len(lead_axis_sizes) != 1:
       raise ValueError(f"Inconsistent leading axis sizes seen: "
                        f"{lead_axis_sizes!r}.")
+
     leading_size = next(iter(lead_axis_sizes))
+
     singleton_args = jax.tree_util.tree_map(lambda _x: _x[0], args)
     _, output_tree = jax.make_jaxpr(func, return_shape=True)(*singleton_args)
+
     singleton_size = sum(x.size for x in jax.tree_util.tree_leaves(output_tree))
     output_size = singleton_size * leading_size
 
     # Compute the loop size and any remainder size
     if max_parallel_size is None or output_size <= max_parallel_size:
+
       parallel_size = leading_size
+
     else:
       parallel_size = max(
           min(max_parallel_size // singleton_size, leading_size), 1)
@@ -159,21 +171,30 @@ def loop_and_parallelize_average(
 
     if num_parallel_chunks == 1:
       averaged_value = jnp.mean(vmap_fn(*loop_args), axis=0)
+
     else:
+
       def scan_fn(accumulator, args_):
+
         vmap_value = vmap_fn(*args_)
-        avg_value = jax.tree_util.tree_map(lambda x: jnp.mean(x, axis=0), vmap_value)
+
+        avg_value = jax.tree_util.tree_map(
+            lambda x: jnp.mean(x, axis=0), vmap_value)
+
         return jax.tree_util.tree_map(jnp.add, accumulator, avg_value), None
 
       loop_shape = (num_parallel_chunks, parallel_size)
+
       loop_args = jax.tree_util.tree_map(
           lambda x: x.reshape(loop_shape + x.shape[1:]),
           loop_args)
 
       summed_value, _ = jax.lax.scan(
           scan_fn,
-          init=jax.tree_util.tree_map(lambda x: jnp.zeros(x.shape), output_tree),
+          init=jax.tree_util.tree_map(
+              lambda x: jnp.zeros(x.shape), output_tree),
           xs=loop_args)
+
       averaged_value = scalar_div(summed_value, num_parallel_chunks)
 
     if remainder_size == 0:
@@ -185,6 +206,7 @@ def loop_and_parallelize_average(
 
     avg_weight = all_chunks_size / leading_size
     remainder_weight = remainder_size / leading_size
+
     return weighted_sum_of_objects(
         [averaged_value, remainder_value], [avg_weight, remainder_weight])
 
@@ -200,6 +222,23 @@ def loop_and_parallelize_average(
 #
 
 
+def in_pmap(axis_name) -> bool:
+  """Returns whether we are in a pmap with the given axis name."""
+
+  if axis_name is None:
+    return False
+
+  try:
+    # The only way to know if we are under `jax.pmap` is to check if the
+    # function call below raises a `NameError` or not.
+    core.axis_frame(axis_name)
+
+    return True
+
+  except NameError:
+    return False
+
+
 def wrap_if_pmap(
     p_func: Callable[[PyTree, str], PyTree],
 ) -> Callable[[PyTree, Optional[str]], PyTree]:
@@ -207,17 +246,8 @@ def wrap_if_pmap(
 
   @functools.wraps(p_func)
   def p_func_if_pmap(obj: PyTree, axis_name: Optional[str]) -> PyTree:
-    if axis_name is None:
-      return obj
-    try:
-      # The only way to know if we are under `jax.pmap` is to check if the
-      # function call below raises a `NameError` or not.
-      core.axis_frame(axis_name)
-      # In pmap
-      return p_func(obj, axis_name)
-    except NameError:
-      # Not in pmap
-      return obj
+
+    return p_func(obj, axis_name) if in_pmap(axis_name) else obj
 
   return p_func_if_pmap
 
@@ -231,13 +261,17 @@ compute_sum = jax.pmap(lambda x: lax.psum(x, "i"), axis_name="i")
 
 def index_if_not_scalar(value: chex.Numeric, index: int = 0) -> chex.Numeric:
   """Index `value` at axis 0 if it is not a scalar, otherwise return it."""
+
   if isinstance(value, chex.Array):
+
     if value.ndim > 0:
       return value[index]
     else:
       return value
+
   elif isinstance(value, _CHEX_SCALAR_TYPES):
     return value
+
   else:
     raise ValueError("The input should be an instance of `chex.Numeric`.")
 
@@ -248,13 +282,11 @@ def get_first(obj: PyTree) -> PyTree:
   return jax.tree_util.tree_map(index_if_not_scalar, obj)
 
 
-@jax.jit
 def get_mean(obj: PyTree) -> PyTree:
   """Returns the average of `obj` over different devices."""
   return get_first(compute_mean(obj))
 
 
-@jax.jit
 def get_sum(obj: PyTree) -> PyTree:
   """Returns the sum of `obj` over different devices."""
   return get_first(compute_sum(obj))
@@ -267,15 +299,20 @@ jit_zeros_like = jax.jit(lambda x: jax.tree_util.tree_map(jnp.zeros_like, x))
 
 def replicate_all_local_devices(obj: PyTree) -> PyTree:
   """Replicates `obj` to all local Jax devices."""
+
   n = jax.local_device_count()
-  obj_stacked = jax.tree_util.tree_map(lambda x: jnp.stack([x] * n, axis=0), obj)
+  obj_stacked = jax.tree_util.tree_map(
+      lambda x: jnp.stack([x] * n, axis=0), obj)
+
   return broadcast_all_local_devices(obj_stacked)
 
 
 def make_different_rng_key_on_all_devices(rng: chex.PRNGKey) -> chex.PRNGKey:
   """Makes a different PRNG for all Jax devices and processes."""
+
   rng = jax.random.fold_in(rng, jax.process_index())
   rng = jax.random.split(rng, jax.local_device_count())
+
   return broadcast_all_local_devices(rng)
 
 
@@ -289,12 +326,14 @@ def check_and_fix_format_for_pmap(obj: PyTree) -> PyTree:
   device_count = jax.local_device_count()
 
   def check_and_fix(x: chex.Numeric) -> chex.Array:
+
     # broadcast any 0D scalars
     if isinstance(x, numbers.Number) or not x.shape:
       return jnp.stack([x] * device_count, axis=0)
 
     # otherwise ensure that arrays have the right shape
     assert x.shape[0] == device_count
+
     return x
 
   return jax.tree_util.tree_map(check_and_fix, obj)
@@ -317,7 +356,9 @@ def host_sync(
 
     # We set default_device_sync here because calling jax.local_devices during
     # the library import stage will break JAX.
+
     global default_device_sync
+
     if default_device_sync is None:
 
       default_devices = [jax.local_devices(process_index=p_idx)[0]
@@ -363,6 +404,7 @@ pmap_sync_and_divide_value = jax.pmap(
 )
 
 
+# We might be able to change this to "return jnp.array(x)" in newer JAX versions
 def copy_array(x: chex.Array) -> chex.Array:
   """Copies a Jax array so that it can be donated freely."""
   return x + jnp.zeros_like(x)
@@ -370,6 +412,81 @@ def copy_array(x: chex.Array) -> chex.Array:
 
 copy_obj = jax.jit(lambda x: jax.tree_util.tree_map(copy_array, x))
 pmap_copy_obj = jax.pmap(copy_obj)
+
+
+def distribute_thunks(
+    thunks: Sequence[Callable[[], PyTree]],
+    pmap_axis_name: str,
+    ) -> PyTree:
+  """Distributes the computation of a list of thunks over the pmapped devices.
+
+  Given a list of thunks, this function distributes their computation over the
+  devices of the current pmap in a round-robin fashion, syncronizes the results
+  across devices, and then returns them as a sequence of PyTrees.
+
+  Note that this function is meant to be used in a compiled context, and may
+  call ``thunk[i]()`` several times for each i, with all but one call getting
+  "optimized away" by XLA.
+
+  Args:
+    thunks: A sequence of callables performing the desired computations. Each
+      callable must take zero arguments and return a PyTree of JAX arrays. As
+      with callables passed to (most) standard JAX API functions, these need to
+      be stateless and free of side effects. The output of each callable must be
+      the same regardless of the device it is executed on.
+    pmap_axis_name: The name of the pmap axis to use.
+
+  Returns:
+    A sequence of PyTrees that are the output of the corresponding element of
+    ``thunks``.
+  """
+
+  # The strategy here is to make a callable for each device which executes only
+  # the thunks i such that i % total_devices == device_index, and returns a tree
+  # of zeros for the remaining thunks. We then do a lax.switch over these based
+  # on device_index, and return psum over these. Note that the more obvious way
+  # of doing this, which is to perform a psum over the output of a sequence of
+  # lax.cond calls (with one for each thunk), won't work in general. This is
+  # because in order to save memory, XLA will sometimes elect to execute these
+  # conds sequentially instead of in parallel.
+
+  if not in_pmap(pmap_axis_name):
+    raise ValueError(f"Provided pmap_axis_name {pmap_axis_name} is not a valid "
+                     "pmap axis in current pmap (or this function was not "
+                     "called in a pmap).")
+
+  assert pmap_axis_name is not None
+
+  total_devices = lax.psum(1, axis_name=pmap_axis_name)  # returns a constant
+  current_device_index = lax.axis_index(pmap_axis_name)
+
+  # This should get optimized away by XLA since we don't use the values:
+  dummy_output_trees = tuple(thunk() for thunk in thunks)
+
+  def make_branch(device_index):
+
+    def branch():
+      """Execute only thunks i such that i % total_devices == device_index."""
+
+      outs = []
+      for i in range(len(thunks)):
+
+        if i % total_devices == device_index:
+          outs.append(thunks[i]())
+        else:
+          outs.append(
+              jax.tree_util.tree_map(jnp.zeros_like, dummy_output_trees[i]))
+
+      return tuple(outs)
+
+    return branch
+
+  branches = tuple(make_branch(device_index)
+                   for device_index in range(total_devices))
+
+  output_trees = jax.lax.switch(current_device_index, branches)
+
+  return jax.lax.psum(output_trees, axis_name=pmap_axis_name)
 
 
 #  __  __       _______ _    _
@@ -382,12 +499,23 @@ pmap_copy_obj = jax.pmap(copy_obj)
 def product(iterable_object: Iterable[chex.Numeric]) -> chex.Numeric:
   """Computes the product of all elements in the iterable."""
   x = 1
+
   for element in iterable_object:
     x = x * element
+
   return x
 
 
-def scalar_mul(obj: PyTree, scalar: chex.Numeric) -> PyTree:
+def outer_product(*arrays: chex.Array) -> chex.Array:
+  """Computes the outer product of an arbitrary number of vectors."""
+  if not all(a.ndim == 1 for a in arrays):
+    raise ValueError("All arrays must be vectors.")
+  in_str = ",".join(_ALPHABET[:len(arrays)])
+  out_str = _ALPHABET[:len(arrays)]
+  return jnp.einsum(f"{in_str}->{out_str}", *arrays)
+
+
+def scalar_mul(obj: TPyTree, scalar: chex.Numeric) -> TPyTree:
   """Multiplies all PyTree leaves of the object by the provided scalar."""
   # The check below is in its current form because of how `jax.jit` tracing
   # mechanism work. If we use `scalar == 1` and `scalar` is an array,  inside a
@@ -396,10 +524,11 @@ def scalar_mul(obj: PyTree, scalar: chex.Numeric) -> PyTree:
   # if/while/for constructs.
   if isinstance(scalar, _CHEX_SCALAR_TYPES) and scalar == 1.0:
     return obj
+
   return jax.tree_util.tree_map(lambda x: x * scalar, obj)
 
 
-def scalar_div(obj: PyTree, scalar: chex.Numeric) -> PyTree:
+def scalar_div(obj: TPyTree, scalar: chex.Numeric) -> TPyTree:
   """Divides all PyTree leaves of the object by the provided scalar."""
   # The check below is in its current form because of how `jax.jit` tracing
   # mechanism work. If we use `scalar == 1` and `scalar` is an array,  inside a
@@ -408,13 +537,14 @@ def scalar_div(obj: PyTree, scalar: chex.Numeric) -> PyTree:
   # if/while/for constructs.
   if isinstance(scalar, _CHEX_SCALAR_TYPES) and scalar == 1.0:
     return obj
+
   return jax.tree_util.tree_map(lambda x: x / scalar, obj)
 
 
 def weighted_sum_of_objects(
-    objects: Sequence[PyTree],
+    objects: Sequence[TPyTree],
     coefficients: Sequence[chex.Numeric],
-) -> PyTree:
+) -> TPyTree:
   """Computes a weighted sum of the objects'.
 
   The function computes `sum_i coefficients[i] * objects[i]`. All objects must
@@ -433,12 +563,16 @@ def weighted_sum_of_objects(
                      "objects.")
   if not objects:
     raise ValueError("The objects' sequences can not be empty.")
+
   accumulator = scalar_mul(objects[0], coefficients[0])
+
   for o_i, c_i in zip(objects[1:], coefficients[1:]):
     if not abstract_objects_equal(accumulator, o_i):
       raise ValueError("One or more objects do not have equivalent abstract "
                        "structure.")
-    accumulator = jax.tree_util.tree_map(jnp.add, accumulator, scalar_mul(o_i, c_i))
+    accumulator = jax.tree_util.tree_map(
+        jnp.add, accumulator, scalar_mul(o_i, c_i))
+
   return accumulator
 
 
@@ -451,9 +585,12 @@ def _inner_product_float64(obj1: PyTree, obj2: PyTree) -> chex.Array:
     return jnp.dot(x, y, precision=lax.Precision.HIGHEST)
 
   with jax.experimental.enable_x64():
+
     elements_inner_products = jax.tree_util.tree_map(array_ip, obj1, obj2)
+
     flat_list = jax.tree_util.tree_leaves(elements_inner_products)
     result = flat_list[0]
+
     for element_ip in flat_list[1:]:
       result = result + element_ip
 
@@ -485,15 +622,20 @@ def inner_product(
   """
   if not abstract_objects_equal(obj1, obj2, check_dtype=False):
     raise ValueError("The objects do not have identical abstract structure.")
+
   if in_float64:
     return _inner_product_float64(obj1, obj2)
-  elements_product = jax.tree_util.tree_map(lambda x, y: jnp.sum(x * y), obj1, obj2)
+
+  elements_product = jax.tree_util.tree_map(
+      lambda x, y: jnp.sum(x * y), obj1, obj2)
+
   return sum(jax.tree_util.tree_leaves(elements_product))
 
 
 def symmetric_matrix_inner_products(
     vectors1: Sequence[PyTree],
     vectors2: Sequence[PyTree],
+    ip_function: Callable[[PyTree, PyTree], chex.Array] = inner_product,
 ) -> chex.Array:
   """Computes a matrix of the inner products between the two sequences.
 
@@ -502,6 +644,8 @@ def symmetric_matrix_inner_products(
       representing a single vector.
     vectors2: A sequence of identically structured PyTrees, each one
       representing a single vector.
+    ip_function: A callable which computes the inner product between PyTrees.
+      Defaults to the standard dot-product.
 
   Returns:
     A symmetric matrix `m` with elements `m[i, j] = <vectors[i], vectors2[j]>`
@@ -509,32 +653,41 @@ def symmetric_matrix_inner_products(
   """
   if len(vectors1) != len(vectors2):
     raise ValueError("The two sequences should have the same length.")
+
   m = [[] for _ in vectors1]
   for i, v_i in enumerate(vectors1):
     for j, v_j in enumerate(vectors2):
       if j < i:
         m[i].append(m[j][i])
       else:
-        m[i].append(inner_product(v_i, v_j))
+        m[i].append(ip_function(v_i, v_j))
+
   return jnp.asarray(m)
 
 
-def matrix_of_inner_products(vectors: Sequence[PyTree]) -> chex.Array:
+def matrix_of_inner_products(
+    vectors: Sequence[PyTree],
+    ip_function: Callable[[PyTree, PyTree], chex.Array] = inner_product,
+) -> chex.Array:
   """Computes the matrix of inner products of the sequence of vectors.
 
   Args:
     vectors: A sequence of identically structured PyTrees, each one representing
       a single vector.
+    ip_function: A callable which computes the inner product between PyTrees.
+      Defaults to the standard dot-product.
 
   Returns:
     A matrix `m` with elements `m[i, j] = <vectors[i], vectors[j]>`.
   """
-  return symmetric_matrix_inner_products(vectors, vectors)
+  return symmetric_matrix_inner_products(vectors, vectors,
+                                         ip_function=ip_function)
 
 
 def vector_of_inner_products(
     base: PyTree,
-    vectors: Sequence[PyTree]
+    vectors: Sequence[PyTree],
+    ip_function: Callable[[PyTree, PyTree], chex.Array] = inner_product,
 ) -> chex.Array:
   """Computes a vector of inner products with base.
 
@@ -542,13 +695,16 @@ def vector_of_inner_products(
     base: A PyTree representing the base vector.
     vectors: A sequence of identically structured PyTrees, each one representing
       a single vector.
+    ip_function: A callable which computes the inner product between PyTrees.
+      Defaults to the standard dot-product.
 
   Returns:
     A vector `v` with elements `v[i] = <base, vectors[i]>`.
   """
   v = []
   for v_i in vectors:
-    v.append(inner_product(v_i, base))
+    v.append(ip_function(v_i, base))
+
   return jnp.asarray(v)
 
 
@@ -580,11 +736,14 @@ def block_permuted(
         f"The length of `block_sizes` (=={len(block_sizes)} "
         f"and `block_order` (=={len(block_order)}) must be "
         "the same.")
+
   if all(i == j for i, j in enumerate(block_order)):
     return matrix
+
   indices = np.cumsum(block_sizes)[:-1]
   blocks = [jnp.split(row, indices, 1) for row in jnp.split(matrix, indices, 0)]
   reordered_blocks = [[blocks[i][j] for j in block_order] for i in block_order]
+
   return jnp.block(reordered_blocks)
 
 
@@ -592,111 +751,241 @@ def norm(obj: PyTree) -> chex.Array:
   """Computes the Euclidean norm of the provided PyTree object."""
   elements_squared_norm = jax.tree_util.tree_map(
       lambda x: jnp.sum(jnp.square(x)), obj)
-  return jnp.sqrt(sum(jax.tree_util.tree_flatten(elements_squared_norm)[0]))
+
+  return jnp.sqrt(sum(jax.tree_util.tree_leaves(elements_squared_norm)))
+
+
+def per_parameter_norm(obj: PyTree, key_prefix: str) -> PyTree:
+
+  per_param_norm = jax.tree_util.tree_map(jnp.linalg.norm, obj)
+  per_param_norm = tree.flatten_with_path(per_param_norm)
+
+  return {
+      key_prefix + "(" + "/".join(k) + ")": v for k, v in per_param_norm
+  }
 
 
 def psd_inv_cholesky(matrix: chex.Array, damping: chex.Array) -> chex.Array:
   """Computes the inverse of `matrix + damping*I`, with matrix assumed PSD."""
+
   if matrix.shape[:1] != matrix.shape[1:]:
     raise ValueError(f"Expected square matrix, but got shape {matrix.shape}.")
+
   identity = jnp.eye(matrix.shape[0])
-  return linalg.solve(matrix + damping * identity, identity, sym_pos=True)
+
+  return linalg.solve(matrix + damping * identity, identity, assume_a="pos")
 
 
-def pi_adjusted_inverse(
-    a: chex.Array,
-    b: chex.Array,
+def pi_adjusted_kronecker_inverse(
+    *arrays: chex.Array,
     damping: chex.Numeric,
     pmap_axis_name: Optional[str],
-) -> Tuple[chex.Array, chex.Array]:
-  """Computes an approximation to the inverse of `(a kron b + damping * I)`.
+) -> Tuple[chex.Array, ...]:
+  """Computes pi-adjusted factored damping inverses.
 
-  The inverse of `a kron b + damping * I` is not Kronecker factored in general,
-  because of the added identity. This function computes the pi-adjusted inverse
-  from [1] which finds two matrices whose Kronecker product approximates the
-  inverse. The two input matrices `a` and `b` are assumed to be PSD.
+  The inverse of `a_1 kron a_2 kron ... kron a_n + damping * I` is not Kronecker
+  factored in general, because of the added identity. [1] proposed a pi-adjusted
+  factored damping approach to approximate the inverse as a Kronecker product.
+  [2] generalized this approach from two to tree factors, and [3] generalized it
+  to arbitrary numbers of factors. This function implements the generalized
+  approach.
 
   [1] - https://arxiv.org/abs/1503.05671
+  [2] - https://openreview.net/forum?id=SkkTMpjex
+  [3] - https://ui.adsabs.harvard.edu/abs/2021arXiv210602925R/abstract
 
   Args:
-    a: The left Kronecker factor.
-    b: The right Kronecker factor.
+    *arrays: A list of matrices, vectors (which are interpreted
+      as representing the diagonal of a matrix) or scalars (which are
+      interpreted as being a 1x1 matrix). All matrices must be PSD.
     damping: The weight of the identity added to the Kronecker product.
     pmap_axis_name: A `jax.pmap` axis name to use for synchronization.
 
   Returns:
-    A pair of factors `(a_inv, b_inv)` whose Kronecker product approximates the
-    inverse of `(a kron b + damping * I)`.
+    A list of factors with the same length as the input `arrays` whose Kronecker
+    product approximates the inverse of `a_1 kron ... kron a_n + damping * I`.
   """
-  # Compute the nuclear/trace norms of each factor
-  a_norm = jnp.trace(a)
-  b_norm = jnp.trace(b)
+  # The implementation writes each single factor as `c_i u_i`, where the matrix
+  # `u_i` is such that `trace(u_i) / dim(u_i) = 1`. We then factor out all the
+  # scalar factors `c_i` into a single overall scaling coefficient and
+  # distribute the damping to each single non-scalar factor `u_i` equally before
+  # inverting them.
 
+  # Need the a[None] in order to support a scalar input, with shape ().
+  norms = [jnp.sum(a[None]) if a.ndim < 2 else jnp.trace(a) for a in arrays]
   # We need to sync the norms here, because reduction can be non-deterministic.
   # They specifically are on GPUs by default for better performance.
-  # Hence although factor_0 and factor_1 are synced, the trace operation above
-  # can still produce different answers on different devices.
-  a_norm, b_norm = pmean_if_pmap((a_norm, b_norm), pmap_axis_name)
+  norms = pmean_if_pmap(norms, pmap_axis_name)
 
-  # Compute the overall scale
-  scale = a_norm * b_norm
+  # Compute the normalized factors `u_i`, such that Trace(u_i) / dim(u_i) = 1
+  dims = [1 if a.size == 1 else a.shape[0] for a in arrays]
+  us = [ai * di / ni for ai, di, ni in zip(arrays, dims, norms)]
 
-  def regular_inverse() -> Tuple[chex.Array, chex.Array]:
-    # Special cases with one or two scalar factors
+  # kron(arrays) = c * kron(us)
+  c = jnp.exp(jnp.sum(jnp.log(jnp.stack(norms)) - jnp.log(jnp.stack(dims))))
 
-    if a.size == 1 and b.size == 1:
-      # Case: Inverse of a scalar. Has exact solution.
-      value = jnp.full_like(a, jnp.sqrt(scale + damping))
-      return value, value
+  def regular_inverse() -> Tuple[chex.Array, ...]:
+    # We distribute the damping only inside the non-scalar factors
+    non_scalars = sum(1 if di != 1 else 0 for di in dims)
+    d_hat = jnp.power(damping / c, 1.0 / non_scalars)
 
-    elif a.size == 1:
-      # Case: Inverse of the matrix `b` and scalar `a`:
-      # `(a * b + d * I)^-1 = (1/scale) * (b/||b|| + d / scale * I)`
-      # since `scale = a * ||b||`.
-      b_normalized = b / b_norm
-      b_damping = damping / scale
-      b_inv = psd_inv_cholesky(b_normalized, b_damping)
-      return jnp.full_like(a, 1.0 / scale), b_inv
-
-    elif b.size == 1:
-      # Case: Inverse of the matrix `a` and scalar `b`:
-      # `(a * b + d * I)^-1 = (1/scale) * (a/||a|| + d / scale)^-1`
-      # since `scale = ||a|| * b`.
-      a_normalized = a / a_norm
-      a_damping = damping / scale
-      a_inv = psd_inv_cholesky(a_normalized, a_damping)
-      return a_inv, jnp.full_like(b, 1.0 / scale)
-
+    # We distribute the overall scale over each factor, including scalars
+    if non_scalars == 0:
+      # In the case where all factors are scalar we need to add the damping
+      c_k = jnp.power(c + damping, 1.0 / len(arrays))
     else:
-      # Case: The standard inversion from [1]
+      c_k = jnp.power(c, 1.0 / len(arrays))
 
-      # Invert first factor
-      a_normalized = a / a_norm
-      a_damping = jnp.sqrt(damping * b.shape[0] / (scale * a.shape[0]))
-      a_inv = psd_inv_cholesky(a_normalized, a_damping) / jnp.sqrt(scale)
+    a_hats_inv = []
+    for a in us:
 
-      # Invert second factor
-      b_normalized = b / b_norm
-      b_damping = jnp.sqrt(damping * a.shape[0] / (scale * b.shape[0]))
-      b_inv = psd_inv_cholesky(b_normalized, b_damping) / jnp.sqrt(scale)
-      return a_inv, b_inv
+      if a.size == 1:
+        inv = jnp.ones_like(a)
 
-  def zero_inverse() -> Tuple[chex.Array, chex.Array]:
-    return (jnp.eye(a[0].shape[0]) / jnp.sqrt(damping),
-            jnp.eye(b[1].shape[0]) / jnp.sqrt(damping))
+      elif a.ndim == 2:
+        inv = psd_inv_cholesky(a, d_hat)
+
+      else:
+        inv = 1.0 / (a + d_hat)
+
+      a_hats_inv.append(inv / c_k)
+
+    return tuple(a_hats_inv)
+
+  def zero_inverse() -> Tuple[chex.Array, ...]:
+    # In the special case where for some reason one of the factors is zero, then
+    # the inverse is just `damping^-1 * I`, hence we write each factor as
+    # `damping^(1/k) * I`.
+    c_k = jnp.power(damping, 1.0 / len(arrays))
+
+    a_hats_inv = []
+    for a in us:
+
+      if a.ndim == 2:
+        inv = jnp.eye(a.shape[0])
+
+      else:
+        inv = jnp.ones_like(a)
+
+      a_hats_inv.append(inv / c_k)
+
+    return tuple(a_hats_inv)
 
   if get_special_case_zero_inv():
-    # In the special case where for some reason one of the factors is zero, then
-    # the correct inverse of `(0 kron A + lambda I)` is
-    # `(I/sqrt(lambda) kron (I/sqrt(lambda)`. However, because one of the norms
-    # is zero, then `pi` and `1/pi` would be 0 and infinity leading to NaN
-    # values. Hence, we need to make this check explicitly.
     return lax.cond(
-        jnp.greater(scale, 0.0),
+        jnp.greater(c, 0.0),
         regular_inverse,
         zero_inverse)
   else:
     return regular_inverse()
+
+
+def kronecker_product_axis_mul_v(
+    factors: Sequence[chex.Array],
+    v: chex.Array,
+    axis_groups: Optional[Sequence[Sequence[int]]] = None,
+    transpose: Union[bool, Sequence[bool]] = False,
+):
+  """Computes ``kron(*factors) rvec(v)`` where ``rvec`` is row-wise vectorization.
+
+  Args:
+    factors: The sequence of factors forming the Kronecker product.
+    v: A tensor whose vectorization will be multiplied by the Kronecker product.
+    axis_groups: A list whose i-th element is a sequence of consecutive integers
+      specifying the axes of the input tensor ``v`` that correspond to the i-th
+      Kronecker factor. Passing ``None`` is equivalent to passing
+      ``[[0],[1],[2],...]``.
+    transpose: A single boolean or a sequence of booleans. If it is a sequence,
+      each element specifies if the corresponding factor should be transposed.
+      If it is a single boolean, specifies if all factors should be transposed.
+
+  Returns:
+    The result, shaped as a tensor, of multiplying the vectorization of the
+    input tensor by the Kronecker-factored matrix.
+  """
+  if axis_groups is None:
+    axis_groups = tuple((i,) for i in range(v.ndim))
+  else:
+    axis_groups = tuple(tuple(group) for group in axis_groups)
+
+  # Sanity checks
+  if sum(axis_groups, ()) != tuple(range(v.ndim)):
+    raise ValueError(f"The `axis_groups={axis_groups}` are either not in "
+                     f"consecutive order or do not cover exactly the axis of "
+                     f"the input `v`..")
+  if len(factors) != len(axis_groups):
+    raise ValueError("The number of factors provided must be equal to the "
+                     "number of axis groups provided.")
+
+  if isinstance(transpose, bool):
+    transpose = [transpose] * len(factors)
+  elif len(transpose) != len(factors):
+    raise ValueError("The length of the transpose sequence must match the "
+                     "number of factors.")
+
+  factor_strs = ["yz" if t else "zy" for t in transpose]
+  general_str = _ALPHABET[:v.ndim]
+
+  result = v
+  for group, factor, f_str in zip(axis_groups, factors, factor_strs):
+    # This flattens all axis in `group` of `result` into a single one.
+    shape = v.shape[:min(group)] + (-1,) + v.shape[max(group) + 1:]
+    vector = result.reshape(shape)
+
+    # This contracts `result` with `factor` along the single axis.
+    vector_str = general_str[:min(group)] + "y" + general_str[max(group) + 1:]
+    result_str = vector_str.replace("y", "z")
+    einsum_str = f"{f_str},{vector_str}->{result_str}"
+    r_next = jnp.einsum(einsum_str, factor, vector)
+
+    # This reshapes back to the original shape.
+    result = r_next.reshape(v.shape)
+
+  return result
+
+
+def kronecker_eigen_basis_axis_mul_v(
+    q_factors: Sequence[chex.Array],
+    eigenvalues: chex.Array,
+    v: chex.Array,
+    axis_groups: Optional[Sequence[Sequence[int]]] = None,
+):
+  """Computes a matrix-vector product in a Kronecker product eigen-basis.
+
+  The function computes:
+    ``kron(*q_factors) diag(eigenvalues) kron(*q_factors)^T rvec(v)``
+
+  where all variables are appropriately sized matrices and ``rvec`` is
+  row-wise vectorization. The computation is related to the usual Kronecker
+  product ``kron(*factors) rvec(v)``, if ``factors`` are all symmetric PSD
+  matrices and ``q_factors`` are the matrices of eigenvectors of ``factors`` and
+  ``eigenvalues`` is the kronecker product of the eigenvalues of ``factors``.
+  However, the function does not assume that its inputs are of this form.
+
+  Args:
+    q_factors: A sequence of the orthonormal basis of eigenvectors of each
+      Kronecker factor.
+    eigenvalues: A tensor containing the eigenvalues (e.g. the Kronecker product
+      of eigenvalues of all factors).
+    v: The input vector as a tensor.
+    axis_groups: A list whose i-th element is a sequence of consecutive integers
+      specifying the axes of the input tensor ``v`` that correspond to the i-th
+      Kronecker factor. Passing ``None`` is equivalent to passing
+      ``[[0],[1],[2],...]``.
+
+  Returns:
+    The result of multiplying the input vector by the Kronecker product of the
+    factors, shaped as a tensor.
+  """
+  q_proj_v = kronecker_product_axis_mul_v(q_factors, v, axis_groups, True)
+
+  if eigenvalues.shape != q_proj_v.shape:
+    raise ValueError("The eigenvalues array should have the same shape as the "
+                     "projection of `v` onto `kron(*factors)`.")
+
+  eig_weighted_v = eigenvalues * q_proj_v
+
+  return kronecker_product_axis_mul_v(q_factors, eig_weighted_v, axis_groups)
 
 
 def kronecker_product_mul_v(
@@ -706,8 +995,8 @@ def kronecker_product_mul_v(
     a_is_symmetric: bool,
 ) -> chex.Array:
   """Computes `unvec[(a kron b) vec(v)]` for correctly sized input matrices."""
-  a_transpose = a if a_is_symmetric else jnp.swapaxes(a, -1, -2)
-  return (b @ v) @ a_transpose
+  del a_is_symmetric  # not used
+  return kronecker_product_axis_mul_v([b, a], v)
 
 
 def kronecker_eigen_basis_mul_v(
@@ -738,17 +1027,43 @@ def kronecker_eigen_basis_mul_v(
   Returns:
     The result of the matrix-vector product.
   """
-  q_a_transpose = jnp.swapaxes(q_a, -1, -2)
-  q_b_transpose = jnp.swapaxes(q_b, -1, -2)
-  q_proj_v = kronecker_product_mul_v(q_a_transpose, q_b_transpose, v, False)
-  if eigenvalues.shape != q_proj_v.shape:
-    raise ValueError("The eigenvalues array should have the same shape as the "
-                     "projection of `v` onto `q_a kron q_b`.")
-  eig_weighted_v = eigenvalues * q_proj_v
-  return kronecker_product_mul_v(q_a, q_b, eig_weighted_v, False)
+  return kronecker_eigen_basis_axis_mul_v([q_b, q_a], eigenvalues, v)
 
 
-def safe_psd_eigh(x: chex.Array) -> Tuple[chex.Array, chex.Array]:
+def _host_eigh(x: chex.Array, *_) -> Tuple[chex.Array, chex.Array]:
+  """This calls the CPU numpy function for eigh."""
+
+  shape_s = jax.ShapeDtypeStruct(x.shape[:-1], x.dtype)
+  shape_q = jax.ShapeDtypeStruct(x.shape, x.dtype)
+
+  return jax.pure_callback(np.linalg.eigh, (shape_s, shape_q), x)
+
+
+def _eigh(
+    x: chex.Array,
+    force_on_host: bool = False,
+) -> Tuple[chex.Array, chex.Array]:
+  """Computes eigenvectors and eigenvalues, with optionally offloading to cpu."""
+
+  if force_on_host:
+    return _host_eigh(x)
+
+  s, q = jnp.linalg.eigh(x)
+
+  # Recently with CUDA 11.7 there is a bug in cuSOLVER which makes the eigh
+  # implementation unstable sometimes on GPUs.
+  return jax.lax.cond(
+      jnp.any(jnp.isnan(s)),
+      _host_eigh,
+      lambda *args: args[1:],
+      x, s, q
+  )
+
+
+def safe_psd_eigh(
+    x: chex.Array,
+    force_on_host: bool = False,
+) -> Tuple[chex.Array, chex.Array]:
   """Computes the eigenvalue decomposition for a PSD matrix.
 
   The function is similar to `jax.numpy.linalg.eigh`, but it clips the returned
@@ -758,17 +1073,20 @@ def safe_psd_eigh(x: chex.Array) -> Tuple[chex.Array, chex.Array]:
 
   Args:
     x: The input matrix, assumed to be PSD.
+    force_on_host: If `True` will perform the computation on the host CPU.
 
   Returns:
     A pair of (eigenvalues, eigenvectors) arrays.
   """
+
   d = x.shape[0]
+
   # Here we are handling the case of NaNs separately, because in some versions
   # of cuda and cudablas they can cause a runtime error.
   s, q = lax.cond(
       jnp.any(jnp.isnan(x)),
       lambda _: (jnp.full([d], jnp.nan), jnp.full([d, d], jnp.nan)),
-      jnp.linalg.eigh,
+      functools.partial(_eigh, force_on_host=force_on_host),
       x,
   )
 
@@ -796,9 +1114,11 @@ def abstract_objects_equal(
     check_dtype: bool = True
 ) -> bool:
   """`True` if the objects have the same PyTree structure, shapes and dtypes."""
-  return (jax.tree_util.tree_structure(obj1) == jax.tree_util.tree_structure(obj2) and
+  return (jax.tree_util.tree_structure(obj1) ==
+          jax.tree_util.tree_structure(obj2) and
           all(e1.shape == e2.shape and (e1.dtype == e2.dtype or not check_dtype)
-              for e1, e2 in zip(jax.tree_util.tree_leaves(obj1), jax.tree_util.tree_leaves(obj2))))
+              for e1, e2 in zip(jax.tree_util.tree_leaves(obj1),
+                                jax.tree_util.tree_leaves(obj2))))
 
 
 def to_tuple_or_repeat(
@@ -852,12 +1172,25 @@ def pytree_dataclass(class_type: Type[Any]) -> Type[Any]:
   """
   class_type = dataclasses.dataclass(class_type)
   fields_names = tuple(field.name for field in dataclasses.fields(class_type))
+
   def serialize_state(instance) -> Tuple[Tuple[Any, ...], Any]:
     return tuple(getattr(instance, name) for name in fields_names), None
+
   def deserialize_state(_: Any, args: Sequence[Any]) -> Any:
     return class_type(*args)
+
   tree_util.register_pytree_node(class_type, serialize_state, deserialize_state)
+
   return class_type
+
+
+@pytree_dataclass
+class State(object):
+
+  def copy(self):
+    """Returns a copy of the PyTree structure (but not the JAX arrays)."""
+    (flattened, structure) = jax.tree_util.tree_flatten(self)
+    return jax.tree_util.tree_unflatten(structure, flattened)
 
 
 @pytree_dataclass
@@ -899,7 +1232,14 @@ class WeightedMovingAverage:
   def zeros_like(cls, value: PyTree) -> "WeightedMovingAverage":
     """Initializes a `WeightedMovingAverage` with zeros structure like `value`."""
     return WeightedMovingAverage(
-        weight=jnp.zeros([]), raw_value=jax.tree_util.tree_map(jnp.zeros_like, value))
+        weight=jnp.zeros([]),
+        raw_value=jax.tree_util.tree_map(jnp.zeros_like, value)
+    )
+
+  def copy(self):
+    """Returns a copy of the PyTree structure (but not the JAX arrays)."""
+    (flattened, structure) = jax.tree_util.tree_flatten(self)
+    return jax.tree_util.tree_unflatten(structure, flattened)
 
 
 class MultiChunkAccumulator:
@@ -942,8 +1282,10 @@ class MultiChunkAccumulator:
   @property
   def value(self) -> PyTree:
     """The current normalized value of the accumulator."""
+
     if tree_is_empty(self.accumulator):
       return self.accumulator
+
     if self._multi_device:
       return pmap_sync_and_divide_value(self.accumulator, self.weight)
     else:
@@ -1008,25 +1350,35 @@ class MultiChunkAccumulator:
       multi_device: bool
   ) -> "MultiChunkAccumulator":
     """Creates a zero initialized accumulator as `obj`."""
+
     if multi_device:
       value_obj = pmap_zeros_like(obj) if not tree_is_empty(obj) else obj
       weight = replicate_all_local_devices(jnp.zeros([], dtype=jnp.int32))
     else:
       value_obj = jit_zeros_like(obj) if not tree_is_empty(obj) else obj
       weight = jnp.zeros([], dtype=jnp.int32)
+
     return cls(value_obj, weight, multi_device)
 
   @classmethod
   def empty(cls, multi_device: bool) -> "MultiChunkAccumulator":
     """Creates an empty accumulator."""
+
     weight = jnp.zeros([], dtype=jnp.int32)
+
     if multi_device:
       weight = replicate_all_local_devices(weight)
+
     return cls(None, weight, multi_device)
 
   def __repr__(self):
     return (f"{self.__class__.__name__}({self._accumulator!r}, "
             f"{self._weight!r}, {self._multi_device})")
+
+  def copy(self):
+    """Returns a copy of the PyTree structure (but not the JAX arrays)."""
+    (flattened, structure) = jax.tree_util.tree_flatten(self)
+    return jax.tree_util.tree_unflatten(structure, flattened)
 
 
 tree_util.register_pytree_node(
@@ -1075,6 +1427,7 @@ class Finalizable(abc.ABC):
 
   def finalize(self, *args: Any, **kwargs: Any):
     """Finalizes the object, after which no attributes can be set."""
+
     if self.finalized:
       raise ValueError("Object has already been finalized.")
 
@@ -1085,10 +1438,13 @@ class Finalizable(abc.ABC):
     """Any logic that a child class needs to do during the finalization."""
 
   def __setattr__(self, name: str, value: Any):
+
     if (not getattr(self, "_finalized", False) or
         not getattr(self, "_forbid_setting_attributes", True) or
         name in getattr(self, "_excluded_attribute_names", ())):
+
       super().__setattr__(name, value)
+
     else:
       raise AttributeError("Can't set attributes after finalization.")
 
@@ -1143,10 +1499,13 @@ class WithStagedMethods(Finalizable):
           ("_in_staging",) + tuple(parent_kwargs["excluded_attribute_names"]))
     else:
       parent_kwargs["excluded_attribute_names"] = ("_in_staging",)
+
     super().__init__(**parent_kwargs)
+
     if multi_device and not isinstance(pmap_axis_name, str):
       raise ValueError("When `multi_device=True` you must pass in a string for "
                        "`pmap_axis_name`.")
+
     self._multi_device = multi_device
     self._pmap_axis_name = pmap_axis_name
     self._debug = debug
@@ -1253,7 +1612,7 @@ def staged(
       if instance.multi_device and instance.debug:
         # In this case we want to call `method` once for each device index.
         # Note that this might not always produce sensible behavior, and will
-        # depend on the details of the method and if it has side-effects on the
+        # depend on the details of the method and if it has side effects on the
         # state of the class.
 
         outs = []
@@ -1261,12 +1620,15 @@ def staged(
                           for i in range(len(args))]
 
         for i in range(jax.local_device_count()):
+
           non_bcast_args_i = jax.tree_util.tree_map(
               operator.itemgetter(i), non_bcast_args)
+
           args_i = [
               non_bcast_args_i[j] if j not in bcast_argnums else args[j]
               for j in range(len(args))
           ]
+
           outs.append(method(instance, *args_i))
 
         outs = jax.tree_util.tree_map(jnp.stack, *outs)
@@ -1275,12 +1637,15 @@ def staged(
         outs = method(instance, *args)
 
       elif instance.multi_device:
+
         new_args = list(args)
+
         for i in range(len(args)):
           if i + 1 not in static_argnums:
             new_args[i] = check_and_fix_format_for_pmap(args[i])
 
         func = pmap_funcs.get(instance.pmap_axis_name)
+
         if func is None:
           func = jax.pmap(
               method,
@@ -1289,10 +1654,47 @@ def staged(
               axis_name=instance.pmap_axis_name,
           )
           pmap_funcs[instance.pmap_axis_name] = func
+
         outs = func(instance, *new_args)
 
       else:
         outs = jitted_func(instance, *args)
+
     return outs
 
   return decorated
+
+
+def auto_scope_method(method):
+  """Wraps the method call to have automatically generated Jax name scope."""
+  @functools.wraps(method)
+  def wrapped(instance, *args, **kwargs):
+    class_name = type(instance).__name__
+    method_name = method.__name__
+    if method_name.startswith("_"):
+      method_name = method_name[1:]
+    with jax.named_scope(f"{class_name}_{method_name}"):
+      return method(instance, *args, **kwargs)
+
+  return wrapped
+
+
+def auto_scope_function(function):
+  """Wraps the function call to have automatically generated Jax name scope."""
+  @functools.wraps(function)
+  def wrapped(*args, **kwargs):
+    with jax.named_scope(function.__name__):
+      return function(*args, **kwargs)
+
+  return wrapped
+
+
+def default_batch_size_extractor(
+    batch: Batch,
+    multi_device: bool = False,
+) -> chex.Numeric:
+  axis = 1 if multi_device else 0
+  size = jax.tree_util.tree_leaves(batch)[0].shape[axis]
+  if multi_device:
+    return jnp.asarray([size] * jax.local_device_count(), dtype=jnp.int32)
+  return size

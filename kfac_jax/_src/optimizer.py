@@ -50,22 +50,11 @@ ReturnWithoutFuncState = Tuple[
 ReturnEither = Union[ReturnWithFuncState, ReturnWithoutFuncState]
 
 
-def default_batch_size_extractor(
-    batch: utils.Batch,
-    multi_device: bool = False,
-) -> chex.Numeric:
-  axis = 1 if multi_device else 0
-  size = jax.tree_util.tree_leaves(batch)[0].shape[axis]
-  if multi_device:
-    return jnp.asarray([size] * jax.local_device_count(), dtype=jnp.int32)
-  return size
-
-
 class Optimizer(utils.WithStagedMethods):
   """The K-FAC optimizer."""
 
   @utils.pytree_dataclass
-  class State:
+  class State(utils.State):
     r"""Persistent state of the optimizer.
 
     Attributes:
@@ -112,6 +101,7 @@ class Optimizer(utils.WithStagedMethods):
       estimation_mode: str = "fisher_gradients",
       curvature_ema: chex.Numeric = 0.95,
       inverse_update_period: int = 5,
+      use_exact_inverses: bool = False,
       batch_process_func: Optional[Callable[[utils.Batch], utils.Batch]] = None,
       register_only_generic: bool = False,
       patterns_to_skip: Sequence[str] = (),
@@ -121,21 +111,31 @@ class Optimizer(utils.WithStagedMethods):
       multi_device: bool = False,
       debug: bool = False,
       batch_size_extractor: Callable[[utils.Batch, bool], chex.Numeric] =
-      default_batch_size_extractor,
+      utils.default_batch_size_extractor,
       pmap_axis_name: str = "kfac_axis",
       forbid_setting_attributes_after_finalize: bool = True,
       modifiable_attribute_exceptions: Sequence[str] = (),
       include_norms_in_stats: bool = False,
+      include_per_param_norms_in_stats: bool = False,
+      distributed_precon_apply: bool = True,
+      distributed_inverses: bool = True,
   ):
     """Initializes the K-FAC optimizer with the provided settings.
 
     Args:
       value_and_grad_func: Python callable. The function should return the value
-        of the loss to be optimized and its gradients. If the argument
-        ``value_func_has_aux`` is ``False`` then the interface should be:
-        ``loss, loss_grads = value_and_grad_func(params, batch)``. If
-        ``value_func_has_aux`` is ``True`` then the interface should be:
-        ``(loss, aux), loss_grads = value_and_grad_func(params, batch)``.
+        of the loss to be optimized and its gradients, and optionally the model
+        state and auxiliary information (usually statistics to log). The
+        interface should be:
+        ``out_args, loss_grads = value_and_grad_func(*in_args)``.
+        Here, ``in_args`` is ``(params, func_state, rng, batch)``, with ``rng``
+        omitted if ``value_func_has_rng`` is ``False``, and with ``func_state``
+        omitted if ``value_func_has_state`` is ``False``. Meanwhile,
+        ``out_args`` is ``(loss, func_state, aux)``, with ``func_state`` omitted
+        if ``value_func_has_state`` is ``False``, and with ``aux`` omitted if
+        ``value_func_has_aux`` is ``False``. If both ``value_func_has_state``
+        and ``value_func_has_aux`` are ``False``, ``out_args`` should just be
+        ``loss`` and not ``(loss,)``.
       l2_reg: Scalar. Set this value to tell the optimizer what L2
         regularization coefficient you are using (if any). Note the coefficient
         appears in the regularizer as ``coeff / 2 * sum(param**2)``. This adds
@@ -143,11 +143,10 @@ class Optimizer(utils.WithStagedMethods):
         quadratic model when using adaptive damping. Note that the user is still
         responsible for adding regularization to the loss.
       value_func_has_aux: Boolean. Specifies whether the provided callable
-        ``value_and_grad_func`` returns the loss value only, or also some
-        auxiliary data. (Default: ``False``)
+        ``value_and_grad_func`` returns auxiliary data. (Default: ``False``)
       value_func_has_state: Boolean. Specifies whether the provided callable
-        ``value_and_grad_func`` has a persistent state that is inputted and it
-        also outputs an update version of it. (Default: ``False``)
+        ``value_and_grad_func`` has a persistent state that is passed in and
+        out. (Default: ``False``)
       value_func_has_rng: Boolean. Specifies whether the provided callable
         ``value_and_grad_func`` additionally takes as input an rng key.
         (Default: ``False``)
@@ -168,10 +167,10 @@ class Optimizer(utils.WithStagedMethods):
         as input the current step number and return a single array that
         represents the momentum. (Default: ``None``)
       use_adaptive_damping: Boolean. Specifies whether the optimizer will
-        use the quadratic model induced by the true curvature matrix to
-        automatically adapt the damping or it would be fixed. If this is set to
-        ``False`` the user must provide a value to the damping argument of the
-        step function at each iteration. (Default: ``False``)
+        use the Levenberg-Marquardt method to try to adjust the damping
+        automatically every ``damping_adaptation_interval`` iterations. If this
+        is set to ``False`` the user must provide a value to the damping
+        argument of the step function at each iteration. (Default: ``False``)
       damping_schedule: Callable. A schedule for the damping. This should take
         as input the current step number and return a single array that
         represents the learning rate. (Default: ``None``)
@@ -179,7 +178,7 @@ class Optimizer(utils.WithStagedMethods):
         damping that the optimizer will use when ``use_adaptive_damping`` is set
         to ``True``. The damping value times the identity matrix is
         (approximately) added to the curvature matrix (i.e. the Fisher or GGN)
-        before it is inverted multiplied by the gradient when computing the
+        before it is inverted and multiplied by the gradient when computing the
         (raw) update. This quantity should match the scale of the objective, so
         that if you put a multiplier on your loss you should apply the same
         multiplier to the damping. Roughly speaking, larger values constrain the
@@ -202,13 +201,15 @@ class Optimizer(utils.WithStagedMethods):
         damping from the ``l2_reg`` argument is always included.
         (Default: ``False``)
       damping_adaptation_interval: Int. The number of steps in between
-        updating the ``damping`` parameter. (Default: ``5``)
-      damping_adaptation_decay: Scalar. The ``damping`` parameter is multiplied
-        by the ``damping_adaptation_decay`` every
-        ``damping_adaptation_interval`` number of iterations. (Default: ``0.9``)
-      damping_lower_threshold: Scalar. The ``damping`` parameter is increased if
+        updating the damping parameter. (Default: ``5``)
+      damping_adaptation_decay: Scalar. The damping parameter will be adjusted
+        up or down by
+        ``damping_adaptation_decay ** damping_adaptation_interval``, or remain
+        unchanged, every ``damping_adaptation_interval`` number of iterations.
+        (Default: ``0.9``)
+      damping_lower_threshold: Scalar. The damping parameter is increased if
         the reduction ratio is below this threshold. (Default: ``0.25``)
-      damping_upper_threshold: Scalar. The ``damping`` parameter is decreased if
+      damping_upper_threshold: Scalar. The damping parameter is decreased if
         the reduction ratio is below this threshold. (Default: ``0.75``)
       always_use_exact_qmodel_for_damping_adjustment: Boolean. When using
         learning rate and/or momentum adaptation, the quadratic model change
@@ -222,8 +223,8 @@ class Optimizer(utils.WithStagedMethods):
         effect. (Default: ``False``)
       norm_constraint: Scalar. If specified, the update is scaled down so that
         its approximate squared Fisher norm ``v^T F v`` is at most the specified
-        value.(Note that here ``F`` is the approximate curvature matrix, not the
-        exact.) May only be used when ``use_adaptive_learning_rate`` is
+        value. (Note that here ``F`` is the approximate curvature matrix, not
+        the exact.) May only be used when ``use_adaptive_learning_rate`` is
         ``False``. (Default: ``None``)
       num_burnin_steps: Int. At the start of optimization, e.g. the first step,
         before performing the actual step the optimizer will perform this many
@@ -237,6 +238,10 @@ class Optimizer(utils.WithStagedMethods):
         estimate moving averages. (Default: ``0.95``)
       inverse_update_period: Int. The number of steps in between updating the
         the computation of the inverse curvature approximation. (Default: ``5``)
+      use_exact_inverses: Bool. If ``True``, preconditioner inverses are
+        computed "exactly" without the pi-adjusted factored damping approach.
+        Note that this involves the use of eigendecompositions, which can
+        sometimes be much more expensive. (Default: ``False``)
       batch_process_func: Callable. A function which to be called on each batch
         before feeding to the KFAC on device. This could be useful for specific
         device input optimizations. (Default: ``None``)
@@ -255,14 +260,15 @@ class Optimizer(utils.WithStagedMethods):
         ``None``)
       multi_device: Boolean. Whether to use pmap and run the optimizer on
         multiple devices. (Default: ``False``)
-      debug: Boolean. If non of the step or init functions would be jitted. Note
-        that this also overrides ``multi_device`` and prevents using pmap.
+      debug: Boolean. If neither the step or init functions should be jitted.
+        Note that this also overrides ``multi_device`` and prevents using pmap.
         (Default: ``False``)
-      batch_size_extractor: A function that takes as input a batch and a boolean
-        specifying whether the batch is replicated over multiple devices and
-        returns the batch size for a single device. (Default: ``None``)
+      batch_size_extractor: A function that takes as input the function
+        arguments, and a boolean specifying whether the batch is replicated over
+        multiple devices, and returns the batch size for a single device.
+        (Default: ``kfac.utils.default_batch_size_extractor``)
       pmap_axis_name: String. The name of the pmap axis to use when
-        ``multi_device`` is set to True. (Default: ``curvature_axis``)
+        ``multi_device`` is set to True. (Default: ``kfac_axis``)
       forbid_setting_attributes_after_finalize: Boolean. By default after the
         object is finalized, you can not set any of its properties. This is done
         in order to protect the user from making changes to the object
@@ -277,15 +283,29 @@ class Optimizer(utils.WithStagedMethods):
       include_norms_in_stats: Boolean. It True, the vector norms of the
         gradient, preconditioned gradient, and parameter update are included in
         the statistics returned by the step function. (Default: ``False``)
+      include_per_param_norms_in_stats: Boolean. It True, the per-parameter
+        vector norms of the gradient, preconditioned gradient, and parameter
+        update are included in the statistics returned by the step function.
+        (Default: ``False``)
+      distributed_precon_apply: Boolean. Whether to distribute the application
+        of the preconditioner across the different devices in a layer-wise
+        fashion. If False, each device will (redundantly) perform the required
+        operations for all of the layers. (Default: True)
+      distributed_inverses: Boolean. Whether to distribute the inverse
+        computations (required to compute the preconditioner) across the
+        different devices in a layer-wise fashion. If False, each device will
+        (redundantly) perform the required computations for all of the layers.
+        (Default: True)
     """
     super().__init__(
         multi_device=multi_device,
-        pmap_axis_name=pmap_axis_name,
+        pmap_axis_name=pmap_axis_name if multi_device else None,
         debug=debug,
         forbid_setting_attributes_after_finalize=
         forbid_setting_attributes_after_finalize,
         excluded_attribute_names=modifiable_attribute_exceptions,
     )
+
     if use_adaptive_damping and initial_damping is None:
       raise ValueError("When use_adaptive_damping is True you must provide a "
                        "value for initial_damping.")
@@ -315,14 +335,19 @@ class Optimizer(utils.WithStagedMethods):
     self._use_adaptive_learning_rate = use_adaptive_learning_rate
     self._learning_rate_schedule = learning_rate_schedule
     self._use_adaptive_momentum = use_adaptive_momentum
+
     if momentum_schedule is not None:
+
       def schedule_with_first_step_zero(global_step: chex.Array) -> chex.Array:
         value = momentum_schedule(global_step)
         check = jnp.equal(global_step, 0)
         return check * jnp.zeros_like(value) + (1 - check) * value
+
       self._momentum_schedule = schedule_with_first_step_zero
+
     else:
       self._momentum_schedule = None
+
     self._use_adaptive_damping = use_adaptive_damping
     self._damping_schedule = damping_schedule
     self._initial_damping = initial_damping
@@ -345,7 +370,21 @@ class Optimizer(utils.WithStagedMethods):
     self._patterns_to_skip = patterns_to_skip
     self._batch_process_func = batch_process_func or (lambda x: x)
     self._include_norms_in_stats = include_norms_in_stats
+    self._include_per_param_norms_in_stats = include_per_param_norms_in_stats
     self._batch_size_extractor = batch_size_extractor
+
+    self._use_cached_inverses = (self._inverse_update_period != 1)
+    self._use_exact_inverses = use_exact_inverses
+
+    if self._use_exact_inverses and self._use_cached_inverses:
+      self._exact_powers_to_cache = -1
+    else:
+      self._exact_powers_to_cache = None
+
+    if not self._use_exact_inverses and self._use_cached_inverses:
+      self._approx_powers_to_cache = -1
+    else:
+      self._approx_powers_to_cache = None
 
     # Curvature estimator
     self._estimator = curvature_estimator.BlockDiagonalCurvature(
@@ -355,12 +394,20 @@ class Optimizer(utils.WithStagedMethods):
         layer_tag_to_block_ctor=layer_tag_to_block_ctor,
         register_only_generic=register_only_generic,
         patterns_to_skip=patterns_to_skip,
+        distributed_multiplies=distributed_precon_apply,
+        distributed_cache_updates=distributed_inverses,
         **(auto_register_kwargs or {}),
     )
     self._implicit = curvature_estimator.ImplicitExactCurvature(
         self._value_func,
         params_index=0,
+        batch_size_extractor=batch_size_extractor,
     )
+
+    # Each subclass should call finalize on its own, so this gets called only
+    # for instances of exactly this class type.
+    if type(self) == Optimizer:  # pylint: disable=unidiomatic-typecheck
+      self.finalize()
 
   @property
   def num_burnin_steps(self) -> int:
@@ -371,6 +418,11 @@ class Optimizer(utils.WithStagedMethods):
   def l2_reg(self) -> chex.Array:
     """The weight of the additional diagonal term added to the curvature."""
     return self._l2_reg
+
+  @property
+  def estimator(self) -> curvature_estimator.BlockDiagonalCurvature:
+    """The underlying curvature estimator used by the optimizer."""
+    return self._estimator
 
   @property
   def damping_decay_factor(self) -> chex.Numeric:
@@ -393,6 +445,7 @@ class Optimizer(utils.WithStagedMethods):
     """Splits the ``rng`` key."""
     return tuple(jax.random.split(rng, num))
 
+  @utils.auto_scope_method
   def compute_loss_value(self, func_args: FuncArgsVariants) -> chex.Array:
     """Computes the value of the loss function being optimized."""
     return self._value_func(*func_args)
@@ -411,33 +464,41 @@ class Optimizer(utils.WithStagedMethods):
     if self._use_adaptive_learning_rate and learning_rate is not None:
       raise ValueError("When use_adaptive_learning_rate is set to True you "
                        "should not pass a value to the step function.")
+
     elif not self._use_adaptive_learning_rate and (
         self._learning_rate_schedule is None and learning_rate is None):
       raise ValueError("When use_adaptive_learning_rate is set to False and "
                        "`learning_rate_schedule` is None you must provide a "
                        "value to the step function.")
+
     elif self._learning_rate_schedule is not None and learning_rate is not None:
       raise ValueError("When you have passed a `learning_rate_schedule` you "
                        "should not pass a value to the step function.")
+
     if self._use_adaptive_momentum and momentum is not None:
       raise ValueError("When use_adaptive_momentum is set to True you "
                        "should not pass a value to the step function.")
+
     elif not self._use_adaptive_momentum and (
         self._momentum_schedule is None and momentum is None):
       raise ValueError("When use_adaptive_momentum is set to False and "
                        "`momentum_schedule` is None you must provide a value to"
                        " the step function.")
+
     elif self._momentum_schedule is not None and momentum is not None:
       raise ValueError("When you have passed a `momentum_schedule` you should "
                        "not pass a value to the step function.")
+
     if self._use_adaptive_damping and damping is not None:
       raise ValueError("When use_adaptive_damping is set to True you "
                        "should not pass a value to the step function.")
+
     elif not self._use_adaptive_damping and (
         self._damping_schedule is None and damping is None):
       raise ValueError("When use_adaptive_damping is set to False and "
                        "`damping_schedule` is None you must provide a value to "
                        "the step function.")
+
     elif self._damping_schedule is not None and damping is not None:
       raise ValueError("When you have passed a `damping_schedule` you should "
                        "not pass a value to the step function.")
@@ -459,18 +520,23 @@ class Optimizer(utils.WithStagedMethods):
       step_counter: chex.Array
   ) -> Tuple[Optional[chex.Array], Optional[chex.Array], chex.Array]:
     """Helper function for setting up learning rate, momentum and damping."""
+
     # Compute schedules if applicable
     if self._learning_rate_schedule is not None:
       assert learning_rate is None
       learning_rate = self._learning_rate_schedule(step_counter)
+
     if self._momentum_schedule is not None:
       assert momentum is None
       momentum = self._momentum_schedule(step_counter)
+
     if self._damping_schedule is not None:
       assert damping is None
       damping = self._damping_schedule(step_counter)
+
     else:
       assert damping is not None
+
     return learning_rate, momentum, damping
 
   def _setup_func_args_and_rng(
@@ -504,15 +570,16 @@ class Optimizer(utils.WithStagedMethods):
 
   def _update_estimator_curvature(
       self,
-      state: "Optimizer.State",
+      estimator_state: curvature_estimator.BlockDiagonalCurvature.State,
       func_args: FuncArgsVariants,
       rng: chex.PRNGKey,
       ema_old: chex.Numeric,
       ema_new: chex.Numeric,
-  ) -> "Optimizer.State":
-    """Updates the curvature estimator state from ``state``."""
-    state.estimator_state = self._estimator.update_curvature_matrix_estimate(
-        state=state.estimator_state,
+  ) -> curvature_estimator.BlockDiagonalCurvature.State:
+    """Updates the curvature estimator state."""
+
+    return self.estimator.update_curvature_matrix_estimate(
+        state=estimator_state,
         ema_old=ema_old,
         ema_new=ema_new,
         # Note that the batch is always the last entry of FuncArgsVariantsdef
@@ -521,8 +588,8 @@ class Optimizer(utils.WithStagedMethods):
         func_args=func_args,
         pmap_axis_name=self.pmap_axis_name
     )
-    return state
 
+  @utils.auto_scope_method
   def _compute_loss_and_grads(
       self,
       func_args: FuncArgsVariants,
@@ -538,13 +605,17 @@ class Optimizer(utils.WithStagedMethods):
       state: "Optimizer.State",
   ) -> "Optimizer.State":
     """Updates the estimator state cache if it is the right iteration."""
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     state.estimator_state = lax.cond(
         state.step_counter % self._inverse_update_period == 0,
         functools.partial(
-            self._estimator.update_cache,
+            self.estimator.update_cache,
             identity_weight=self.l2_reg + state.damping,
-            exact_powers=None,
-            approx_powers=-1,
+            exact_powers=self._exact_powers_to_cache,
+            approx_powers=self._approx_powers_to_cache,
             eigenvalues=False,
             pmap_axis_name=self.pmap_axis_name,
         ),
@@ -561,20 +632,25 @@ class Optimizer(utils.WithStagedMethods):
       coefficient: Optional[chex.Array],
   ) -> utils.Params:
     """Computes the preconditioned gradient, maybe applying norm-constraint."""
-    preconditioned_grads = self._estimator.multiply_inverse(
+
+    preconditioned_grads = self.estimator.multiply_inverse(
         state=state.estimator_state,
         parameter_structured_vector=grads,
         identity_weight=self.l2_reg + state.damping,
-        exact_power=False,
-        use_cached=True
+        exact_power=self._use_exact_inverses,
+        use_cached=self._use_cached_inverses,
+        pmap_axis_name=self.pmap_axis_name,
     )
 
 
     max_coefficient = None
     if self._norm_constraint is not None:
+
       assert not self._use_adaptive_learning_rate
       assert coefficient is not None
+
       sq_norm_grads = utils.inner_product(preconditioned_grads, grads)
+
       sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
 
       # We need to sync the norms here, because reduction can be
@@ -587,6 +663,7 @@ class Optimizer(utils.WithStagedMethods):
 
       max_coefficient = jnp.sqrt(self._norm_constraint / sq_norm_scaled_grads)
       coefficient = jnp.minimum(max_coefficient, 1)
+
       preconditioned_grads = utils.scalar_mul(preconditioned_grads, coefficient)
 
     return preconditioned_grads, max_coefficient
@@ -629,6 +706,7 @@ class Optimizer(utils.WithStagedMethods):
     if self._use_adaptive_learning_rate or self._use_adaptive_momentum:
 
       quad_model = self.compute_exact_quad_model(vectors, grads, func_args)
+
       return self._solve_quad_model(quad_model, state.damping,
                                     vectors, coefficients)
     else:
@@ -649,6 +727,7 @@ class Optimizer(utils.WithStagedMethods):
 
       return coefficients, quad_change
 
+  @utils.auto_scope_method
   def _update_damping(
       self,
       old_damping: chex.Array,
@@ -675,10 +754,12 @@ class Optimizer(utils.WithStagedMethods):
       func_state: Optional[utils.FuncState] = None,
   ) -> "Optimizer.State":
     """A staged function to initialize the optimizer state ."""
+    dtype = jnp.int64 if jax.config.jax_enable_x64 else jnp.int32
+
     return Optimizer.State(
         optax_state=self._internal_optimizer.init(params),
         velocities=jax.tree_util.tree_map(jnp.zeros_like, params),
-        estimator_state=self._estimator.init(
+        estimator_state=self.estimator.init(
             rng=rng,
             func_args=make_func_args(
                 params=params,
@@ -688,24 +769,15 @@ class Optimizer(utils.WithStagedMethods):
                 has_state=self._value_func_has_state,
                 has_rng=self._value_func_has_rng,
             ),
-            exact_powers_to_cache=None,
-            approx_powers_to_cache=-1,
+            exact_powers_to_cache=self._exact_powers_to_cache,
+            approx_powers_to_cache=self._approx_powers_to_cache,
             cache_eigenvalues=False
         ),
         damping=(jnp.array(self._initial_damping)
                  if self._use_adaptive_damping else None),
-        data_seen=jnp.asarray(0, dtype=jnp.int32),
-        step_counter=jnp.asarray(0, dtype=jnp.int32)
+        data_seen=jnp.asarray(0, dtype=dtype),
+        step_counter=jnp.asarray(0, dtype=dtype)
     )
-
-  def _finalize(
-      self,
-      params: utils.Params,
-      rng: chex.PRNGKey,
-      batch: utils.Batch,
-      func_state: Optional[utils.FuncState] = None,
-  ):
-    return jax.make_jaxpr(self._init)(params, rng, batch, func_state)
 
   def init(
       self,
@@ -715,8 +787,10 @@ class Optimizer(utils.WithStagedMethods):
       func_state: Optional[utils.FuncState] = None,
   ) -> "Optimizer.State":
     """Initializes the optimizer and returns the appropriate optimizer state."""
+
     if not self.finalized:
       self.finalize(params, rng, batch, func_state)
+
     return self._init(params, rng, batch, func_state)
 
   @functools.partial(utils.staged, donate_argnums=[1, 3, 5])
@@ -730,11 +804,16 @@ class Optimizer(utils.WithStagedMethods):
       accumulator: utils.MultiChunkAccumulator
   ) -> Tuple["Optimizer.State", utils.MultiChunkAccumulator]:
     """A single burnin step, updating only the curvature estimate."""
+
+    # Copy this first since we mutate it later in this function.
+    accumulator = accumulator.copy()
+
     func_args, rng = self._setup_func_args_and_rng(
         params, rng, batch, func_state)
 
     # Update curvature estimate
-    state = self._update_estimator_curvature(state, func_args, rng, 1.0, 1.0)
+    state.estimator_state = self._update_estimator_curvature(
+        state.estimator_state, func_args, rng, 1.0, 1.0)
 
     # Optionally update func_state
     if func_state is not None:
@@ -743,6 +822,7 @@ class Optimizer(utils.WithStagedMethods):
           out, self._value_func_has_aux, self._value_func_has_state)
 
     accumulator.add(func_state)
+
     return state, accumulator
 
   def burnin(
@@ -755,13 +835,16 @@ class Optimizer(utils.WithStagedMethods):
       func_state: Optional[utils.FuncState] = None,
   ) -> Tuple["Optimizer.State", Optional[utils.FuncState]]:
     """Runs all burnin steps required."""
+
     if num_steps > 0:
       rng = self._rng_split(rng, num_steps)
+
       accumulator = utils.MultiChunkAccumulator.zeros_like(
           func_state, self.multi_device)
 
       for rng_i in rng:
         batch = next(data_iterator)
+
         state, accumulator = self._burnin(
             params, state, rng_i, batch, func_state, accumulator)
 
@@ -770,6 +853,7 @@ class Optimizer(utils.WithStagedMethods):
     return state, func_state
 
   @functools.partial(utils.staged, donate_argnums=(0, 1, 4))
+  @utils.auto_scope_method
   def _step(
       self,
       params: utils.Params,
@@ -783,6 +867,9 @@ class Optimizer(utils.WithStagedMethods):
   )-> ReturnEither:
     """A single full step of the optimizer."""
 
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     # Setup arguments
     learning_rate, momentum, state.damping = self._setup_state_and_schedules(
         learning_rate, momentum,
@@ -792,12 +879,15 @@ class Optimizer(utils.WithStagedMethods):
         params, rng, batch, func_state)
 
     # Update curvature estimate
-    state = self._update_estimator_curvature(state, func_args, rng,
-                                             self._curvature_ema, 1.0)
+    state.estimator_state = self._update_estimator_curvature(
+        state.estimator_state, func_args, rng, self._curvature_ema, 1.0)
+
     del rng  # should not be used after this point!
 
     if self._include_norms_in_stats:
       param_norm = utils.norm(params)
+    if self._include_per_param_norms_in_stats:
+      param_norm_per_param = utils.per_parameter_norm(params, "param_norm")
 
     # Compute loss and gradients
     loss, grads, func_state, aux = self._compute_loss_and_grads(func_args)
@@ -807,6 +897,8 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._include_norms_in_stats:
       grad_norm = utils.norm(grads)
+    if self._include_per_param_norms_in_stats:
+      grad_norm_per_param = utils.per_parameter_norm(grads, "grad_norm")
 
     # Update the inverse curvature
     state = self._maybe_update_inverse_cache(state)
@@ -814,10 +906,14 @@ class Optimizer(utils.WithStagedMethods):
     # Compute proposed directions
     preconditioned_gradient, norm_constraint_factor = self._compute_preconditioned_gradient(
         state, grads, learning_rate)
+
     vectors = (preconditioned_gradient, state.velocities)
 
     if self._include_norms_in_stats:
       precon_grad_norm = utils.norm(preconditioned_gradient)
+    if self._include_per_param_norms_in_stats:
+      precon_grad_norm_per_param = utils.per_parameter_norm(
+          preconditioned_gradient, "precon_grad_norm")
 
     # Compute the coefficients for the vectors
     coefficients, quad_model_change = self._coefficients_and_quad_change(
@@ -835,12 +931,15 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._include_norms_in_stats:
       update_norm = utils.norm(delta)
+    if self._include_per_param_norms_in_stats:
+      update_norm_per_param = utils.per_parameter_norm(delta, "update_norm")
 
     # Update parameters
     params = jax.tree_util.tree_map(jnp.add, params, delta)
 
     # Optionally compute the reduction ratio and update the damping
     if self._use_adaptive_damping:
+
       state.damping, rho, new_loss = lax.cond(
           self.should_update_damping(state),
           lambda args: self._update_damping(*args),
@@ -851,10 +950,12 @@ class Optimizer(utils.WithStagedMethods):
     else:
       new_loss, rho = jnp.nan, jnp.nan
 
-    # Update data seen and step counter
-    total_batch_size = self._batch_size_extractor(func_args[-1], False)
+    # Compute per-device and total batch size
+    batch_size = self._batch_size_extractor(func_args[-1], False)
     if self.multi_device:
-      total_batch_size = total_batch_size * jax.device_count()
+      total_batch_size = batch_size * jax.device_count()
+
+    # Update data seen and step counter
     state.data_seen = state.data_seen + total_batch_size
     state.step_counter = state.step_counter + 1
 
@@ -881,6 +982,12 @@ class Optimizer(utils.WithStagedMethods):
       stats["precon_grad_norm"] = precon_grad_norm
       stats["update_norm"] = update_norm
       stats["norm_constraint_factor"] = norm_constraint_factor
+
+    if self._include_per_param_norms_in_stats:
+      stats.update(param_norm_per_param)
+      stats.update(grad_norm_per_param)
+      stats.update(precon_grad_norm_per_param)
+      stats.update(update_norm_per_param)
 
     if not self._use_adaptive_damping:
       state.damping = None
@@ -918,7 +1025,9 @@ class Optimizer(utils.WithStagedMethods):
       momentum: Momentum to use if the optimizer was created with
         ``use_adaptive_momentum=True``, ``None`` otherwise.
       damping: Damping to use if the optimizer was created with
-        ``use_adaptive_damping=True``, ``None`` otherwise.
+        ``use_adaptive_damping=True``, ``None`` otherwise. See discussion
+        of constructor argument ``initial_damping`` for more information about
+        damping.
       global_step_int: The global step as a python int. Note that this must
         match the step internal to the optimizer that is part of its state.
     Returns:
@@ -936,14 +1045,6 @@ class Optimizer(utils.WithStagedMethods):
       raise ValueError("Exactly one of the arguments ``data_iterator`` and "
                        "``batch`` must be provided.")
 
-    if not self.finalized:
-      if batch is not None:
-        fake_batch = jax.tree_util.tree_map(jnp.zeros_like, batch)
-      else:
-        fake_batch, data_iterator = utils.fake_element_from_iterator(
-            data_iterator)
-      self.finalize(params, rng, fake_batch, func_state)
-
     step_counter_int = self.verify_args_and_get_step_counter(
         step_counter=state.step_counter,
         learning_rate=learning_rate,
@@ -953,7 +1054,9 @@ class Optimizer(utils.WithStagedMethods):
     )
 
     if step_counter_int == 0:
+
       if data_iterator is not None:
+
         rng, burnin_rng = self._rng_split(rng, 2)
         state, func_state = self.burnin(
             num_steps=self.num_burnin_steps,
@@ -985,6 +1088,7 @@ class Optimizer(utils.WithStagedMethods):
     """
     return self.l2_reg * utils.matrix_of_inner_products(vectors)
 
+  @utils.auto_scope_method
   def compute_exact_quad_model(
       self,
       vectors: Sequence[utils.Params],
@@ -995,21 +1099,22 @@ class Optimizer(utils.WithStagedMethods):
     if func_args is None:
       raise ValueError("When you have not provided `c_factor_v` you must "
                        "provide `func_args`.")
-    if self._estimator.default_mat_type == "fisher":
+    if self.estimator.default_mat_type == "fisher":
       c_factor_v = tuple(self._implicit.multiply_fisher_factor_transpose
                          (func_args, vi) for vi in vectors)
-    elif self._estimator.default_mat_type == "ggn":
+    elif self.estimator.default_mat_type == "ggn":
       c_factor_v = tuple(self._implicit.multiply_ggn_factor_transpose
                          (func_args, vi) for vi in vectors)
     else:
       raise ValueError(f"Unrecognized estimator.mat_type="
-                       f"{self._estimator.default_mat_type}.")
+                       f"{self.estimator.default_mat_type}.")
 
     return (utils.matrix_of_inner_products(c_factor_v),
             utils.matrix_of_inner_products(vectors),
             utils.vector_of_inner_products(grads, vectors))
 
   @functools.partial(utils.staged, donate_argnums=2)
+  @utils.auto_scope_method
   def compute_approx_quad_model(
       self,
       state: "Optimizer.State",
@@ -1019,12 +1124,13 @@ class Optimizer(utils.WithStagedMethods):
     """Computes the components of the approximate quadratic model."""
     # v_i^T C v_j
     def c_times_v(v):
-      return self._estimator.multiply(
+      return self.estimator.multiply(
           state=state.estimator_state,
           parameter_structured_vector=v,
           identity_weight=0.0,
           exact_power=True,
           use_cached=False,
+          pmap_axis_name=self.pmap_axis_name,
       )
 
     c_vectors = [c_times_v(v_i) for v_i in vectors]
@@ -1083,50 +1189,67 @@ class Optimizer(utils.WithStagedMethods):
     """
     if fixed_coefficients is None:
       fixed_coefficients = (None,) * len(vectors)
+
     if len(vectors) != len(fixed_coefficients):
       raise ValueError("The length of `vectors` must be equal to the length of "
                        "`fixed_coefficients`.")
+
     # pylint: disable=invalid-name
     A_no_diag, D, b = quad_model_parameters
     A = A_no_diag + self.compute_l2_quad_matrix(vectors)
     A_damped = A + damping * D
+
     # Sync
     A, A_damped, b = utils.pmean_if_pmap((A, A_damped, b), self.pmap_axis_name)
     # pylint: enable=invalid-name
 
     if all(c is None for c in fixed_coefficients):
       # Adapt all coefficients
+
       if len(fixed_coefficients) == 1:
         # This special case arises at the first iteration, because all
         # velocities are zeros.
+
         special_case = jnp.logical_and(A_damped[0, 0] == 0, b[0] == 0)
         w = - lax.cond(special_case, lambda: b, lambda: b / A_damped[0])
+
       elif len(fixed_coefficients) == 2:
         # This special case arises at the first iteration, because all
         # velocities are zeros.
+
         to_check = jnp.asarray([A_damped[0, 1], A_damped[1, 0],
                                 A_damped[1, 1], b[1]])
+
         w = - lax.cond(jnp.all(to_check == 0),
                        lambda: jnp.stack([b[0] / A_damped[0, 0], b[1]]),
                        lambda: jnp.linalg.solve(A_damped, b))
       else:
         raise NotImplementedError()
+
     elif all(c is not None for c in fixed_coefficients):
       # No coefficients adapted
+
       w = jnp.asarray(fixed_coefficients)
+
     elif len(vectors) == 2:
       # Exactly one adapted coefficient
+
       w = [None, None]
       index = fixed_coefficients.index(None)
       w[1 - index] = jnp.asarray([fixed_coefficients[1 - index]])
+
       b_extra = A_damped[1 - index, index: index + 1] * w[1 - index]
       A_solve = A_damped[index: index + 1, index: index + 1]  # pylint: disable=invalid-name
       b_solve = b[index: index + 1] + b_extra
+
       w[index] = - b_solve / A_solve[0]
       w = jnp.concatenate(w, axis=0)
+
     else:
       raise NotImplementedError()
+
     quadratic_value = self.compute_quadratic_model_value(A, A_damped, b, w)
+
     return tuple(w), quadratic_value
 
   @utils.staged
@@ -1138,13 +1261,15 @@ class Optimizer(utils.WithStagedMethods):
       current_damping: chex.Array,
   ) -> Tuple[chex.Array, chex.Array]:
     """Computes the reduction ratio and the updated value of the damping."""
+
     # Reduction ratio
     rho = (new_loss - old_loss) / quad_change
+    rho_not_nan = jnp.nan_to_num(rho, nan=-100.0)
 
     # Update damping
-    should_increase = rho < self._damping_lower_threshold
+    should_increase = rho_not_nan < self._damping_lower_threshold
     increased_damping = current_damping / self.damping_decay_factor
-    should_decrease = rho > self._damping_upper_threshold
+    should_decrease = rho_not_nan > self._damping_upper_threshold
     decreased_damping = current_damping * self.damping_decay_factor
 
     # This is basically an if-else statement
@@ -1179,7 +1304,6 @@ def convert_value_and_grad_to_value_func(
   Returns:
     A function that returns only the loss value.
   """
-
   def value_func(*args) -> chex.Array:
     out, _ = value_and_grad_func(*args)
     return out[0] if has_aux else out
@@ -1216,14 +1340,19 @@ def make_func_args(
   """
   if has_state and func_state is None:
     raise ValueError("`func_state=None`, but argument `has_state=True`.")
+
   if has_rng and rng is None:
     raise ValueError("`rng=None`, but argument `has_rng=True`.")
+
   if not has_state and not has_rng:
     return params, batch
+
   elif not has_rng:
     return params, func_state, batch
+
   elif not has_state:
     return params, rng, batch
+
   else:
     return params, func_state, rng, batch
 
@@ -1245,13 +1374,17 @@ def extract_func_outputs(
     any auxiliary data than ``aux`` will be ``None`` and if it does not have a
     state ``func_state`` will be ``None``.
   """
+
   if not has_aux and not has_state:
     return raw_outputs, None, None
+
   loss, other = raw_outputs
+
   if has_aux and has_state:
     func_state, aux = other
   elif has_aux:
     func_state, aux = None, other
   else:
     func_state, aux = other, None
+
   return loss, func_state, aux

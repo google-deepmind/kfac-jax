@@ -22,7 +22,9 @@ from jax.interpreters import batching as jax_batching
 
 # Types for annotation
 T = TypeVar("T")
-ArrayOrXLA = TypeVar("ArrayOrXLA", chex.Array, jax.xla.XlaOp)
+ArrayOrXla = TypeVar("ArrayOrXla", chex.Array, jax.xla.XlaOp)
+Array = chex.Array
+Arrays = Tuple[Array, ...]
 
 
 class LossTag(core.Primitive, Generic[T]):
@@ -37,7 +39,12 @@ class LossTag(core.Primitive, Generic[T]):
   # Whether the primitive returns multiple outputs (from core.Primitive)
   multiple_results = True
 
-  def __init__(self, cls: Type[T], num_inputs: int, num_targets: int = 1):
+  def __init__(
+      self,
+      cls: Type[T],
+      parameter_dependants: Sequence[str],
+      parameter_independants: Sequence[str],
+  ):
     """Initializes a loss tag primitive for the given :class:`~LossFunction` class.
 
     When the primitive is created, the constructor automatically registers it
@@ -49,15 +56,15 @@ class LossTag(core.Primitive, Generic[T]):
     Args:
       cls: The corresponding class of :class:`~LossFunction` that this tag
         represents.
-      num_inputs: The number of inputs to the tag primitive that are assumed
-        to be parameter dependent.
-      num_targets: The number of inputs to the tag primitive, which are assumed
-        to be parameter **independent**.
+      parameter_dependants: The names of each of the parameter **dependent**
+        inputs to the tag.
+      parameter_independants: The names of each of the parameter **independent**
+        inputs to the tag.
     """
     super().__init__(cls.__name__ + "_tag")
     self._cls = cls
-    self._num_inputs = num_inputs
-    self._num_targets = num_targets
+    self._parameter_dependants = tuple(parameter_dependants)
+    self._parameter_independants = tuple(parameter_independants)
 
     jax.xla.register_translation(self, self._xla_translation)
     jax.ad.primitive_jvps[self] = self._jvp
@@ -69,42 +76,54 @@ class LossTag(core.Primitive, Generic[T]):
     jax_batching.primitive_batchers[self] = self._batching
 
   @property
-  def num_inputs(self) -> int:
+  def parameter_dependants_names(self) -> Tuple[str, ...]:
     """The number of parameter dependent inputs to the tag primitive."""
-    return self._num_inputs
+    return self._parameter_dependants
 
   @property
-  def num_targets(self) -> int:
+  def parameter_independants_names(self) -> Tuple[str, ...]:
     """The number of parameter **independent** inputs to the tag primitive."""
-    return self._num_targets
+    return self._parameter_independants
 
-  def loss(self, *args: chex.Array, **kwargs: Any) -> T:
+  @property
+  def arguments_names(self):
+    return self.parameter_dependants_names + self.parameter_independants_names
+
+  def extract_parameter_dependants(
+      self,
+      *args: T,
+      args_names: Sequence[str],
+  ) -> Tuple[T, ...]:
+    assert len(args) == len(args_names)
+    arg_map = dict(zip(args_names, args))
+    return tuple(arg_map[name] for name in self.parameter_dependants_names)
+
+  def loss(self, *args: Array, args_names: Sequence[str]) -> T:
     """Constructs an instance of the corresponding :class:`~LossFunction` class."""
-    return self._cls(*args, **kwargs)
+    assert len(args) == len(args_names)
+    arg_map = dict(zip(args_names, args))
+    return self._cls(**arg_map)
 
   def get_outputs(
       self,
-      *args: ArrayOrXLA
-  ) -> Tuple[ArrayOrXLA, ...]:
+      *args: ArrayOrXla,
+      args_names: Sequence[str],
+  ) -> Tuple[ArrayOrXla, ...]:
     """Verifies that the number of arguments matches expectations."""
-    if len(args) < self.num_inputs:
-      raise ValueError("Inputs to the tag are not enough.")
-    if len(args) > self.num_inputs + self.num_targets:
-      raise ValueError("Inputs to the tag are too many.")
-    if self.num_inputs < len(args) < self.num_inputs + self.num_targets:
-      raise ValueError("Inputs to the tag are not quite enough.")
-    return args
+    assert len(args) == len(args_names)
+    return tuple(arg for name, arg in zip(args_names, args)
+                 if name in self.parameter_dependants_names)
 
-  def impl(self, *operands: chex.Array, **_: Any) -> Tuple[chex.Array, ...]:
-    return self.get_outputs(*operands)
+  def impl(self, *operands: Array, args_names: Sequence[str]) -> Arrays:
+    return self.get_outputs(*operands, args_names=args_names)
 
-  def abstract_eval(self, *operands: chex.Array, **_) -> Tuple[chex.Array, ...]:
-    jax_version = (
-        jax.__version_info__ if hasattr(jax, "__version_info__")
-        else tuple(map(int, jax.__version__.split("."))))
-    if jax_version > (0, 3, 4):
-      return self.get_outputs(*operands), jax.core.no_effects
-    return self.get_outputs(*operands)
+  def abstract_eval(
+      self,
+      *operands: Array,
+      args_names: Sequence[str],
+  ) -> Tuple[Arrays, jax.core.Effects]:
+    return (self.get_outputs(*operands, args_names=args_names),
+            jax.core.no_effects)
 
   def _xla_translation(
       self,
@@ -112,32 +131,33 @@ class LossTag(core.Primitive, Generic[T]):
       avals_in: Sequence[core.AbstractValue],
       avals_out: Sequence[core.AbstractValue],
       *args: jax.xla.XlaOp,
-      **_: Any,
+      args_names: Sequence[str],
   ) -> Tuple[jax.xla.XlaOp, ...]:
     """The XLA translation rule for this primitive (creates a no-op Tuple)."""
     del avals_in, avals_out  # not used
-    return self.get_outputs(*args)
+    return self.get_outputs(*args, args_names=args_names)
 
   def _jvp(
       self,
-      arg_values: Sequence[chex.Array],
-      arg_tangents: Sequence[chex.Array],
-      **kwargs: Any,
-  ) -> Tuple[Tuple[chex.Array, ...], Tuple[chex.Array, ...]]:
+      arg_values: Sequence[Array],
+      arg_tangents: Sequence[Array],
+      args_names: Sequence[str],
+  ) -> Tuple[Arrays, Arrays]:
     """Computes the Jacobian-vector product for the primitive."""
     if len(arg_values) != len(arg_tangents):
       raise ValueError("Values and tangents are not the same length.")
-    primal_output = self.bind(*arg_values, **kwargs)
-    return primal_output, tuple(arg_tangents)
+    primal_output = self.bind(*arg_values, args_names=args_names)
+    tangent_output = self.get_outputs(*arg_tangents, args_names=args_names)
+    return primal_output, tangent_output
 
   def _batching(
       self,
-      batched_args: Sequence[chex.Array],
+      batched_args: Sequence[Array],
       batched_dims: Union[int, Tuple[int, ...]],
-      **kwargs: Any
-  ) -> Tuple[chex.Array, Union[int, Tuple[int, ...]]]:
+      args_names: Sequence[str],
+  ) -> Tuple[Array, Union[int, Tuple[int, ...]]]:
     """Defines how the primitive behaves under :func:`jax.vmap`."""
-    return self.bind(*batched_args, **kwargs), batched_dims
+    return self.bind(*batched_args, args_names=args_names), batched_dims
 
 
 class LayerTag(core.Primitive):
@@ -210,7 +230,7 @@ class LayerTag(core.Primitive):
     params = tuple(all_inputs[self.num_outputs + self.num_inputs:])
     return outputs, inputs, params
 
-  def get_outputs(self, *operands: chex.Array, **_: Any) -> chex.Array:
+  def get_outputs(self, *operands: Array, **_: Any) -> Array:
     """Extracts the ``outputs`` of a layer from the operands of the primitive."""
     outputs = self.split_all_inputs(operands)[0]
     assert self.num_outputs == len(outputs) == 1
@@ -223,7 +243,7 @@ class LayerTag(core.Primitive):
       avals_out: Sequence[core.AbstractValue],
       *args: jax.xla.XlaOp,
       **_: Any,
-  ) -> Tuple[chex.Array, ...]:
+  ) -> Tuple[Array, ...]:
     """The XLA translation rule for this primitive - returns the ``outputs`` ."""
     del xla_context, avals_in, avals_out  # not used
     # Need to return a sequence
@@ -232,18 +252,18 @@ class LayerTag(core.Primitive):
   @classmethod
   def _transpose(
       cls,
-      cotangent: chex.Array,
-      *operands: chex.Array,
+      cotangent: Array,
+      *operands: Array,
       **_: Any,
-  ) -> Tuple[Union[chex.Array, None], ...]:
+  ) -> Tuple[Union[Array, None], ...]:
     """Computes the cotangents of the operands from those of the primitive."""
     del cls  # not used
     return (cotangent,) + (None,) * (len(operands) - 1)
 
-  def impl(self, *operands: chex.Array, **_: Any) -> chex.Array:
+  def impl(self, *operands: Array, **_: Any) -> Array:
     return self.get_outputs(*operands)
 
-  def abstract_eval(self, *operands: chex.Array, **_: Any) -> chex.Array:
+  def abstract_eval(self, *operands: Array, **_: Any) -> Array:
     jax_version = (
         jax.__version_info__ if hasattr(jax, "__version_info__")
         else tuple(map(int, jax.__version__.split("."))))
@@ -253,18 +273,18 @@ class LayerTag(core.Primitive):
 
   def _batching(
       self,
-      batched_operands: Sequence[chex.Array],
+      batched_operands: Sequence[Array],
       batched_dims: Union[int, Tuple[int, ...]],
       **kwargs: Any
-  ) -> Tuple[chex.Array, int]:
+  ) -> Tuple[Array, int]:
     """Defines how the primitive behaves under :func:`jax.vmap`."""
     return self.bind(*batched_operands, **kwargs), batched_dims[0]
 
 
 def generic_get_outputs(
     self: LayerTag,
-    *operands: chex.Array,
-) -> chex.Array:
+    *operands: Array,
+) -> Array:
   """Special logic for generic tag's ``get_outputs``."""
   # The generic tags have no `inputs` and `outputs` so instead they return just
   # the parameters.
@@ -280,7 +300,7 @@ setattr(generic, "get_outputs",
         types.MethodType(generic_get_outputs, generic))
 
 
-def register_generic(parameter: chex.Array) -> chex.Array:
+def register_generic(parameter: Array) -> Array:
   """Registers a generic tag around the provided parameter array."""
   return generic.bind(parameter)
 
@@ -289,12 +309,12 @@ dense = LayerTag(name="dense_tag", num_inputs=1, num_outputs=1)
 
 
 def register_dense(
-    y: chex.Array,
-    x: chex.Array,
-    w: chex.Array,
-    b: Optional[chex.Array] = None,
+    y: Array,
+    x: Array,
+    w: Array,
+    b: Optional[Array] = None,
     **kwargs,
-) -> chex.Array:
+) -> Array:
   """Registers a dense layer: ``y = matmul(x, w) + b``."""
   if b is None:
     return dense.bind(y, x, w, **kwargs)
@@ -305,12 +325,12 @@ conv2d = LayerTag(name="conv2d_tag", num_inputs=1, num_outputs=1)
 
 
 def register_conv2d(
-    y: chex.Array,
-    x: chex.Array,
-    w: chex.Array,
-    b: Optional[chex.Array] = None,
+    y: Array,
+    x: Array,
+    w: Array,
+    b: Optional[Array] = None,
     **kwargs: Any
-) -> chex.Array:
+) -> Array:
   """Registers a 2d convolution layer: ``y = conv2d(x, w) + b``."""
   if b is None:
     return conv2d.bind(y, x, w, **kwargs)
@@ -322,11 +342,11 @@ scale_and_shift = LayerTag(
 
 
 def register_scale_and_shift(
-    y: chex.Array,
-    x: chex.Array,
-    scale: Optional[chex.Array] = None,
-    shift: Optional[chex.Array] = None,
-) -> chex.Array:
+    y: Array,
+    x: Array,
+    scale: Optional[Array] = None,
+    shift: Optional[Array] = None,
+) -> Array:
   """Registers a scale and shift layer: ``y = x * scale + shift``."""
   if scale is not None and shift is not None:
     args = (scale, shift)

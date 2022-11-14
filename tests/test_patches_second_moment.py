@@ -101,7 +101,7 @@ class TestPatchesMoments(parameterized.TestCase):
       self,
       c: int,
       h_and_w: int,
-      kernel_shape: Tuple[int, int],
+      kernel_spatial_shape: Tuple[int, int],
       strides: Tuple[int, int],
       padding: Union[str, Tuple[Tuple[int, int], Tuple[int, int]]],
       data_format: str,
@@ -110,45 +110,64 @@ class TestPatchesMoments(parameterized.TestCase):
     """Tests the patches second moment calculation for 2D convolution."""
     rng = jax.random.PRNGKey(1214321)
     n = 5
+    axis = data_format.index("C")
+
     if data_format == "NHWC":
       shape = (n, h_and_w, h_and_w, c)
     else:
       shape = (n, c, h_and_w, h_and_w)
+    w_shape = (*kernel_spatial_shape, c, c + 1)
+    feature_group_count = c if per_channel else 1
+
     num_locations = psm.num_conv_locations(
         (h_and_w, h_and_w),
-        kernel_spatial_shape=kernel_shape,
+        kernel_spatial_shape=kernel_spatial_shape,
         spatial_strides=strides,
         spatial_padding=padding)
+    normalizer = n * num_locations
 
     ones_inputs = jnp.ones(shape)
     key, rng = jax.random.split(rng)
     random_inputs = jax.random.normal(key, shape)
     random_inputs = jnp.asarray(random_inputs.astype(ones_inputs.dtype))
+    random_w = jax.random.uniform(rng, w_shape, dtype=ones_inputs.dtype)
+    random_out = jax.lax.conv_general_dilated(
+        lhs=random_inputs,
+        rhs=random_w,
+        window_strides=strides,
+        padding=padding,
+        dimension_numbers=(data_format, "HWIO", data_format)
+    )
+    random_out = jnp.sum(jnp.square(random_out), axis=axis)
+    weighting_array = 1.0 + jax.random.uniform(rng, shape=random_out.shape)
+
     for inputs in (ones_inputs, random_inputs):
       matrix, vector = psm.patches_moments_explicit(
           inputs,
-          kernel_shape=kernel_shape,
+          kernel_spatial_shape=kernel_spatial_shape,
           strides=strides,
           padding=padding,
           data_format=data_format,
-          per_channel=per_channel,
+          feature_group_count=feature_group_count,
           unroll_loop=True,
           precision=jax.lax.Precision.HIGHEST,
+          weighting_array=weighting_array,
       )
       matrix_fast, vector_fast = psm.patches_moments(
           inputs,
-          kernel_shape=kernel_shape,
+          kernel_spatial_shape=kernel_spatial_shape,
           strides=strides,
           padding=padding,
           data_format=data_format,
-          per_channel=per_channel,
+          feature_group_count=feature_group_count,
           precision=jax.lax.Precision.HIGHEST,
+          weighting_array=weighting_array,
       )
 
       # For accurate results we compare the mean over the batch and locations
-      normalizer = n * num_locations
       matrix, vector, matrix_fast, vector_fast = jax.tree_util.tree_map(
-          lambda x: x / normalizer, (matrix, vector, matrix_fast, vector_fast)  # pylint: disable=cell-var-from-loop
+          lambda x: x / normalizer, (matrix, vector, matrix_fast, vector_fast)
+          # pylint: disable=cell-var-from-loop
       )
       self.assertAllClose(matrix, matrix_fast)
       self.assertAllClose(vector, vector_fast)

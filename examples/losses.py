@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Utility functions for computing and automatically registering losses."""
-from typing import Dict, Sequence, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 import chex
 import haiku as hk
@@ -41,11 +41,11 @@ def sigmoid_cross_entropy(
     logits: chex.Array,
     labels: chex.Array,
     weight: float = 1.0,
-    # register_loss: bool = True,
+    register_loss: bool = True,
 ) -> chex.Array:
   """Sigmoid cross-entropy loss."""
-  # if register_loss:
-  kfac_jax.register_sigmoid_cross_entropy_loss(logits, labels, weight)
+  if register_loss:
+    kfac_jax.register_sigmoid_cross_entropy_loss(logits, labels, weight)
   # Code is copied from Tensorflow.
   zeros = jnp.zeros_like(logits)
   relu_logits = jnp.where(logits >= zeros, logits, zeros)
@@ -58,38 +58,48 @@ def softmax_cross_entropy(
     logits: chex.Array,
     labels: chex.Array,
     weight: float = 1.0,
-    # register_loss: bool = True,
+    register_loss: bool = True,
+    mask: Optional[chex.Array] = None,
 ) -> chex.Array:
   """Softmax cross entropy loss."""
-  # if register_loss:
-  kfac_jax.register_softmax_cross_entropy_loss(logits, labels, weight)
+
+  if register_loss:
+    kfac_jax.register_softmax_cross_entropy_loss(logits, targets=labels,
+                                                 mask=mask, weight=weight)
+
   max_logits = jnp.max(logits, keepdims=True, axis=-1)
   logits = logits - max_logits
   log_z = special.logsumexp(logits, axis=-1)
+
   if logits.shape == labels.shape:
     # Dense labels
-    return weight * (- jnp.sum(logits * labels, axis=-1) + log_z)
+    loss = weight * (- jnp.sum(logits * labels, axis=-1) + log_z)
   elif logits.ndim == labels.ndim + 1:
     # One hot encoded labels
     idx = jnp.arange(labels.shape[0])
-    return weight * (- logits[idx, labels] + log_z)
+    loss = weight * (- logits[idx, labels] + log_z)
   else:
     raise ValueError(f"The provided labels must have the same rank as the "
                      f"logits - {logits.ndim}, or one less, but got "
                      f"{labels.ndim}.")
+
+  if mask is not None:
+    return loss * mask
+  else:
+    return loss
 
 
 def squared_error(
     prediction: chex.Array,
     targets: chex.Array,
     weight: float = 1.0,
-    # register_loss: bool = True,
+    register_loss: bool = True,
 ) -> chex.Array:
   """Squared error loss."""
   if prediction.shape != targets.shape:
     raise ValueError("prediction and targets should have the same shape.")
-  # if register_loss:
-  kfac_jax.register_squared_error_loss(prediction, targets, weight)
+  if register_loss:
+    kfac_jax.register_squared_error_loss(prediction, targets, weight)
   return weight * jnp.sum(jnp.square(prediction - targets), axis=-1)
 
 
@@ -146,17 +156,30 @@ def classifier_loss_and_stats(
     label_smoothing: float = 0.0,
     top_k_stats: Sequence[int] = (1, 5),
     average_loss: bool = True,
+    register_loss: bool = True,
+    mask: Optional[chex.Array] = None,
 ) -> Tuple[chex.Array, Dict[str, chex.Array]]:
   """Softmax cross-entropy with regularizer and accuracy statistics."""
 
   labels = add_label_smoothing(labels_as_int, label_smoothing, logits.shape[-1])
 
-  softmax_loss = softmax_cross_entropy(logits, labels)
-  averaged_raw_loss = jnp.mean(softmax_loss, axis=0)
+  softmax_loss = softmax_cross_entropy(logits, labels,
+                                       register_loss=register_loss,
+                                       mask=mask)
+  if mask is not None:
+    total_non_masked = jnp.sum(mask)
+  else:
+    total_non_masked = softmax_loss.shape[0]
+
+  averaged_raw_loss = jnp.sum(softmax_loss, axis=0) / total_non_masked
+
   loss = averaged_raw_loss if average_loss else softmax_loss
 
   regularizer = l2_regularizer(
       params, haiku_exclude_batch_norm, haiku_exclude_biases)
+
+  if mask is not None and not average_loss:
+    regularizer = regularizer * mask
 
   regularized_loss = loss + l2_reg * regularizer
 

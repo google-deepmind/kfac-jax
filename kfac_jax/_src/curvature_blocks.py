@@ -27,7 +27,12 @@ from kfac_jax._src import utils
 import numpy as np
 
 # Types for annotation
-ScalarOrSequence = Union[chex.Scalar, Sequence[chex.Scalar]]
+Numeric = chex.Numeric
+Scalar = chex.Scalar
+PRNGKey = chex.PRNGKey
+Shape = chex.Shape
+Array = chex.Array
+ScalarOrSequence = Union[Scalar, Sequence[Scalar]]
 
 # Special global variables
 # The default value that would be used for the argument
@@ -64,7 +69,6 @@ def get_max_parallel_elements() -> int:
   Returns:
     The default value for maximum number of parallel elements.
   """
-  global _MAX_PARALLEL_ELEMENTS
   return _MAX_PARALLEL_ELEMENTS
 
 
@@ -92,16 +96,17 @@ def get_default_eigen_decomposition_threshold() -> int:
   Returns:
     The default value of the eigen decomposition threshold.
   """
-  global _DEFAULT_EIGEN_DECOMPOSITION_THRESHOLD
   return _DEFAULT_EIGEN_DECOMPOSITION_THRESHOLD
 
 
 def _to_real_set(
     number_or_sequence: Optional[ScalarOrSequence]
-) -> Set[chex.Scalar]:
+) -> Set[Scalar]:
   """Converts the optional number or sequence to a set."""
   if number_or_sequence is None:
     return set()
+  elif isinstance(number_or_sequence, set):
+    return number_or_sequence
   elif isinstance(number_or_sequence, (float, int)):
     return {number_or_sequence}  # pytype: disable=bad-return-type
   elif (isinstance(number_or_sequence, collections.abc.Sequence) and
@@ -118,12 +123,12 @@ class CurvatureBlock(utils.Finalizable):
   A CurvatureBlock defines a curvature matrix to be estimated, and gives methods
   to multiply powers of this with a vector. Powers can be computed exactly or
   with a class-determined approximation. Cached versions of the powers can be
-  pre-computed to make repeated multiplications cheaper. During initialization
+  pre-computed to make repeated multiplications cheaper. During initialization,
   you would have to explicitly specify all powers that you will need to cache.
   """
 
   @utils.pytree_dataclass
-  class State:
+  class State(utils.State):
     """Persistent state of the block.
 
     Any subclasses of :class:`~CurvatureBlock` should also internally extend
@@ -133,10 +138,9 @@ class CurvatureBlock(utils.Finalizable):
       cache: A dictionary, containing any state data that is updated on
         irregular intervals, such as inverses, eigenvalues, etc. Elements of
         this are updated via calls to :func:`~CurvatureBlock.update_cache`, and
-        do not necessarily correspond to the the most up to date curvature
-        estimate.
+        do not necessarily correspond to the most up-to-date curvature estimate.
     """
-    cache: Optional[Dict[str, Union[chex.Array, Dict[str, chex.Array]]]]
+    cache: Optional[Dict[str, Union[Array, Dict[str, Array]]]]
 
   def __init__(self, layer_tag_eq: tags.LayerTagEqn, name: str):
     """Initializes the block.
@@ -156,71 +160,110 @@ class CurvatureBlock(utils.Finalizable):
   @property
   def layer_tag_primitive(self) -> tags.LayerTag:
     """The :class:`jax.core.Primitive` corresponding to the block's tag equation."""
+
     primitive = self._layer_tag_eq.primitive
     assert isinstance(primitive, tgm.tags.LayerTag)
+
     return primitive
 
   @property
   def parameter_variables(self) -> Tuple[jax.core.Var, ...]:
     """The parameter variables of the underlying Jax equation."""
+
     param_vars = []
+
     for p in self.layer_tag_primitive.split_all_inputs(
         self._layer_tag_eq.invars)[2]:
+
       assert isinstance(p, jax.core.Var)
       param_vars.append(p)
+
     return tuple(param_vars)
 
   @property
-  def outputs_shapes(self) -> Tuple[chex.Shape, ...]:
+  def outputs_shapes(self) -> Tuple[Shape, ...]:
     """The shapes of the output variables of the block's tag equation."""
+
     output_vars = self.layer_tag_primitive.split_all_inputs(
         self._layer_tag_eq.invars)[0]
+
     return jax.tree_util.tree_map(lambda x: x.aval.shape, output_vars)
 
   @property
-  def inputs_shapes(self) -> Tuple[chex.Shape, ...]:
+  def inputs_shapes(self) -> Tuple[Shape, ...]:
     """The shapes of the input variables of the block's tag equation."""
+
     input_vars = self.layer_tag_primitive.split_all_inputs(
         self._layer_tag_eq.invars)[1]
+
     return jax.tree_util.tree_map(lambda x: x.aval.shape, input_vars)
 
   @property
-  def parameters_shapes(self) -> Tuple[chex.Shape, ...]:
+  def parameters_shapes(self) -> Tuple[Shape, ...]:
     """The shapes of the parameter variables of the block's tag equation."""
-    return tuple(jax.tree_util.tree_map(lambda x: tuple(x.aval.shape),
-                              self.parameter_variables))
+
+    return tuple(jax.tree_util.tree_map(
+        lambda x: tuple(x.aval.shape), self.parameter_variables))
 
   @property
   def parameters_canonical_order(self) -> Tuple[int, ...]:
     """The canonical order of the parameter variables."""
+
     return tuple(np.argsort([p.count for p in self.parameter_variables]))
 
   @property
   def layer_tag_extra_params(self) -> Dict[str, Any]:
     """Any extra parameters of passed into the Jax primitive of this block."""
+
     return self._layer_tag_eq.params
 
   @property
   def number_of_parameters(self) -> int:
     """Number of parameter variables of this block."""
+
     return len(self.parameters_shapes)
 
   @property
   def dim(self) -> int:
     """The number of elements of all parameter variables together."""
+
     return sum(utils.product(shape) for shape in self.parameters_shapes)
 
-  @property
-  def scale(self) -> chex.Numeric:
-    """Any additional scaling factor, not present in the Jax equation."""
+  def scale(self, state: "CurvatureBlock.State", use_cache: bool) -> Numeric:
+    """A scalar pre-factor of the curvature approximation.
+
+    Importantly, all methods assume that whenever a user requests cached values,
+    any state dependant scale is taken into account by the cache (e.g. either
+    stored explicitly and used or mathematically added to values).
+
+    Args:
+      state: The state for this block.
+      use_cache: Whether the method requesting this is using cached values or
+        not.
+
+    Returns:
+      A scalar value to be multiplied with any unscaled block representation.
+    """
+    if use_cache:
+      return self.fixed_scale()
+    return self.fixed_scale() * self.state_dependent_scale(state)
+
+  def fixed_scale(self) -> Numeric:
+    """A fixed scalar pre-factor of the curvature (e.g. constant)."""
+    return 1.0
+
+  def state_dependent_scale(self, state: "CurvatureBlock.State") -> Numeric:
+    """A scalar pre-factor of the curvature, computed from the most fresh curvature estimate."""
     return 1.0
 
   def __str__(self):
+
     return f"{self._name!r}[{self.parameters_shapes!r}]"
 
+  @utils.auto_scope_method
   def init(
       self,
-      rng: chex.PRNGKey,
+      rng: PRNGKey,
       exact_powers_to_cache: Optional[ScalarOrSequence],
       approx_powers_to_cache: Optional[ScalarOrSequence],
       cache_eigenvalues: bool,
@@ -232,7 +275,7 @@ class CurvatureBlock(utils.Finalizable):
       exact_powers_to_cache: A single value, or multiple values in a list, which
           specify which exact matrix powers the block should be caching. Matrix
           powers, which are expected to be used in
-          :func:`~CurvatureBlock.multiply_matrix_power`,
+          :func:`~CurvatureBlock.multiply_matpower`,
           :func:`~CurvatureBlock.multiply_inverse` or
           :func:`~CurvatureBlock.multiply`  with ``exact_power=True`` and
           ``use_cached=True`` must be provided here.
@@ -257,22 +300,24 @@ class CurvatureBlock(utils.Finalizable):
   @abc.abstractmethod
   def _init(
       self,
-      rng: chex.PRNGKey,
-      exact_powers_to_cache: Set[chex.Scalar],
-      approx_powers_to_cache: Set[chex.Scalar],
+      rng: PRNGKey,
+      exact_powers_to_cache: Set[Scalar],
+      approx_powers_to_cache: Set[Scalar],
       cache_eigenvalues: bool,
   ) -> "CurvatureBlock.State":
     """The non-public interface of ``init``."""
 
+  @utils.auto_scope_method
   def multiply_matpower(
       self,
       state: "CurvatureBlock.State",
-      vector: Sequence[chex.Array],
-      identity_weight: chex.Numeric,
-      power: chex.Scalar,
+      vector: Sequence[Array],
+      identity_weight: Numeric,
+      power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[chex.Array, ...]:
+      pmap_axis_name: Optional[str],
+  ) -> Tuple[Array, ...]:
     """Computes ``(BlockMatrix + identity_weight I)**power`` times ``vector``.
 
     Args:
@@ -284,9 +329,9 @@ class CurvatureBlock(utils.Finalizable):
         ``use_cached=False`` it is guaranteed that this argument will be used in
         the computation. When returning cached values, this argument *may* be
         ignored in favor whatever value was last passed to
-        :func:`~CurvatureBlock.update_cached_estimate`. The precise semantics
-        of this depend on the concrete subclass and its particular behavior with
-        regards to caching.
+        :func:`~CurvatureBlock.update_cache`. The precise semantics of this
+        depend on the concrete subclass and its particular behavior in regard to
+        caching.
       power: The power to which to raise the matrix.
       exact_power: Specifies whether to compute the exact matrix power of
         ``BlockMatrix + identity_weight I``. When this argument is ``False``
@@ -297,45 +342,50 @@ class CurvatureBlock(utils.Finalizable):
       use_cached: Whether to use a cached version for computing the product or
         to use the most recent curvature estimates. The cached version is
         going to be *at least* as fresh as the value provided to the last call
-        to :func:`~CurvatureBlock.update_cached_estimate` with the same value of
-        `power`.
+        to :func:`~CurvatureBlock.update_cache` with the same value of ``power``
+      pmap_axis_name: The name of any pmap axis, which may be used to
+        parallelize the computation over devices in a block-wise fashion.
+        .
     Returns:
       A tuple of arrays, representing the result of the matrix-vector product.
     """
+    scale = self.scale(state, use_cached)
     result = self._multiply_matpower_unscaled(
         state=state,
         vector=vector,
-        identity_weight=(identity_weight if self.scale == 1.0 else
-                         identity_weight / self.scale),
+        identity_weight=identity_weight / scale,
         power=power,
         exact_power=exact_power,
         use_cached=use_cached,
+        pmap_axis_name=pmap_axis_name,
     )
-    if self.scale != 1.0:
-      return utils.scalar_mul(result, jnp.power(self.scale, power))
-    return result
+
+    return utils.scalar_mul(result, jnp.power(scale, power))
 
   @abc.abstractmethod
   def _multiply_matpower_unscaled(
       self,
       state: "CurvatureBlock.State",
-      vector: Sequence[chex.Array],
-      identity_weight: chex.Numeric,
-      power: chex.Scalar,
+      vector: Sequence[Array],
+      identity_weight: Numeric,
+      power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[chex.Array, ...]:
+      pmap_axis_name: Optional[str],
+  ) -> Tuple[Array, ...]:
     """Performs matrix-vector multiplication, ignoring ``self.scale``."""
 
   def multiply(
       self,
       state: "CurvatureBlock.State",
-      vector: Sequence[chex.Array],
-      identity_weight: chex.Numeric,
+      vector: Sequence[Array],
+      identity_weight: Numeric,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[chex.Array, ...]:
+      pmap_axis_name: Optional[str],
+  ) -> Tuple[Array, ...]:
     """Computes ``(BlockMatrix + identity_weight I)`` times ``vector``."""
+
     return self.multiply_matpower(
         state=state,
         vector=vector,
@@ -343,17 +393,20 @@ class CurvatureBlock(utils.Finalizable):
         power=1,
         exact_power=exact_power,
         use_cached=use_cached,
+        pmap_axis_name=pmap_axis_name,
     )
 
   def multiply_inverse(
       self,
       state: "CurvatureBlock.State",
-      vector: Sequence[chex.Array],
-      identity_weight: chex.Numeric,
+      vector: Sequence[Array],
+      identity_weight: Numeric,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[chex.Array, ...]:
+      pmap_axis_name: Optional[str],
+  ) -> Tuple[Array, ...]:
     """Computes ``(BlockMatrix + identity_weight I)^-1`` times ``vector``."""
+
     return self.multiply_matpower(
         state=state,
         vector=vector,
@@ -361,13 +414,15 @@ class CurvatureBlock(utils.Finalizable):
         power=-1,
         exact_power=exact_power,
         use_cached=use_cached,
+        pmap_axis_name=pmap_axis_name,
     )
 
+  @utils.auto_scope_method
   def eigenvalues(
       self,
       state: "CurvatureBlock.State",
       use_cached: bool,
-  ) -> chex.Array:
+  ) -> Array:
     """Computes the eigenvalues for this block approximation.
 
     Args:
@@ -375,32 +430,33 @@ class CurvatureBlock(utils.Finalizable):
       use_cached: Whether to use a cached versions of the eigenvalues or to use
         the most recent curvature estimates to compute them. The cached version
         are going to be *at least* as fresh as the last time you called
-        :func:`~CurvatureBlock.update_cached_estimate` with ``eigenvalues=True``
-        .
+        :func:`~CurvatureBlock.update_cache` with ``eigenvalues=True``.
 
     Returns:
       An array containing the eigenvalues of the block.
     """
-    eigenvalues = self._eigenvalues_unscaled(state, use_cached) * self.scale
+    eigenvalues = self._eigenvalues_unscaled(state, use_cached)
+
     assert eigenvalues.size == self.dim
-    return eigenvalues
+
+    return self.scale(state, use_cached) * eigenvalues
 
   @abc.abstractmethod
   def _eigenvalues_unscaled(
       self,
       state: "CurvatureBlock.State",
       use_cached: bool,
-  ) -> chex.Array:
+  ) -> Array:
     """Computes the eigenvalues for this block, ignoring `self.scale`."""
 
   @abc.abstractmethod
   def update_curvature_matrix_estimate(
       self,
       state: "CurvatureBlock.State",
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> "CurvatureBlock.State":
     """Updates the block's curvature estimates using the ``info`` provided.
@@ -425,10 +481,11 @@ class CurvatureBlock(utils.Finalizable):
           computing the updates.
     """
 
+  @utils.auto_scope_method
   def update_cache(
       self,
       state: "CurvatureBlock.State",
-      identity_weight: chex.Numeric,
+      identity_weight: Numeric,
       exact_powers: Optional[ScalarOrSequence],
       approx_powers: Optional[ScalarOrSequence],
       eigenvalues: bool,
@@ -446,15 +503,15 @@ class CurvatureBlock(utils.Finalizable):
       eigenvalues: Specifies whether to update the cached eigenvalues
           of the block. If they have not been cached before, this will create an
           entry with them in the block's cache.
-      pmap_axis_name: The name of any pmap axis, which wil be used for
+      pmap_axis_name: The name of any pmap axis, which may be used for
           aggregating any computed values over multiple devices.
+
     Returns:
-      None
+        The updated state.
     """
     return self._update_cache(
         state=state,
-        identity_weight=(identity_weight if self.scale == 1.0 else
-                         identity_weight / self.scale),
+        identity_weight=identity_weight / self.scale(state, False),
         exact_powers=_to_real_set(exact_powers),
         approx_powers=_to_real_set(approx_powers),
         eigenvalues=eigenvalues,
@@ -465,20 +522,21 @@ class CurvatureBlock(utils.Finalizable):
   def _update_cache(
       self,
       state: "CurvatureBlock.State",
-      identity_weight: chex.Numeric,
-      exact_powers: Set[chex.Scalar],
-      approx_powers: Set[chex.Scalar],
+      identity_weight: Numeric,
+      exact_powers: Set[Scalar],
+      approx_powers: Set[Scalar],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> "CurvatureBlock.State":
     """The cache updating function, ignoring ``self.scale``."""
 
-  def to_dense_matrix(self, state: "CurvatureBlock.State") -> chex.Array:
+  @utils.auto_scope_method
+  def to_dense_matrix(self, state: "CurvatureBlock.State") -> Array:
     """Returns a dense representation of the approximate curvature matrix."""
-    return self.scale * self._to_dense_unscaled(state)
+    return self.scale(state, False) * self._to_dense_unscaled(state)
 
   @abc.abstractmethod
-  def _to_dense_unscaled(self, state: "CurvatureBlock.State") -> chex.Array:
+  def _to_dense_unscaled(self, state: "CurvatureBlock.State") -> Array:
     """A dense representation of the curvature, ignoring ``self.scale``."""
 
 
@@ -489,7 +547,7 @@ class ScaledIdentity(CurvatureBlock):
       self,
       layer_tag_eq: tags.LayerTagEqn,
       name: str,
-      scale: chex.Numeric = 1.0,
+      scale: Numeric = 1.0,
   ):
     """Initializes the block.
 
@@ -497,23 +555,24 @@ class ScaledIdentity(CurvatureBlock):
       layer_tag_eq: The Jax equation corresponding to the layer tag, that this
         block will approximate the curvature to.
       name: The name of this block.
-      scale: The extra scale of the identity matrix.
+      scale: The scale of the identity matrix.
     """
     self._scale = scale
     super().__init__(layer_tag_eq, name)
 
-  @property
-  def scale(self) -> chex.Numeric:
+  def fixed_scale(self) -> Numeric:
     return self._scale
 
   def _init(
       self,
-      rng: chex.PRNGKey,
-      exact_powers_to_cache: Set[chex.Scalar],
-      approx_powers_to_cache: Set[chex.Scalar],
+      rng: PRNGKey,
+      exact_powers_to_cache: Set[Scalar],
+      approx_powers_to_cache: Set[Scalar],
       cache_eigenvalues: bool,
   ) -> CurvatureBlock.State:
+
     del rng, exact_powers_to_cache, approx_powers_to_cache  # Unused
+
     return CurvatureBlock.State(
         cache=None,
     )
@@ -521,18 +580,24 @@ class ScaledIdentity(CurvatureBlock):
   def _multiply_matpower_unscaled(
       self,
       state: CurvatureBlock.State,
-      vector: Sequence[chex.Array],
-      identity_weight: chex.Numeric,
-      power: chex.Scalar,
+      vector: Sequence[Array],
+      identity_weight: Numeric,
+      power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[chex.Array, ...]:
-    del exact_power, use_cached  # Unused
+      pmap_axis_name: Optional[str],
+  ) -> Tuple[Array, ...]:
+
+    del exact_power, use_cached, pmap_axis_name  # Unused
+
     identity_weight = identity_weight + 1.0
+
     if power == 1:
       return jax.tree_util.tree_map(lambda x: identity_weight * x, vector)
+
     elif power == -1:
       return jax.tree_util.tree_map(lambda x: x / identity_weight, vector)
+
     else:
       identity_weight = jnp.power(identity_weight, power)
       return jax.tree_util.tree_map(lambda x: identity_weight * x, vector)
@@ -541,32 +606,35 @@ class ScaledIdentity(CurvatureBlock):
       self,
       state: "CurvatureBlock.State",
       use_cached: bool,
-  ) -> chex.Array:
+  ) -> Array:
     return jnp.ones([self.dim])
 
+  @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
       state: CurvatureBlock.State,
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> CurvatureBlock.State:
-    return state
+
+    return state.copy()
 
   def _update_cache(
       self,
       state: CurvatureBlock.State,
-      identity_weight: chex.Numeric,
-      exact_powers: Set[chex.Scalar],
-      approx_powers: Set[chex.Scalar],
+      identity_weight: Numeric,
+      exact_powers: Set[Scalar],
+      approx_powers: Set[Scalar],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> CurvatureBlock.State:
-    return state
 
-  def _to_dense_unscaled(self, state: CurvatureBlock.State) -> chex.Array:
+    return state.copy()
+
+  def _to_dense_unscaled(self, state: CurvatureBlock.State) -> Array:
     del state  # not used
     return jnp.eye(self.dim)
 
@@ -587,12 +655,14 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
   def _init(
       self,
-      rng: chex.PRNGKey,
-      exact_powers_to_cache: Set[chex.Scalar],
-      approx_powers_to_cache: Set[chex.Scalar],
+      rng: PRNGKey,
+      exact_powers_to_cache: Set[Scalar],
+      approx_powers_to_cache: Set[Scalar],
       cache_eigenvalues: bool,
   ) -> "Diagonal.State":
+
     del rng
+
     return Diagonal.State(
         cache=None,
         diagonal_factors=tuple(utils.WeightedMovingAverage.zero(s)
@@ -602,14 +672,20 @@ class Diagonal(CurvatureBlock, abc.ABC):
   def _multiply_matpower_unscaled(
       self,
       state: "Diagonal.State",
-      vector: Sequence[chex.Array],
-      identity_weight: chex.Numeric,
-      power: chex.Scalar,
+      vector: Sequence[Array],
+      identity_weight: Numeric,
+      power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[chex.Array, ...]:
+      pmap_axis_name: Optional[str],
+  ) -> Tuple[Array, ...]:
+
+    del pmap_axis_name  # unused
+
     factors = tuple(f.value + identity_weight for f in state.diagonal_factors)
+
     assert len(factors) == len(vector)
+
     if power == 1:
       return tuple(f * v for f, v in zip(factors, vector))
     elif power == -1:
@@ -621,33 +697,38 @@ class Diagonal(CurvatureBlock, abc.ABC):
       self,
       state: "Diagonal.State",
       use_cached: bool,
-  ) -> chex.Array:
+  ) -> Array:
     return jnp.concatenate([f.value.flatten() for f in state.diagonal_factors],
                            axis=0)
 
+  @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
       state: "Diagonal.State",
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> "Diagonal.State":
+
+    # This function call will return a copy of state:
     state = self._update_curvature_matrix_estimate(
         state, estimation_data, ema_old, ema_new, batch_size, pmap_axis_name)
+
     for factor in state.diagonal_factors:
       factor.sync(pmap_axis_name)
+
     return state
 
   @abc.abstractmethod
   def _update_curvature_matrix_estimate(
       self,
       state: "Diagonal.State",
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> "Diagonal.State":
     pass
@@ -655,18 +736,21 @@ class Diagonal(CurvatureBlock, abc.ABC):
   def _update_cache(
       self,
       state: "Diagonal.State",
-      identity_weight: chex.Numeric,
-      exact_powers: chex.Numeric,
-      approx_powers: chex.Numeric,
+      identity_weight: Numeric,
+      exact_powers: Numeric,
+      approx_powers: Numeric,
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> "Diagonal.State":
-    return state
 
-  def _to_dense_unscaled(self, state: "Diagonal.State") -> chex.Array:
+    return state.copy()
+
+  def _to_dense_unscaled(self, state: "Diagonal.State") -> Array:
+
     # Extract factors in canonical order
     factors = [state.diagonal_factors[i].value.flatten()
                for i in self.parameters_canonical_order]
+
     # Construct diagonal matrix
     return jnp.diag(jnp.concatenate(factors, axis=0))
 
@@ -703,65 +787,81 @@ class Full(CurvatureBlock, abc.ABC):
        any matrix power). If this is ``None`` will use the value returned from
        :func:`~get_default_eigen_decomposition_threshold()`.
     """
+
     if eigen_decomposition_threshold is None:
       threshold = get_default_eigen_decomposition_threshold()
       self._eigen_decomposition_threshold = threshold
     else:
       self._eigen_decomposition_threshold = eigen_decomposition_threshold
+
     super().__init__(layer_tag_eq, name)
 
   def parameters_list_to_single_vector(
       self,
-      parameters_shaped_list: Sequence[chex.Array],
-  ) -> chex.Array:
+      parameters_shaped_list: Sequence[Array],
+  ) -> Array:
     """Converts values corresponding to parameters of the block to vector."""
+
     if len(parameters_shaped_list) != self.number_of_parameters:
       raise ValueError(f"Expected a list of {self.number_of_parameters} values,"
                        f" but got {len(parameters_shaped_list)} instead.")
+
     for array, shape in zip(parameters_shaped_list, self.parameters_shapes):
       if array.shape != shape:
         raise ValueError(f"Expected a value of shape {shape}, but got "
                          f"{array.shape} instead.")
+
     return jnp.concatenate([v.flatten() for v in parameters_shaped_list])
 
   def single_vector_to_parameters_list(
       self,
-      vector: chex.Array,
-  ) -> Tuple[chex.Array, ...]:
+      vector: Array,
+  ) -> Tuple[Array, ...]:
     """Reverses the transformation ``self.parameters_list_to_single_vector``."""
+
     if vector.ndim != 1:
       raise ValueError(f"Expecting a vector, got {vector.ndim}-tensor.")
+
     if vector.size != self.dim:
       raise ValueError(f"Expected a vector of size {self.dim}, but got "
                        f"{vector.size} instead.")
+
     parameters_shaped_list = []
     index = 0
+
     for shape in self.parameters_shapes:
       size = utils.product(shape)
       parameters_shaped_list.append(vector[index: index + size].reshape(shape))
       index += size
+
     assert index == self.dim
+
     return tuple(parameters_shaped_list)
 
   def _init(
       self,
-      rng: chex.PRNGKey,
-      exact_powers_to_cache: Set[chex.Scalar],
-      approx_powers_to_cache: Set[chex.Scalar],
+      rng: PRNGKey,
+      exact_powers_to_cache: Set[Scalar],
+      approx_powers_to_cache: Set[Scalar],
       cache_eigenvalues: bool,
   ) -> "Full.State":
+
     del rng
+
     # This block does not have any notion of "approximate" powers
     exact_powers_to_cache = exact_powers_to_cache | approx_powers_to_cache
     cache = {}
+
     if len(exact_powers_to_cache) > self._eigen_decomposition_threshold:
       cache["eigenvalues"] = jnp.zeros([self.dim])
       cache["eigen_vectors"] = jnp.zeros([self.dim, self.dim])
     elif cache_eigenvalues:
       cache["eigenvalues"] = jnp.zeros([self.dim])
+
     if len(exact_powers_to_cache) <= self._eigen_decomposition_threshold:
       for power in exact_powers_to_cache:
         cache[str(power)] = jnp.zeros([self.dim, self.dim])
+
     return Full.State(
         cache=cache,
         matrix=utils.WeightedMovingAverage.zero((self.dim, self.dim)),
@@ -770,50 +870,83 @@ class Full(CurvatureBlock, abc.ABC):
   def _multiply_matpower_unscaled(
       self,
       state: "Full.State",
-      vector: Sequence[chex.Array],
-      identity_weight: chex.Numeric,
-      power: chex.Scalar,
+      vector: Sequence[Array],
+      identity_weight: Numeric,
+      power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[chex.Array, ...]:
+      pmap_axis_name: Optional[str],
+  ) -> Tuple[Array, ...]:
+
+    del pmap_axis_name  # unused
+
     vector = self.parameters_list_to_single_vector(vector)
+
     if power == 1:
+
       result = jnp.matmul(state.matrix.value, vector) + identity_weight * vector
+
     elif not use_cached:
+
       matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)
+
       if power == -1:
         result = jnp.linalg.solve(matrix, vector)
       else:
         result = jnp.matmul(jnp.linalg.matrix_power(matrix, power), vector)
+
     else:
+
       if str(power) in state.cache:
         result = jnp.matmul(state.cache[str(power)], vector)
+
       else:
         s = state.cache["eigenvalues"]
         q = state.cache["eigen_vectors"]
+
         result = jnp.matmul(jnp.transpose(q), vector)
         result = jnp.power(s + identity_weight, power) * result
         result = jnp.matmul(q, result)
+
     return self.single_vector_to_parameters_list(result)
 
   def _eigenvalues_unscaled(
       self,
       state: "Full.State",
       use_cached: bool,
-  ) -> chex.Array:
+  ) -> Array:
     if not use_cached:
       return utils.safe_psd_eigh(state.matrix.value)[0]
     else:
       return state.cache["eigenvalues"]
 
-  @abc.abstractmethod
+  @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
       state: "Full.State",
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
+      pmap_axis_name: Optional[str],
+  ) -> "Full.State":
+
+    # This function call will return a copy of state:
+    state = self._update_curvature_matrix_estimate(
+        state, estimation_data, ema_old, ema_new, batch_size, pmap_axis_name)
+
+    state.matrix.sync(pmap_axis_name)
+
+    return state
+
+  @abc.abstractmethod
+  def _update_curvature_matrix_estimate(
+      self,
+      state: "Full.State",
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> "Full.State":
     pass
@@ -821,21 +954,27 @@ class Full(CurvatureBlock, abc.ABC):
   def _update_cache(
       self,
       state: "Full.State",
-      identity_weight: chex.Numeric,
-      exact_powers: Set[chex.Scalar],
-      approx_powers: Set[chex.Scalar],
+      identity_weight: Numeric,
+      exact_powers: Set[Scalar],
+      approx_powers: Set[Scalar],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> "Full.State":
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     # This block does not have any notion of "approximate" powers
     exact_powers = exact_powers | approx_powers
-    state.matrix.sync(pmap_axis_name)
+
     if len(exact_powers) > self._eigen_decomposition_threshold:
       s, q = utils.safe_psd_eigh(state.matrix.value)
       state.cache = dict(eigenvalues=s, eigen_vectors=q)
+
     else:
       if eigenvalues:
         state.cache["eigenvalues"] = utils.safe_psd_eigh(state.matrix.value)[0]
+
       for power in exact_powers:
         if power == -1:
           state.cache[str(power)] = utils.psd_inv_cholesky(
@@ -843,9 +982,10 @@ class Full(CurvatureBlock, abc.ABC):
         else:
           matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)
           state.cache[str(power)] = jnp.linalg.matrix_power(matrix, power)
+
     return state
 
-  def _to_dense_unscaled(self, state: "Full.State") -> chex.Array:
+  def _to_dense_unscaled(self, state: "Full.State") -> Array:
     # Permute the matrix according to the parameters canonical order
     return utils.block_permuted(
         state.matrix.value,
@@ -867,6 +1007,10 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       outputs_factor: A moving average of the estimated second moment matrix of
         the gradients of w.r.t. the outputs of the associated layer.
     """
+    # TODO(jamesmartens,botev): Consider splitting input_factor into arrays for
+    # the 1st and 2nd moments separately, for the sake of better op and memory
+    # efficiency.
+
     inputs_factor: utils.WeightedMovingAverage
     outputs_factor: utils.WeightedMovingAverage
 
@@ -885,11 +1029,13 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
 
   def parameters_shaped_list_to_single_matrix(
       self,
-      parameters_shaped_list: Sequence[chex.Array],
-  ) -> chex.Array:
+      parameters_shaped_list: Sequence[Array],
+  ) -> Array:
     """Converts the values of parameters into a single matrix."""
+
     for p, s in zip(parameters_shaped_list, self.parameters_shapes):
       assert p.shape == s
+
     if self.has_bias:
       w, b = parameters_shaped_list
       return jnp.concatenate([w.reshape([-1, w.shape[-1]]), b[None]], axis=0)
@@ -900,9 +1046,10 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
 
   def single_matrix_to_parameters_shaped_list(
       self,
-      matrix: chex.Array,
-  ) -> Tuple[chex.Array, ...]:
+      matrix: Array,
+  ) -> Tuple[Array, ...]:
     """Inverts the transformation of ``self.parameters_list_to_single_matrix``."""
+
     if self.has_bias:
       w, b = matrix[:-1], matrix[-1]
       return w.reshape(self.parameters_shapes[0]), b
@@ -911,23 +1058,25 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
 
   def _init(
       self,
-      rng: chex.PRNGKey,
-      exact_powers_to_cache: Set[chex.Scalar],
-      approx_powers_to_cache: Set[chex.Scalar],
+      rng: PRNGKey,
+      exact_powers_to_cache: Set[Scalar],
+      approx_powers_to_cache: Set[Scalar],
       cache_eigenvalues: bool,
   ) -> "TwoKroneckerFactored.State":
-    # The extra scale is technically a constant, but in general it could be
-    # useful for anyone examining the state to know it explicitly,
-    # hence we actually keep it as part of the state.
+
     d_in = self.input_size()
     d_out = self.output_size()
+
     cache = {}
+
     if cache_eigenvalues or exact_powers_to_cache:
       cache["inputs_factor_eigenvalues"] = jnp.zeros([d_in])
       cache["outputs_factor_eigenvalues"] = jnp.zeros([d_out])
+
     if exact_powers_to_cache:
       cache["inputs_factor_eigen_vectors"] = jnp.zeros([d_in, d_in])
       cache["outputs_factor_eigen_vectors"] = jnp.zeros([d_out, d_out])
+
     for power in approx_powers_to_cache:
       if power != -1:
         raise NotImplementedError(f"Approximations for power {power} is not "
@@ -936,6 +1085,7 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
           inputs_factor=jnp.zeros([d_in, d_in]),
           outputs_factor=jnp.zeros([d_out, d_out]),
       )
+
     return TwoKroneckerFactored.State(
         cache=cache,
         inputs_factor=utils.WeightedMovingAverage.zero((d_in, d_in)),
@@ -945,50 +1095,72 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
   def _multiply_matpower_unscaled(
       self,
       state: "TwoKroneckerFactored.State",
-      vector: Sequence[chex.Array],
-      identity_weight: chex.Numeric,
-      power: chex.Scalar,
+      vector: Sequence[Array],
+      identity_weight: Numeric,
+      power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[chex.Array, ...]:
+      pmap_axis_name: Optional[str],
+  ) -> Tuple[Array, ...]:
+
     vector = self.parameters_shaped_list_to_single_matrix(vector)
+
     if power == 1:
+
       result = utils.kronecker_product_mul_v(
           state.outputs_factor.value,
           state.inputs_factor.value,
           vector,
           a_is_symmetric=True)
+
       result = result + identity_weight * vector
+
     elif exact_power:
+
       if not use_cached:
         s_i, q_i = utils.safe_psd_eigh(state.inputs_factor.value)
         s_o, q_o = utils.safe_psd_eigh(state.outputs_factor.value)
-        eigenvalues = jnp.outer(s_i, s_o)
+
       else:
         s_i = state.cache["inputs_factor_eigenvalues"]
         q_i = state.cache["inputs_factor_eigen_vectors"]
         s_o = state.cache["outputs_factor_eigenvalues"]
         q_o = state.cache["outputs_factor_eigen_vectors"]
-        eigenvalues = jnp.outer(s_i, s_o)
-      eigenvalues = eigenvalues + identity_weight
+
+      eigenvalues = jnp.outer(s_i, s_o) + identity_weight
       eigenvalues = jnp.power(eigenvalues, power)
+
       result = utils.kronecker_eigen_basis_mul_v(q_o, q_i, eigenvalues, vector)
+
     else:
-      if not use_cached:
-        raise NotImplementedError()
+      if power != -1:
+        raise NotImplementedError(f"Approximations for power {power} is not "
+                                  f"yet implemented.")
+
+      if use_cached:
+        outputs_factor = state.cache[str(power)]["outputs_factor"]
+        inputs_factor = state.cache[str(power)]["inputs_factor"]
+
       else:
-        result = utils.kronecker_product_mul_v(
-            state.cache[str(power)]["outputs_factor"],
-            state.cache[str(power)]["inputs_factor"],
-            vector,
-            a_is_symmetric=True)
+        (inputs_factor, outputs_factor) = utils.pi_adjusted_kronecker_inverse(
+            state.inputs_factor.value,
+            state.outputs_factor.value,
+            damping=identity_weight,
+            pmap_axis_name=pmap_axis_name)
+
+      result = utils.kronecker_product_mul_v(
+          outputs_factor,
+          inputs_factor,
+          vector,
+          a_is_symmetric=True)
+
     return self.single_matrix_to_parameters_shaped_list(result)
 
   def _eigenvalues_unscaled(
       self,
       state: "TwoKroneckerFactored.State",
       use_cached: bool,
-  ) -> chex.Array:
+  ) -> Array:
     if use_cached:
       s_i = state.cache["inputs_factor_eigenvalues"]
       s_o = state.cache["outputs_factor_eigenvalues"]
@@ -997,47 +1169,93 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       s_o, _ = utils.safe_psd_eigh(state.outputs_factor.value)
     return jnp.outer(s_o, s_i)
 
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
+      self,
+      state: "TwoKroneckerFactored.State",
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
+      pmap_axis_name: Optional[str],
+  ) -> "TwoKroneckerFactored.State":
+
+    # This function call will return a copy of state:
+    state = self._update_curvature_matrix_estimate(
+        state, estimation_data, ema_old, ema_new, batch_size, pmap_axis_name)
+
+    state.inputs_factor.sync(pmap_axis_name)
+    state.outputs_factor.sync(pmap_axis_name)
+
+    return state
+
+  @abc.abstractmethod
+  def _update_curvature_matrix_estimate(
+      self,
+      state: "TwoKroneckerFactored.State",
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
+      pmap_axis_name: Optional[str],
+  ) -> "TwoKroneckerFactored.State":
+    pass
+
   def _update_cache(
       self,
       state: "TwoKroneckerFactored.State",
-      identity_weight: chex.Numeric,
-      exact_powers: chex.Numeric,
-      approx_powers: chex.Numeric,
+      identity_weight: Numeric,
+      exact_powers: Numeric,
+      approx_powers: Numeric,
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
   ) -> "TwoKroneckerFactored.State":
-    state.inputs_factor.sync(pmap_axis_name)
-    state.outputs_factor.sync(pmap_axis_name)
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     if eigenvalues or exact_powers:
+
       s_i, q_i = utils.safe_psd_eigh(state.inputs_factor.value)
       s_o, q_o = utils.safe_psd_eigh(state.outputs_factor.value)
+
       state.cache["inputs_factor_eigenvalues"] = s_i
       state.cache["outputs_factor_eigenvalues"] = s_o
+
       if exact_powers:
         state.cache["inputs_factor_eigen_vectors"] = q_i
         state.cache["outputs_factor_eigen_vectors"] = q_o
+
     for power in approx_powers:
+
       if power != -1:
         raise NotImplementedError(f"Approximations for power {power} is not "
                                   f"yet implemented.")
+
       cache = state.cache[str(power)]
+
       # This computes the approximate inverse factor using the pi-adjusted
       # inversion from the original KFAC paper.
       (cache["inputs_factor"],
-       cache["outputs_factor"]) = utils.pi_adjusted_inverse(
-           a=state.inputs_factor.value,
-           b=state.outputs_factor.value,
+       cache["outputs_factor"]) = utils.pi_adjusted_kronecker_inverse(
+           state.inputs_factor.value,
+           state.outputs_factor.value,
            damping=identity_weight,
            pmap_axis_name=pmap_axis_name)
+
     return state
 
   def _to_dense_unscaled(
       self,
       state: "TwoKroneckerFactored.State"
-  ) -> chex.Array:
+  ) -> Array:
+
     assert 0 < self.number_of_parameters <= 2
+
     inputs_factor = state.inputs_factor.value
+
     if self.has_bias:
+
       # Permute the matrix according to the parameters canonical order
       if self.parameters_canonical_order[0] != 0:
         inputs_factor = utils.block_permuted(
@@ -1047,6 +1265,7 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
         )
       else:
         inputs_factor = state.inputs_factor.value
+
     return jnp.kron(inputs_factor, state.outputs_factor.value)
 
 
@@ -1061,15 +1280,20 @@ class NaiveDiagonal(Diagonal):
   def _update_curvature_matrix_estimate(
       self,
       state: "NaiveDiagonal.State",
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
-      pmap_axis_name: str,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
+      pmap_axis_name: Optional[str],
   ) -> "NaiveDiagonal.State":
-    for factor, dw in zip(
-        state.diagonal_factors, estimation_data["params_tangent"]):
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
+    for factor, dw in zip(state.diagonal_factors,
+                          estimation_data["params_tangent"]):
       factor.update(dw * dw / batch_size, ema_old, ema_new)
+
     return state
 
 
@@ -1081,19 +1305,25 @@ class NaiveFull(Full):
   individual data point, and ``N`` is the batch size.
   """
 
-  def update_curvature_matrix_estimate(
+  def _update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> Full.State:
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     params_grads = jax.tree_util.tree_leaves(estimation_data["params_tangent"])
-    params_grads = jax.tree_util.tree_map(lambda x: x.flatten(), params_grads)
+    params_grads = jax.tree_map(lambda x: x.flatten(), params_grads)
     grads = jnp.concatenate(params_grads, axis=0)
+
     state.matrix.update(jnp.outer(grads, grads) / batch_size, ema_old, ema_new)
+
     return state
 
 
@@ -1117,14 +1347,19 @@ class DenseDiagonal(Diagonal):
   def _update_curvature_matrix_estimate(
       self,
       state: "Diagonal.State",
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> "Diagonal.State":
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     x, = estimation_data["inputs"]
     dy, = estimation_data["outputs_tangent"]
+
     assert utils.first_dim_is_size(batch_size, x, dy)
 
     diagonals = (jnp.matmul((x * x).T, dy * dy) / batch_size,)
@@ -1132,33 +1367,42 @@ class DenseDiagonal(Diagonal):
       diagonals += (jnp.mean(dy * dy, axis=0),)
 
     assert len(diagonals) == self.number_of_parameters
+
     for diagonal_factor, diagonal in zip(state.diagonal_factors, diagonals):
       diagonal_factor.update(diagonal, ema_old, ema_new)
+
     return state
 
 
 class DenseFull(Full):
   """A `Full` block specifically for dense layers."""
 
-  def update_curvature_matrix_estimate(
+  def _update_curvature_matrix_estimate(
       self,
       state: "Full.State",
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> "Full.State":
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     x, = estimation_data["inputs"]
     dy, = estimation_data["outputs_tangent"]
+
     assert utils.first_dim_is_size(batch_size, x, dy)
 
     params_tangents = x[:, :, None] * dy[:, None, :]
     if self.number_of_parameters == 2:
       params_tangents = jnp.concatenate([params_tangents, dy[:, None]], axis=1)
     params_tangents = jnp.reshape(params_tangents, [batch_size, -1])
+
     matrix_update = jnp.matmul(params_tangents.T, params_tangents) / batch_size
     state.matrix.update(matrix_update, ema_old, ema_new)
+
     return state
 
 
@@ -1176,27 +1420,39 @@ class DenseTwoKroneckerFactored(TwoKroneckerFactored):
     """The size of the Kronecker-factor corresponding to outputs."""
     return self.parameters_shapes[0][1]
 
-  def update_curvature_matrix_estimate(
+  def _update_curvature_matrix_estimate(
       self,
       state: TwoKroneckerFactored.State,
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> TwoKroneckerFactored.State:
+
     del pmap_axis_name
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     x, = estimation_data["inputs"]
     dy, = estimation_data["outputs_tangent"]
+
     assert utils.first_dim_is_size(batch_size, x, dy)
+
+    # TODO(jamesmartens,botev): replace this logic with einsum (which is
+    # probably more optimized)?
 
     if self.has_bias:
       x_one = jnp.ones_like(x[:, :1])
       x = jnp.concatenate([x, x_one], axis=1)
+
     input_stats = jnp.matmul(x.T, x) / batch_size
     output_stats = jnp.matmul(dy.T, dy) / batch_size
+
     state.inputs_factor.update(input_stats, ema_old, ema_new)
     state.outputs_factor.update(output_stats, ema_old, ema_new)
+
     return state
 
 
@@ -1253,12 +1509,14 @@ class Conv2DDiagonal(Diagonal):
 
   def conv2d_tangent_squared(
       self,
-      image_features_map: chex.Array,
-      output_tangent: chex.Array,
-  ) -> chex.Array:
+      image_features_map: Array,
+      output_tangent: Array,
+  ) -> Array:
     """Computes the elementwise square of a tangent for a single feature map."""
+
     extra_params = {k: v for k, v in self.layer_tag_extra_params.items()
                     if k not in ("lhs_shape", "rhs_shape")}
+
     _, vjp = jax.vjp(
         functools.partial(
             jax.lax.conv_general_dilated,
@@ -1266,31 +1524,39 @@ class Conv2DDiagonal(Diagonal):
         ),
         image_features_map[None], jnp.zeros(self.parameters_shapes[0])
     )
-    # Note the first tangent is w.r.t. inputs
+
     return jnp.square(vjp(output_tangent[None])[1])
 
   def _update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> Diagonal.State:
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     x, = estimation_data["inputs"]
     dy, = estimation_data["outputs_tangent"]
+
     assert utils.first_dim_is_size(batch_size, x, dy)
 
     diagonals = (self._averaged_kernel_squared_tangents(x, dy),)
+
     if self.has_bias:
       sum_axis = tuple(range(1, dy.ndim - len(self.parameters_shapes[1])))
       bias_dy = jnp.sum(dy, axis=sum_axis)
       diagonals += (jnp.mean(bias_dy * bias_dy, axis=0),)
 
     assert len(diagonals) == self.number_of_parameters
+
     for diagonal_factor, diagonal in zip(state.diagonal_factors, diagonals):
       diagonal_factor.update(diagonal, ema_old, ema_new)
+
     return state
 
 
@@ -1311,11 +1577,12 @@ class Conv2DFull(Full):
     square of the tangents for the kernel of the convolution. To average over
     the batch we have two choices - vmap or loop over the batch sequentially
     using scan. This utility function provides a trade-off by being able to
-    specify the maximum number of batch size that we can vmap over. This means
-    that the maximum memory usage will be ``max_batch_size_for_vmap`` times the
-    memory needed when calling ``self.conv2d_tangent_squared``. And the actual
-    ``vmap`` will be called ``ceil(total_batch_size / max_batch_size_for_vmap)``
-    number of times in a loop to find the final average.
+    specify the maximum batch that that will be handled in a single iteration
+    of the loop. This means that the maximum memory usage will be
+    ``max_batch_size_for_vmap`` times the memory needed when calling
+    ``self.conv2d_tangent_squared``. And the actual ``vmap`` will be
+    called ``ceil(total_batch_size / max_batch_size_for_vmap)`` number of times
+    in a loop to find the final average.
 
     Args:
       layer_tag_eq: The Jax equation corresponding to the layer tag, that this
@@ -1326,20 +1593,24 @@ class Conv2DFull(Full):
         ``None`` will use the value returned by
         :func:`~get_max_parallel_elements`.
     """
+
     self._averaged_tangents_outer_product = utils.loop_and_parallelize_average(
         func=self.conv2d_tangent_outer_product,
         max_parallel_size=max_elements_for_vmap or get_max_parallel_elements(),
     )
+
     super().__init__(layer_tag_eq, name)
 
   def conv2d_tangent_outer_product(
       self,
-      inputs: chex.Array,
-      tangent_of_outputs: chex.Array,
-  ) -> chex.Array:
+      inputs: Array,
+      tangent_of_outputs: Array,
+  ) -> Array:
     """Computes the outer product of a tangent for a single feature map."""
+
     extra_params = {k: v for k, v in self.layer_tag_extra_params.items()
                     if k not in ("lhs_shape", "rhs_shape")}
+
     _, vjp = jax.vjp(
         functools.partial(
             jax.lax.conv_general_dilated,
@@ -1347,30 +1618,38 @@ class Conv2DFull(Full):
         ),
         inputs[None], jnp.zeros(self.parameters_shapes[0])
     )
-    # Note the first tangent is w.r.t. inputs
+
     tangents = (vjp(tangent_of_outputs[None])[1],)
+
     if self.number_of_parameters == 2:
       num_axis = tangent_of_outputs.ndim - len(self.parameters_shapes[1])
       sum_axis = tuple(range(num_axis))
       tangents += (jnp.sum(tangent_of_outputs, axis=sum_axis),)
+
     flat_tangents = self.parameters_list_to_single_vector(tangents)
+
     return jnp.outer(flat_tangents, flat_tangents)
 
-  def update_curvature_matrix_estimate(
+  def _update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> Full.State:
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     x, = estimation_data["inputs"]
     dy, = estimation_data["outputs_tangent"]
     assert utils.first_dim_is_size(batch_size, x, dy)
 
     matrix_update = self._averaged_tangents_outer_product(x, dy)
     state.matrix.update(matrix_update, ema_old, ema_new)
+
     return state
 
 
@@ -1395,9 +1674,12 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   @property
   def weights_spatial_size(self) -> int:
     """The spatial filter size of the weights."""
-    weights_shape = self._layer_tag_eq.params["rhs_shape"]
-    indices = self._layer_tag_eq.params["dimension_numbers"].rhs_spec[2:4]
-    return weights_shape[indices[0]] * weights_shape[indices[1]]
+    return utils.product(self.weights_spatial_shape)
+
+  @property
+  def weights_spatial_shape(self) -> chex.Shape:
+    spatial_index = self._layer_tag_eq.params["dimension_numbers"].rhs_spec[2:]
+    return tuple(self.parameters_shapes[0][i] for i in spatial_index)
 
   def input_size(self) -> int:
     if self.has_bias:
@@ -1421,82 +1703,113 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
 
   def num_locations(
       self,
-      inputs: chex.Array,
-      params: Sequence[chex.Array],
+      inputs: Array,
   ) -> int:
     """The number of spatial locations that each filter is applied to."""
+
     spatial_index = self._layer_tag_eq.params["dimension_numbers"].lhs_spec[2:]
     inputs_spatial_shape = tuple(inputs.shape[i] for i in spatial_index)
-    kernel_index = self._layer_tag_eq.params["dimension_numbers"].rhs_spec[2:]
-    kernel_spatial_shape = tuple(params[0].shape[i] for i in kernel_index)
+
     return psm.num_conv_locations(
-        inputs_spatial_shape, kernel_spatial_shape,
+        inputs_spatial_shape, self.weights_spatial_shape,
         self._layer_tag_eq.params["window_strides"],
         self._layer_tag_eq.params["padding"])
 
   def compute_inputs_stats(
       self,
-      inputs: chex.Array,
-      params: Sequence[chex.Array],
+      inputs: Array,
   ) -> chex.Array:
     """Computes the statistics for the inputs factor."""
+
+    # Note that the input statistics are computed and stored with an extra
+    # num_locations scaling factor compared to what's described in the paper.
+
     input_cov_m, input_cov_v = psm.patches_moments(
         inputs,
-        kernel_shape=params[0].shape,
+        kernel_spatial_shape=self.weights_spatial_shape,
         strides=self._layer_tag_eq.params["window_strides"],
         padding=self._layer_tag_eq.params["padding"],
         data_format=None,
         dim_numbers=self._layer_tag_eq.params["dimension_numbers"],
         precision=self._layer_tag_eq.params.get("precision"),
+        inputs_dilation=self._layer_tag_eq.params.get("lhs_dilation"),
+        kernel_dilation=self._layer_tag_eq.params.get("rhs_dilation"),
+        feature_group_count=self._layer_tag_eq.params.get(
+            "feature_group_count"),
+        batch_group_count=self._layer_tag_eq.params.get("batch_group_count"),
     )
+
+    # TODO(jamesmartens,botev): replace this logic with einsum (which is
+    # probably more optimized)?
+
     # Flatten the kernel and channels dimensions
     k, h, c = input_cov_v.shape
     input_cov_v = jnp.reshape(input_cov_v, (k * h * c,))
     input_cov_m = jnp.reshape(input_cov_m, (k * h * c, k * h * c))
+
     # Normalize by the batch size
     input_cov_m = input_cov_m / inputs.shape[0]
     input_cov_v = input_cov_v / inputs.shape[0]
+
     if not self.has_bias:
       return input_cov_m
-    num_locations = jnp.full((1,), self.num_locations(inputs, params))
+
+    num_locations = jnp.full((1,), self.num_locations(inputs))
     input_cov = jnp.concatenate([input_cov_m, input_cov_v[None]], axis=0)
     input_cov_v = jnp.concatenate([input_cov_v, num_locations], axis=0)
+
     return jnp.concatenate([input_cov, input_cov_v[:, None]], axis=1)
 
   def compute_outputs_stats(
       self,
-      tangent_of_output: chex.Array,
-  ) -> chex.Array:
+      tangent_of_output: Array,
+  ) -> Array:
     """Computes the statistics for the outputs factor."""
+
+    # TODO(jamesmartens,botev): replace this logic with einsum (which is
+    # probably more optimized)?
+
     if self.outputs_channel_index != 3:
+
       index = list(range(4))
       index.remove(self.outputs_channel_index)
       index = index + [self.outputs_channel_index]
+
       tangent_of_output = jnp.transpose(tangent_of_output, index)
+
     tangent_of_output = jnp.reshape(tangent_of_output,
                                     (-1, tangent_of_output.shape[-1]))
+
     # Normalize by the batch size * number of locations
     return (jnp.matmul(tangent_of_output.T, tangent_of_output) /
             tangent_of_output.shape[0])
 
-  def update_curvature_matrix_estimate(
+  def _update_curvature_matrix_estimate(
       self,
       state: TwoKroneckerFactored.State,
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> TwoKroneckerFactored.State:
+
     del pmap_axis_name
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     x, = estimation_data["inputs"]
     dy, = estimation_data["outputs_tangent"]
+
     assert utils.first_dim_is_size(batch_size, x, dy)
 
-    input_cov = self.compute_inputs_stats(x, estimation_data["params"])
+    input_cov = self.compute_inputs_stats(x)
     output_cov = self.compute_outputs_stats(dy)
+
     state.inputs_factor.update(input_cov, ema_old, ema_new)
     state.outputs_factor.update(output_cov, ema_old, ema_new)
+
     return state
 
 
@@ -1507,6 +1820,34 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
 #  ____) | (_| (_| | |  __// ____ \| | | | (_| |____) | | | | | | | |_
 # |_____/ \___\__,_|_|\___/_/    \_\_| |_|\__,_|_____/|_| |_|_|_|  \__|
 #
+
+
+def compatible_shapes(ref_shape, target_shape):
+
+  if len(target_shape) > len(ref_shape):
+    raise ValueError("Target shape should be smaller.")
+
+  for ref_d, target_d in zip(reversed(ref_shape), reversed(target_shape)):
+    if ref_d != target_d and target_d != 1:
+      raise ValueError(f"{target_shape} is incompatible with {ref_shape}.")
+
+
+def compatible_sum(tensor, target_shape, skip_axes):
+  """Compute sum over ``tensor`` to achieve shape given by ``target_shape``."""
+
+  compatible_shapes(tensor.shape, target_shape)
+
+  n = tensor.ndim - len(target_shape)
+
+  axis = [i + n for i, t in enumerate(target_shape)
+          if t == 1 and i + n not in skip_axes]
+
+  tensor = jnp.sum(tensor, axis=axis, keepdims=True)
+
+  axis = [i for i in range(tensor.ndim - len(target_shape))
+          if i not in skip_axes]
+
+  return jnp.sum(tensor, axis=axis)
 
 
 class ScaleAndShiftDiagonal(Diagonal):
@@ -1525,12 +1866,16 @@ class ScaleAndShiftDiagonal(Diagonal):
   def _update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> Diagonal.State:
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     x, = estimation_data["inputs"]
     dy, = estimation_data["outputs_tangent"]
     assert utils.first_dim_is_size(batch_size, x, dy)
@@ -1539,18 +1884,26 @@ class ScaleAndShiftDiagonal(Diagonal):
       assert (state.diagonal_factors[0].raw_value.shape ==
               self.parameters_shapes[0])
       scale_shape = estimation_data["params"][0].shape
-      axis = range(x.ndim)[1:(x.ndim - len(scale_shape))]
-      d_scale = jnp.sum(x * dy, axis=tuple(axis))
-      scale_diag_update = jnp.sum(d_scale * d_scale, axis=0) / batch_size
+
+      d_scale = compatible_sum(x * dy, scale_shape, skip_axes=[0])
+
+      scale_diag_update = jnp.sum(
+          d_scale * d_scale,
+          axis=0, keepdims=d_scale.ndim == len(scale_shape)
+      ) / batch_size
+
       state.diagonal_factors[0].update(scale_diag_update, ema_old, ema_new)
 
     if self.has_shift:
-      assert (state.diagonal_factors[-1].raw_value.shape ==
-              self.parameters_shapes[-1])
+
       shift_shape = estimation_data["params"][-1].shape
-      axis = range(x.ndim)[1:(x.ndim - len(shift_shape))]
-      d_shift = jnp.sum(dy, axis=tuple(axis))
-      shift_diag_update = jnp.sum(d_shift * d_shift, axis=0) / batch_size
+      d_shift = compatible_sum(dy, shift_shape, skip_axes=[0])
+
+      shift_diag_update = jnp.sum(
+          d_shift * d_shift,
+          axis=0, keepdims=d_shift.ndim == len(shift_shape)
+      ) / batch_size
+
       state.diagonal_factors[-1].update(shift_diag_update, ema_old, ema_new)
 
     return state
@@ -1569,39 +1922,49 @@ class ScaleAndShiftFull(Full):
     """Whether this layer's equation has a shift."""
     return self._layer_tag_eq.params["has_shift"]
 
-  def update_curvature_matrix_estimate(
+  def _update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: Mapping[str, Sequence[chex.Array]],
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
-      batch_size: int,
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
       pmap_axis_name: Optional[str],
   ) -> Full.State:
+
     del pmap_axis_name
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     x, = estimation_data["inputs"]
     dy, = estimation_data["outputs_tangent"]
     assert utils.first_dim_is_size(batch_size, x, dy)
 
     tangents = []
+
     if self._has_scale:
       # Scale tangent
       scale_shape = estimation_data["params"][0].shape
-      axis = range(x.ndim)[1:(x.ndim - len(scale_shape))]
-      d_scale = jnp.sum(x * dy, axis=tuple(axis))
+
+      d_scale = compatible_sum(x * dy, scale_shape, skip_axes=[0])
       d_scale = d_scale.reshape([batch_size, -1])
+
       tangents.append(d_scale)
 
     if self._has_shift:
       # Shift tangent
+
       shift_shape = estimation_data["params"][-1].shape
-      axis = range(x.ndim)[1:(x.ndim - len(shift_shape))]
-      d_shift = jnp.sum(dy, axis=tuple(axis))
+
+      d_shift = compatible_sum(dy, shift_shape, skip_axes=[0])
       d_shift = d_shift.reshape([batch_size, -1])
+
       tangents.append(d_shift)
 
     tangents = jnp.concatenate(tangents, axis=1)
     matrix_update = jnp.matmul(tangents.T, tangents) / batch_size
+
     state.matrix.update(matrix_update, ema_old, ema_new)
 
     return state

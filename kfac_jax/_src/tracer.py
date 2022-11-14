@@ -17,8 +17,6 @@ from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple, TypeVar,
 
 import chex
 import jax
-from jax import core
-from jax import util as jax_util
 import jax.numpy as jnp
 from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import loss_functions
@@ -27,6 +25,7 @@ from kfac_jax._src import utils
 
 # Types for annotations
 T = TypeVar("T")
+J = TypeVar("J", jax.core.Jaxpr, jax.core.ClosedJaxpr)
 TaggedFunction = Callable[..., Tuple[loss_functions.LossFunction, ...]]
 FuncWithTags = Callable[..., Any]
 LossTagInputs = Tuple[chex.Array, ...]
@@ -53,6 +52,7 @@ LayerTagVjp = Tuple[
     Tuple[loss_functions.LossFunction, ...],
     Callable[[Tuple[LossTagInputs, ...]], Tuple[Dict[str, chex.Array], ...]]
 ]
+JaxprOrClosedJaxpr = Union[jax.core.Jaxpr, jax.core.ClosedJaxpr]
 
 
 def shape_and_type(x: chex.Array) -> Tuple[chex.Shape, chex.ArrayDType]:
@@ -70,7 +70,7 @@ def make_cache_key(
 
 
 def extract_tags(
-    jaxpr: core.Jaxpr
+    jaxpr: jax.core.Jaxpr
 ) -> Tuple[Tuple[tags.LayerTagEqn, ...], Tuple[tags.LossTagEqn, ...]]:
   """Extracts the layer and the loss tags from the given Jaxpr."""
   return (tuple(eqn for eqn in jaxpr.eqns
@@ -80,7 +80,7 @@ def extract_tags(
 
 
 def order_layer_tags(
-    params_vars_flat: Sequence[core.Var],
+    params_vars_flat: Sequence[jax.core.Var],
     layer_tags: Sequence[tags.LayerTagEqn],
     allow_left_out_params: bool = False,
 ) -> Tuple[Tuple[tags.LayerTagEqn, ...], Tuple[Tuple[int, ...], ...]]:
@@ -95,7 +95,7 @@ def order_layer_tags(
   Returns:
     A pair of tuples ``(layer_tags, tags_indices)``, where ``layer_tags`` has
     the ordered sequence of the input ``layer_tags`` and ``tags_indices``
-    contains the a sequence of tuples, where each tuple has the indices of the
+    contains a sequence of tuples, where each tuple has the indices of the
     parameters associated with the corresponding layer tag.
   """
   tags_param_indices = []
@@ -141,7 +141,7 @@ class ProcessedJaxpr(utils.Finalizable):
 
   def __init__(
       self,
-      jaxpr: core.Jaxpr,
+      jaxpr: jax.core.Jaxpr,
       consts: Sequence[Any],
       in_tree: utils.PyTreeDef,
       params_index: int,
@@ -173,7 +173,7 @@ class ProcessedJaxpr(utils.Finalizable):
     self.finalize()
 
   @property
-  def in_vars_flat(self) -> List[core.Var]:
+  def in_vars_flat(self) -> List[jax.core.Var]:
     """A flat list of all of the abstract input variables."""
     return self.jaxpr.invars
 
@@ -188,8 +188,8 @@ class ProcessedJaxpr(utils.Finalizable):
     return self.in_vars[self.params_index]
 
   @property
-  def params_vars_flat(self) -> List[core.Var]:
-    """A flat list of all of the abstract parameter variables."""
+  def params_vars_flat(self) -> List[jax.core.Var]:
+    """A flat list of all abstract parameter variables."""
     return jax.tree_util.tree_leaves(self.params_vars)
 
   @property
@@ -363,12 +363,15 @@ def cached_transformation(
 
 
 def construct_compute_losses_inputs(
-    jaxpr: core.Jaxpr,
+    jaxpr: jax.core.Jaxpr,
     consts: Sequence[Any],
     num_losses: int,
     primal_func_args: utils.FuncArgs,
     params_index: int
-) -> Callable[[utils.Params], Tuple[LossTagInputs, ...]]:
+) -> Callable[
+    [utils.Params],
+    Tuple[Tuple[LossTagInputs, ...], Tuple[LossTagInputs, ...]]
+]:
   """Constructs a function that computes the inputs to all loss tags.
 
   The returned function takes as input only the parameters, as specified by
@@ -393,7 +396,7 @@ def construct_compute_losses_inputs(
   """
   def forward_compute_losses(
       primal_params: utils.Params
-  ) -> Tuple[LossTagInputs, ...]:
+  ) -> Tuple[Tuple[LossTagInputs, ...], Tuple[LossTagInputs, ...]]:
     """Computes and returns the inputs to the first ``num_losses`` loss tags."""
     # Check the provided inputs match the original primals.
     local_func_args = list(primal_func_args)
@@ -415,15 +418,18 @@ def construct_compute_losses_inputs(
 
     # Loop through equations and evaluate primitives using `bind`
     losses_so_far = 0
-    loss_tags = []
+    losses_p_deps = []
+    losses_inputs = []
     for eqn in jaxpr.eqns:
       write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
       if isinstance(eqn.primitive, tags.LossTag):
-        loss_tags.append(eqn)
+        losses_inputs.append(read(eqn.invars))
+        losses_p_deps.append(eqn.primitive.extract_parameter_dependants(
+            *losses_inputs[-1], **eqn.params))
         losses_so_far += 1
       if num_losses is not None and losses_so_far == num_losses:
         break
-    return tuple(tuple(read(v) for v in tag.invars) for tag in loss_tags)
+    return tuple(losses_p_deps), tuple(losses_inputs)
   return forward_compute_losses
 
 
@@ -458,9 +464,10 @@ def _loss_tags_vjp(
       primal_func_args=primal_func_args,
       params_index=p_jaxpr.params_index)
   primal_params = primal_func_args[p_jaxpr.params_index]
-  losses_inputs, full_vjp_func = jax.vjp(losses_func, primal_params)
-  losses = tuple(tag.primitive.loss(*inputs, weight=tag.params["weight"])
+  (_, losses_inputs), full_vjp_func = jax.vjp(losses_func, primal_params)
+  losses = tuple(tag.primitive.loss(*inputs, **tag.params)
                  for tag, inputs in zip(p_jaxpr.loss_tags, losses_inputs))
+  zero_tangents = jax.tree_util.tree_map(jnp.zeros_like, losses_inputs)
 
   def losses_vjp_func(losses_tangents: Sequence[LossTagInputs]) -> utils.Params:
     """Computes the vector-Jacobian product w.r.t. the parameters.
@@ -482,20 +489,9 @@ def _loss_tags_vjp(
         raise ValueError("Each element of the argument `tangents` must be "
                          f"a sequence, but tangents[{i}] has type "
                          f"{type(loss_tangents)}.")
-    flat_tangents = jax.tree_util.tree_leaves(losses_tangents)
-    tree = jax.tree_util.tree_structure([tuple(tag.invars[:tag.primitive.num_inputs])
-                               for tag in p_jaxpr.loss_tags])
-    losses_tangents = jax.tree_util.tree_unflatten(tree, flat_tangents)
-    # Since the losses could also take and targets as inputs and we don't want
-    # this function to computes vjp w.r.t to those (e.g. the user should not
-    # be providing tangent vectors for the targets, only for inputs) we have
-    # to manually fill in these "extra" tangents with zeros.
-    losses_targets = [inputs[tag.primitive.num_inputs:]
-                      for tag, inputs in zip(p_jaxpr.loss_tags, losses_inputs)]
-    targets_tangents = jax.tree_util.tree_map(jnp.zeros_like, losses_targets)
-    losses_tangents = tuple(ti + tti for ti, tti in
-                            zip(losses_tangents, targets_tangents))
-    params_tangents, = full_vjp_func(losses_tangents)
+    # The tangents of the second entry are always zero, as we compute this only
+    # for the parameter dependent arrays.
+    params_tangents, = full_vjp_func((losses_tangents, zero_tangents))
     return params_tangents
 
   return losses, losses_vjp_func
@@ -537,13 +533,12 @@ def _loss_tags_jvp(
   primal_params = (primal_func_args[p_jaxpr.params_index],)
   tangents = (params_tangents,)
   (primals_out, tangents_out) = jax.jvp(losses_func, primal_params, tangents)
-  losses_tangents = tuple(
-      tuple(t[:tag.primitive.num_inputs]) for t, tag in
-      zip(tangents_out, p_jaxpr.loss_tags)
-  )
+  _, losses_inputs_primals = primals_out
+  losses_tangents, _ = tangents_out
   losses = tuple(
-      tag.primitive.loss(*inputs, weight=tag.params["weight"])
-      for tag, inputs in zip(p_jaxpr.loss_tags, primals_out))
+      tag.primitive.loss(*inputs, **tag.params)
+      for tag, inputs in zip(p_jaxpr.loss_tags, losses_inputs_primals)
+  )
   return losses, losses_tangents
 
 
@@ -584,12 +579,12 @@ def _loss_tags_hvp(
       param_primals: utils.Params
   ) -> Tuple[loss_functions.LossFunction, ...]:
     """Computes the sum of all losses as a scalar."""
-    loss_inputs = losses_func(param_primals)
-    return tuple(tag.primitive.loss(*inputs, weight=tag.params["weight"])
+    _, loss_inputs = losses_func(param_primals)
+    return tuple(tag.primitive.loss(*inputs, **tag.params)
                  for tag, inputs in zip(processed_jaxpr.loss_tags, loss_inputs))
 
   def losses_sum(param_primals: utils.Params) -> chex.Array:
-    # This computes the sum of losses evaluated. Makes it easier as we can
+    # This computes the sum of losses evaluated. Makes it easier because we can
     # now use jax.grad rather than jax.vjp for taking derivatives.
     return sum(jnp.sum(loss.evaluate()) for loss in
                compute_losses(param_primals))
@@ -638,7 +633,8 @@ def _layer_tag_vjp(
     write = functools.partial(tgm.write_env, env)
 
     # Bind args and consts to environment
-    write(processed_jaxpr.jaxpr.invars, jax.tree_util.tree_leaves(own_func_args))
+    write(processed_jaxpr.jaxpr.invars,
+          jax.tree_util.tree_leaves(own_func_args))
     write(processed_jaxpr.jaxpr.constvars, processed_jaxpr.consts)
 
     # Loop through equations and evaluate them
@@ -654,9 +650,8 @@ def _layer_tag_vjp(
     return read(layer_input_vars)
 
   def forward_aux(
-      aux: Mapping[core.Var, chex.Array]
-  ) -> Tuple[Tuple[LossTagInputs, ...],
-             Tuple[Mapping[str, chex.Numeric], ...]]:
+      aux: Mapping[jax.core.Var, chex.Array]
+  ) -> Tuple[Tuple[LossTagInputs, ...], Tuple[LossTagInputs, ...]]:
     """Computes the inputs and kwargs of all **loss** tags.
 
     Args:
@@ -685,30 +680,28 @@ def _layer_tag_vjp(
           env[v] = env[v] + aux[v]
 
     # Bind args and consts to environment
-    write(processed_jaxpr.jaxpr.invars, jax.tree_util.tree_leaves(own_func_args))
+    write(processed_jaxpr.jaxpr.invars,
+          jax.tree_util.tree_leaves(own_func_args))
     write(processed_jaxpr.jaxpr.constvars, processed_jaxpr.consts)
 
     # Loop through equations and evaluate primitives using `bind`
     num_losses_passed = 0
+    losses_p_dependants = []
     losses_inputs_values = []
-    losses_kwargs_values = []
     for eqn in processed_jaxpr.jaxpr.eqns:
-      input_values = read(eqn.invars)
+      input_values = tuple(read(eqn.invars))
       write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
       if isinstance(eqn.primitive, tags.LossTag):
         loss = eqn.primitive.loss(*input_values, **eqn.params)
-        losses_inputs_values.append(loss.inputs)
-        losses_kwargs_values.append(dict(
-            targets=loss.targets,
-            **eqn.params
-        ))
+        losses_p_dependants.append(loss.parameter_dependants)
+        losses_inputs_values.append(input_values)
         num_losses_passed += 1
         if num_losses_passed == len(processed_jaxpr.loss_tags):
           break
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 
     # Read the inputs to the loss functions, but also return the target values
-    return tuple(losses_inputs_values), tuple(losses_kwargs_values)
+    return tuple(losses_p_dependants), tuple(losses_inputs_values)
 
   # First compute the primal values for the inputs to all layer tags
   layer_input_values = forward()
@@ -722,12 +715,11 @@ def _layer_tag_vjp(
   aux_dict = dict(zip(layer_input_vars, aux_values))
   # These values would now allow us to compute gradients wrt the layer tags
   # inputs, which are intermediate expressions in the Jaxpr.
-  losses_args, aux_vjp, losses_kwargs = jax.vjp(
+  _, aux_vjp, losses_inputs = jax.vjp(
       forward_aux, aux_dict, has_aux=True)
   # Compute the actual loss objects.
-  losses = tuple(tag.primitive.loss(*inputs, **kwargs)
-                 for tag, inputs, kwargs in
-                 zip(processed_jaxpr.loss_tags, losses_args, losses_kwargs))
+  losses = tuple(tag.primitive.loss(*inputs, **tag.params) for tag, inputs in
+                 zip(processed_jaxpr.loss_tags, losses_inputs))
 
   def vjp_func(
       tangents: Tuple[LossTagInputs, ...]
@@ -753,13 +745,13 @@ def _layer_tag_vjp(
     layers_info = []
     for tag in processed_jaxpr.layer_tags:
       info = {}
-      primals = jax_util.safe_map(read_primals, tuple(tag.invars))
+      primals = jax.util.safe_map(read_primals, tuple(tag.invars))
       (info["outputs"],
        info["inputs"],
        info["params"]) = tag.primitive.split_all_inputs(primals)
       # Due to the ability to preprocess inputs for tags the input gradients
       # could be potentially wrong (e.g. zero) so we don't include them.
-      tangents = jax_util.safe_map(read_tangents, tuple(tag.invars))
+      tangents = jax.util.safe_map(read_tangents, tuple(tag.invars))
       (info["outputs_tangent"],
        _,
        info["params_tangent"]) = tag.primitive.split_all_inputs(tangents)

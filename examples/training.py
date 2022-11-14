@@ -133,7 +133,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     if self.mode == "train":
       logging.info("Training device batch size[%d]: (%d x %d)/%d",
                    jax.process_index(),
-                   jax.local_device_count(),
+                   self.train_num_devices,
                    self.train_per_device_batch_size,
                    self.train_total_batch_size)
     else:
@@ -170,13 +170,25 @@ class SupervisedExperiment(experiment.AbstractExperiment):
 
   @property
   @functools.lru_cache(maxsize=1)
+  def train_num_local_devices(self) -> int:
+    """The number of training local devices."""
+    return jax.local_device_count()
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def train_num_devices(self) -> int:
+    """The number of training devices."""
+    return jax.device_count()
+
+  @property
+  @functools.lru_cache(maxsize=1)
   def train_per_device_batch_size(self) -> int:
     """The training per-device batch size."""
     if self.config.batch_size.train.per_device is None:
-      if self.config.batch_size.train.total % jax.device_count() != 0:
+      if self.config.batch_size.train.total % self.train_num_devices != 0:
         raise ValueError("The total batch size must be divisible by the number "
                          "of devices.")
-      return self.config.batch_size.train.total // jax.device_count()
+      return self.config.batch_size.train.total // self.train_num_devices
     else:
       return self.config.batch_size.train.per_device
 
@@ -185,13 +197,25 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   def train_host_batch_size(self) -> int:
     """The training per-host batch size."""
     assert self.mode == "train"
-    return self.train_per_device_batch_size * jax.local_device_count()
+    return self.train_per_device_batch_size * self.train_num_local_devices
 
   @property
   @functools.lru_cache(maxsize=1)
   def train_total_batch_size(self) -> int:
     """The training total batch size."""
-    return self.train_per_device_batch_size * jax.device_count()
+    return self.train_per_device_batch_size * self.train_num_devices
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def eval_num_local_devices(self) -> int:
+    """The evaluator number of local devices."""
+    return jax.local_device_count()
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def eval_num_devices(self) -> int:
+    """The evaluator number of devices."""
+    return jax.device_count()
 
   @property
   @functools.lru_cache(maxsize=1)
@@ -201,7 +225,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       if self.config.batch_size.eval.total % jax.device_count() != 0:
         raise ValueError("The total batch size must be divisible by the number "
                          "of devices.")
-      return self.config.batch_size.eval.total // jax.device_count()
+      return self.config.batch_size.eval.total // self.num_eval_devices
     else:
       return self.config.batch_size.eval.per_device
 
@@ -210,13 +234,13 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   def eval_host_batch_size(self) -> int:
     """The evaluator per-host batch size."""
     assert self.mode == "eval"
-    return self.eval_per_device_batch_size * jax.local_device_count()
+    return self.eval_per_device_batch_size * self.eval_num_local_devices
 
   @property
   @functools.lru_cache(maxsize=1)
   def eval_total_batch_size(self) -> int:
     """The evaluator total batch size."""
-    return self.eval_per_device_batch_size * jax.device_count()
+    return self.eval_per_device_batch_size * self.num_eval_devices
 
   @property
   @functools.lru_cache(maxsize=1)
@@ -230,15 +254,16 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   def progress(
       self,
       global_step: chex.Numeric,
-      opt_state: Optional[kfac_jax.Optimizer.State] = None,
   ) -> chex.Numeric:
-    """Computes the current progress of the optimization."""
-    # del opt_state  # not used
+    """Computes the current progress of the training as a number in [0,1]."""
+
     if self.config.training.steps is not None:
       return global_step / self.config.training.steps
+
     else:
       data_seen = self.train_total_batch_size * global_step
       total_data = self.dataset_size * self.config.training.epochs
+
       return data_seen / total_data
 
   def should_run_step(
@@ -246,8 +271,10 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       global_step: int,
       config: config_dict.ConfigDict,
   ) -> bool:
+
     del config  # not used
-    return self.progress(global_step, self._opt_state) < 1
+
+    return int(self.progress(global_step)) < 1
 
   def create_optimizer(self) -> Union[
       optimizers.OptaxWrapper,
@@ -273,6 +300,9 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     """Initializes all the experiment's state variables."""
     init_rng, seed_rng = jax.random.split(self.init_rng)
     init_rng = kfac_jax.utils.replicate_all_local_devices(init_rng)
+
+    # Beause we fold in the process index here, it's important that any sharding
+    # happen *before* shuffling
     seed_rng = jax.random.fold_in(seed_rng, jax.process_index())
     seed = int(seed_rng[0])
 
@@ -371,9 +401,10 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       # Average everything in aux and then put it in stats
       stats.update(kfac_jax.utils.compute_mean(stats.pop("aux")))
 
-    stats["progress"] = self.progress(self._python_step, self._opt_state)
+    stats["progress"] = self.progress(self._python_step)
 
     self._python_step += 1
+
     return kfac_jax.utils.get_first(stats)
 
   #                  _
@@ -402,6 +433,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       batch: kfac_jax.utils.Batch,
   ) -> Dict[str, chex.Array]:
     """Evaluates a single batch."""
+    del global_step, opt_state  # This might be used in subclasses
     func_args = kfac_jax.optimizer.make_func_args(
         params=params,
         func_state=func_state,
@@ -412,7 +444,6 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     )
     loss, stats = self.eval_model_func(*func_args)
     stats["loss"] = loss
-    stats["progress"] = self.progress(global_step, opt_state)
     return kfac_jax.utils.pmean_if_pmap(stats, "eval_axis")
 
   def evaluate(
@@ -442,6 +473,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       logging.info("Evaluation for %s is completed with %d number of batches.",
                    name, int(averaged_stats.weight[0]))
 
+    all_stats["progress"] = self.progress(self._python_step)
     return jax.tree_util.tree_map(np.array, all_stats)
 
 
@@ -453,33 +485,47 @@ def train_standalone_supervised(
     storage_folder: Optional[str],
 ) -> Dict[str, chex.Array]:
   """Run an experiment without the Jaxline runtime."""
+
   rng = jax.random.PRNGKey(random_seed)
   rng, init_rng = jax.random.split(rng)
+
   experiment_instance = experiment_ctor(
       "train", init_rng, full_config.experiment_kwargs.config,
   )
+
   if storage_folder is not None:
     os.makedirs(storage_folder, exist_ok=True)
 
   rng = jax.random.fold_in(rng, jax.process_index())
   rng = jax.random.split(rng, jax.local_device_count())
   rng = kfac_jax.utils.broadcast_all_local_devices(rng)
+
   global_step = jnp.zeros([], dtype=jnp.int32)
   global_step = kfac_jax.utils.replicate_all_local_devices(global_step)
+
   stats = {}
   start_time = time.time()
+
   i = 0
   while experiment_instance.should_run_step(i, full_config):
+
     if (i % full_config.save_checkpoint_interval == 0 and
         storage_folder is not None):
+
       # Optional save to file
-      jnp.savez(f"{storage_folder}/snapshot_{i}.npz",
-                *jax.tree_util.tree_leaves(experiment_instance.snapshot_state()))
-    # Run a step
+      jnp.savez(
+          f"{storage_folder}/snapshot_{i}.npz",
+          *jax.tree_util.tree_leaves(experiment_instance.snapshot_state())
+      )
+
     rng, step_rng = kfac_jax.utils.p_split(rng)
+
+    # Run a step
     scalars = experiment_instance.step(global_step, step_rng)
+
     elapsed_time = jnp.asarray(time.time() - start_time)
     stats["time"] = stats.get("time", []) + [elapsed_time]
+
     for k in sorted(scalars):
       stats.setdefault(k, []).append(scalars[k])
 

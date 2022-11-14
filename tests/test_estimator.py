@@ -142,14 +142,16 @@ class TestEstimator(parameterized.TestCase):
       for p in jax.tree_util.tree_leaves(params):
         v_e_leaves.append(flat_v_e[i: i + p.size].reshape(p.shape))
         i += p.size
-      v_e = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(params), v_e_leaves)
+      v_e = jax.tree_util.tree_unflatten(
+          jax.tree_util.tree_structure(params), v_e_leaves)
       if curvature_type == "fisher":
         r_e = implicit.multiply_fisher(func_args, v_e)
       elif curvature_type == "ggn":
         r_e = implicit.multiply_ggn(func_args, v_e)
       else:
         raise ValueError(f"Unrecognized curvature_type={curvature_type}.")
-      flat_r_e = jax.tree_util.tree_leaves(jax.tree_util.tree_map(lambda x: x.flatten(), r_e))
+      flat_r_e = jax.tree_util.tree_leaves(
+          jax.tree_util.tree_map(lambda x: x.flatten(), r_e))
       return index + 1, jnp.concatenate(flat_r_e, axis=0)
     _, matrix = jax.lax.scan(mul_e_i, 0, None, length=explicit_estimator.dim)
 
@@ -274,9 +276,11 @@ class TestEstimator(parameterized.TestCase):
       for p in jax.tree_util.tree_leaves(params):
         v_e_leaves.append(flat_v_e[i: i + p.size].reshape(p.shape))
         i += p.size
-      v_e = jax.tree_util.tree_unflatten(jax.tree_util.tree_structure(params), v_e_leaves)
+      v_e = jax.tree_util.tree_unflatten(
+          jax.tree_util.tree_structure(params), v_e_leaves)
       r_e = implicit.multiply_hessian(func_args, v_e)
-      flat_r_e = jax.tree_util.tree_leaves(jax.tree_util.tree_map(lambda x: x.flatten(), r_e))
+      flat_r_e = jax.tree_util.tree_leaves(
+          jax.tree_map(lambda x: x.flatten(), r_e))
       return index + 1, jnp.concatenate(flat_r_e, axis=0)
 
     _, hessian = jax.lax.scan(mul_e_i, 0, None, length=block_estimator.dim)
@@ -589,11 +593,11 @@ class TestEstimator(parameterized.TestCase):
     )
 
     v = init_func(init_key2, data)
-    m_v = estimator.multiply(state, v, e, True, True)
-    m_inv_v = estimator.multiply_inverse(cached_state, v, e, True, True)
+    m_v = estimator.multiply(state, v, e, True, True, None)
+    m_inv_v = estimator.multiply_inverse(cached_state, v, e, True, True, None)
 
     # Check cached and non-cached are the same
-    m_inv_v2 = estimator.multiply_inverse(state, v, e, True, False)
+    m_inv_v2 = estimator.multiply_inverse(state, v, e, True, False, None)
     self.assertAllClose(m_inv_v, m_inv_v2, atol=1e-5, rtol=1e-4)
 
     block_vectors = estimator.params_vector_to_blocks_vectors(v)
