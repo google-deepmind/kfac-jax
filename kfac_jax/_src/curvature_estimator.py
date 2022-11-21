@@ -109,7 +109,7 @@ class ImplicitExactCurvature:
       self,
       func: utils.Func,
       params_index: int = 0,
-      batch_size_extractor: Callable[[utils.Batch, bool], chex.Numeric] =
+      batch_size_extractor: Callable[[utils.Batch], chex.Numeric] =
       utils.default_batch_size_extractor,
   ):
     """Initializes the ImplicitExactCurvature instance.
@@ -119,8 +119,7 @@ class ImplicitExactCurvature:
       params_index: The index of the parameters argument in arguments list of
         ``func``.
       batch_size_extractor: A function that takes as input the function
-        arguments (and a boolean specifying whether the batch is replicated over
-        multiple devices) and returns the batch size for a single device.
+        arguments and returns the batch size for a single device.
         (Default: ``kfac.utils.default_batch_size_extractor``)
     """
     self._loss_tags_vjp = tracer.loss_tags_vjp(
@@ -139,7 +138,7 @@ class ImplicitExactCurvature:
 
   def batch_size(self, func_args: utils.FuncArgs) -> chex.Numeric:
     """The expected batch size given a list of loss instances."""
-    return self._batch_size_extractor(func_args[-1], False)
+    return self._batch_size_extractor(func_args[-1])
 
   @classmethod
   def _multiply_loss_fisher(

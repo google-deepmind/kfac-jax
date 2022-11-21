@@ -433,7 +433,9 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       batch: kfac_jax.utils.Batch,
   ) -> Dict[str, chex.Array]:
     """Evaluates a single batch."""
+
     del global_step, opt_state  # This might be used in subclasses
+
     func_args = kfac_jax.optimizer.make_func_args(
         params=params,
         func_state=func_state,
@@ -444,6 +446,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     )
     loss, stats = self.eval_model_func(*func_args)
     stats["loss"] = loss
+
     return kfac_jax.utils.pmean_if_pmap(stats, "eval_axis")
 
   def evaluate(
@@ -454,16 +457,22 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   ) -> Dict[str, chex.Array]:
     del writer  # not used
 
-    # Evaluates both the train and eval split metrics
     all_stats = dict()
+
+    # Evaluates both the train and eval split metrics
     for name, dataset in self._eval_input.items():
+
       logging.info("Running evaluation for %s", name)
 
       averaged_stats = kfac_jax.utils.MultiChunkAccumulator.empty(True)
+
       for batch in datasets.tensorflow_datasets.as_numpy(dataset):
+
         key, rng = kfac_jax.utils.p_split(rng)
+
         stats = self.eval_batch(
             global_step, self._params, self._state, self._opt_state, key, batch)
+
         averaged_stats.add(stats, 1)
 
       # Extract all stats
@@ -474,6 +483,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
                    name, int(averaged_stats.weight[0]))
 
     all_stats["progress"] = self.progress(self._python_step)
+
     return jax.tree_util.tree_map(np.array, all_stats)
 
 
@@ -608,7 +618,9 @@ class MnistExperiment(SupervisedExperiment):
       device_batch_size: int,
       **_: Any,
   ) -> datasets.tf.data.Dataset:
+
     assert split in ("train", "test")
+
     return datasets.mnist_dataset(
         split=split,
         has_labels=self._supervised,
@@ -674,7 +686,9 @@ class ImageNetExperiment(SupervisedExperiment):
       device_batch_size: int,
       **_: Any,
   ) -> datasets.tf.data.Dataset:
+
     assert split in ("train", "test")
+
     return datasets.imagenet_dataset(
         split="train_eval" if split == "train" else "test",
         seed=seed,

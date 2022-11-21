@@ -276,7 +276,7 @@ def _register_deterministic_bernoulli(
     logits: chex.Array,
     targets: chex.Array,
     weight=1.0
-) -> chex.Array:
+):
   """Registers a deterministic bernoulli loss."""
   if targets is None:
     args = [logits, weight]
@@ -284,8 +284,8 @@ def _register_deterministic_bernoulli(
   else:
     args = [logits, targets, weight]
     args_names = ["logits", "targets", "weight"]
-  return _DeterministicBernoulliNegativeLogProbLoss_tag.bind(
-      *args, args_names=args_names)[0]
+  _DeterministicBernoulliNegativeLogProbLoss_tag.bind(*args,
+                                                      args_names=args_names)
 
 
 class _DeterministicCategorical(distrax.Categorical):
@@ -347,13 +347,14 @@ def squared_error_loss(
   y = y.reshape((-1, y.shape[-1]))
   y_hat = y_hat.reshape((-1, y_hat.shape[-1]))
 
-  y_hat = loss_functions.register_squared_error_loss(y_hat, y, weight=0.5)
+  loss_functions.register_squared_error_loss(y_hat, y, weight=0.5)
 
   if return_losses_outputs:
     return [[y_hat]]
 
   loss = jnp.mean(jnp.sum((y_hat - y) ** 2, axis=-1)) / 2
   loss = loss + l2_reg * utils.norm(params)
+
   if return_layer_values:
     return [loss], layer_values
   else:
@@ -425,7 +426,7 @@ def autoencoder_deterministic_loss(
   logits, _ = autoencoder(
       layer_widths, x.shape[-1], explicit_tagging, activation=activation,
   ).apply(params, x)
-  logits = _register_deterministic_bernoulli(logits, x)
+  _register_deterministic_bernoulli(logits, x)
   loss = - distrax.Bernoulli(logits=logits).log_prob(x)
   loss = jnp.mean(jnp.sum(loss, axis=-1)).astype(logits.dtype)
   return loss + l2_reg * utils.norm(params)
@@ -449,18 +450,18 @@ def autoencoder_with_two_losses(
   ).apply(params, x, aux)
 
   # Register both losses in KFAC
-  logits1 = loss_functions.register_multi_bernoulli_predictive_distribution(
+  loss_functions.register_multi_bernoulli_predictive_distribution(
       logits, x)
-  logits2 = loss_functions.register_normal_predictive_distribution(
+  loss_functions.register_normal_predictive_distribution(
       logits, x, weight=0.1)
 
   if return_losses_outputs:
-    return [[logits1], [logits2]]
+    return [[logits], [logits]]
 
-  loss_1 = - distrax.Bernoulli(logits=logits1).log_prob(x)
-  scale_diag = jnp.ones_like(logits2) * jnp.sqrt(0.5)
+  loss_1 = - distrax.Bernoulli(logits=logits).log_prob(x)
+  scale_diag = jnp.ones_like(logits) * jnp.sqrt(0.5)
   loss_2 = - distrax.MultivariateNormalDiag(
-      loc=logits2, scale_diag=scale_diag).log_prob(x)
+      loc=logits, scale_diag=scale_diag).log_prob(x)
 
   if return_layer_values:
     return [loss_1, 0.1 * loss_2], layer_values
@@ -534,7 +535,7 @@ def conv_classifier_deterministic_loss(
   logits, _ = conv_classifier(
       num_classes, layer_channels, explicit_tagging, activation=activation
   ).apply(params, batch["images"])
-  logits = _register_deterministic_categorical(logits, batch["labels"])
+  _register_deterministic_categorical(logits, batch["labels"])
   loss = - distrax.Categorical(logits=logits).log_prob(batch["labels"])
   loss = jnp.mean(jnp.sum(loss, axis=-1)).astype(logits.dtype)
   return loss + l2_reg * utils.norm(params)
@@ -556,7 +557,7 @@ def conv_classifier_loss(
   logits, layer_values = conv_classifier(
       num_classes, layer_channels, explicit_tagging, activation=activation
   ).apply(params, batch["images"], aux=aux)
-  logits = loss_functions.register_categorical_predictive_distribution(
+  loss_functions.register_categorical_predictive_distribution(
       logits, batch["labels"])
 
   if return_losses_outputs:

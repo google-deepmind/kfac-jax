@@ -246,6 +246,7 @@ class CurvatureBlock(utils.Finalizable):
     """
     if use_cache:
       return self.fixed_scale()
+
     return self.fixed_scale() * self.state_dependent_scale(state)
 
   def fixed_scale(self) -> Numeric:
@@ -964,24 +965,31 @@ class Full(CurvatureBlock, abc.ABC):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
+    scale = self.state_dependent_scale(state)
+
     # This block does not have any notion of "approximate" powers
     exact_powers = exact_powers | approx_powers
 
     if len(exact_powers) > self._eigen_decomposition_threshold:
+
       s, q = utils.safe_psd_eigh(state.matrix.value)
-      state.cache = dict(eigenvalues=s, eigen_vectors=q)
+      state.cache = dict(eigenvalues=scale * s, eigen_vectors=q)
 
     else:
+
       if eigenvalues:
-        state.cache["eigenvalues"] = utils.safe_psd_eigh(state.matrix.value)[0]
+        state.cache["eigenvalues"] = (
+            scale * utils.safe_psd_eigh(state.matrix.value)[0])
 
       for power in exact_powers:
+
         if power == -1:
           state.cache[str(power)] = utils.psd_inv_cholesky(
-              state.matrix.value, identity_weight)
+              state.matrix.value, identity_weight) / scale
         else:
           matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)
-          state.cache[str(power)] = jnp.linalg.matrix_power(matrix, power)
+          state.cache[str(power)] = (
+              (scale ** power) * jnp.linalg.matrix_power(matrix, power))
 
     return state
 
@@ -1214,13 +1222,16 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
+    scale = self.state_dependent_scale(state)
+    factor_scale = jnp.power(scale, 0.5)
+
     if eigenvalues or exact_powers:
 
       s_i, q_i = utils.safe_psd_eigh(state.inputs_factor.value)
       s_o, q_o = utils.safe_psd_eigh(state.outputs_factor.value)
 
-      state.cache["inputs_factor_eigenvalues"] = s_i
-      state.cache["outputs_factor_eigenvalues"] = s_o
+      state.cache["inputs_factor_eigenvalues"] = factor_scale * s_i
+      state.cache["outputs_factor_eigenvalues"] = factor_scale * s_o
 
       if exact_powers:
         state.cache["inputs_factor_eigen_vectors"] = q_i
@@ -1242,6 +1253,9 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
            state.outputs_factor.value,
            damping=identity_weight,
            pmap_axis_name=pmap_axis_name)
+
+      cache["inputs_factor"] /= factor_scale
+      cache["outputs_factor"] /= factor_scale
 
     return state
 
@@ -1878,11 +1892,14 @@ class ScaleAndShiftDiagonal(Diagonal):
 
     x, = estimation_data["inputs"]
     dy, = estimation_data["outputs_tangent"]
+
     assert utils.first_dim_is_size(batch_size, x, dy)
 
     if self.has_scale:
+
       assert (state.diagonal_factors[0].raw_value.shape ==
               self.parameters_shapes[0])
+
       scale_shape = estimation_data["params"][0].shape
 
       d_scale = compatible_sum(x * dy, scale_shape, skip_axes=[0])

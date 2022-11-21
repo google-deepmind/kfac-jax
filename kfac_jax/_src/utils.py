@@ -813,6 +813,7 @@ def pi_adjusted_kronecker_inverse(
 
   # Need the a[None] in order to support a scalar input, with shape ().
   norms = [jnp.sum(a[None]) if a.ndim < 2 else jnp.trace(a) for a in arrays]
+
   # We need to sync the norms here, because reduction can be non-deterministic.
   # They specifically are on GPUs by default for better performance.
   norms = pmean_if_pmap(norms, pmap_axis_name)
@@ -825,6 +826,7 @@ def pi_adjusted_kronecker_inverse(
   c = jnp.exp(jnp.sum(jnp.log(jnp.stack(norms)) - jnp.log(jnp.stack(dims))))
 
   def regular_inverse() -> Tuple[chex.Array, ...]:
+
     # We distribute the damping only inside the non-scalar factors
     non_scalars = sum(1 if di != 1 else 0 for di in dims)
     d_hat = jnp.power(damping / c, 1.0 / non_scalars)
@@ -889,7 +891,8 @@ def kronecker_product_axis_mul_v(
   """Computes ``kron(*factors) rvec(v)`` where ``rvec`` is row-wise vectorization.
 
   Args:
-    factors: The sequence of factors forming the Kronecker product.
+    factors: The sequence of factors forming the Kronecker product. Must be
+      square 2D arrays.
     v: A tensor whose vectorization will be multiplied by the Kronecker product.
     axis_groups: A list whose i-th element is a sequence of consecutive integers
       specifying the axes of the input tensor ``v`` that correspond to the i-th
@@ -919,6 +922,7 @@ def kronecker_product_axis_mul_v(
 
   if isinstance(transpose, bool):
     transpose = [transpose] * len(factors)
+
   elif len(transpose) != len(factors):
     raise ValueError("The length of the transpose sequence must match the "
                      "number of factors.")
@@ -928,6 +932,7 @@ def kronecker_product_axis_mul_v(
 
   result = v
   for group, factor, f_str in zip(axis_groups, factors, factor_strs):
+
     # This flattens all axis in `group` of `result` into a single one.
     shape = v.shape[:min(group)] + (-1,) + v.shape[max(group) + 1:]
     vector = result.reshape(shape)
@@ -1691,10 +1696,6 @@ def auto_scope_function(function):
 
 def default_batch_size_extractor(
     batch: Batch,
-    multi_device: bool = False,
 ) -> chex.Numeric:
-  axis = 1 if multi_device else 0
-  size = jax.tree_util.tree_leaves(batch)[0].shape[axis]
-  if multi_device:
-    return jnp.asarray([size] * jax.local_device_count(), dtype=jnp.int32)
-  return size
+
+  return jax.tree_util.tree_leaves(batch)[0].shape[0]

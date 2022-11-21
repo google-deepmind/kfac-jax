@@ -107,7 +107,7 @@ class Optimizer(utils.WithStagedMethods):
       Optional[Mapping[str, curvature_estimator.CurvatureBlockCtor]] = None,
       multi_device: bool = False,
       debug: bool = False,
-      batch_size_extractor: Callable[[utils.Batch, bool], chex.Numeric] =
+      batch_size_extractor: Callable[[utils.Batch], chex.Numeric] =
       utils.default_batch_size_extractor,
       pmap_axis_name: str = "kfac_axis",
       forbid_setting_attributes_after_finalize: bool = True,
@@ -261,8 +261,7 @@ class Optimizer(utils.WithStagedMethods):
         Note that this also overrides ``multi_device`` and prevents using pmap.
         (Default: ``False``)
       batch_size_extractor: A function that takes as input the function
-        arguments, and a boolean specifying whether the batch is replicated over
-        multiple devices, and returns the batch size for a single device.
+        arguments and returns the batch size for a single device.
         (Default: ``kfac.utils.default_batch_size_extractor``)
       pmap_axis_name: String. The name of the pmap axis to use when
         ``multi_device`` is set to True. (Default: ``kfac_axis``)
@@ -579,7 +578,7 @@ class Optimizer(utils.WithStagedMethods):
         ema_old=ema_old,
         ema_new=ema_new,
         # Note that the batch is always the last entry of FuncArgsVariantsdef
-        batch_size=self._batch_size_extractor(func_args[-1], False),
+        batch_size=self._batch_size_extractor(func_args[-1]),
         rng=rng,
         func_args=func_args,
         pmap_axis_name=self.pmap_axis_name
@@ -890,6 +889,7 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._include_norms_in_stats:
       grad_norm = utils.norm(grads)
+
     if self._include_per_param_norms_in_stats:
       grad_norm_per_param = utils.per_parameter_norm(grads, "grad_norm")
 
@@ -943,7 +943,7 @@ class Optimizer(utils.WithStagedMethods):
       new_loss, rho = jnp.nan, jnp.nan
 
     # Compute per-device and total batch size
-    batch_size = self._batch_size_extractor(func_args[-1], False)
+    batch_size = self._batch_size_extractor(func_args[-1])
     if self.multi_device:
       total_batch_size = batch_size * jax.device_count()
 
