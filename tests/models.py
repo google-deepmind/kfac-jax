@@ -77,7 +77,7 @@ class _Linear(hk.Linear):
     self._explicit_tagging = explicit_tagging
     super().__init__(*args, **kwargs)
 
-  def __call__(self, inputs: LayerInputs, *_) -> LayerInputs:
+  def __call__(self, inputs: LayerInputs, *_) -> LayerInputs:  # pytype: disable=signature-mismatch  # overriding-parameter-name-checks
     x, layer_values, aux = inputs
     y = super().__call__(x, precision=jax.lax.Precision.HIGHEST)
     if aux is not None:
