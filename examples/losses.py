@@ -197,7 +197,7 @@ def classifier_loss_and_stats(
     average_loss: bool = True,
     register_loss: bool = True,
     mask: Optional[chex.Array] = None,
-    normalization_mode: str = "batch_dim_only",
+    normalization_mode: str = "batch_size_only",
 ) -> Tuple[chex.Array, Dict[str, chex.Array]]:
   """Softmax cross-entropy with regularizer and accuracy statistics."""
 

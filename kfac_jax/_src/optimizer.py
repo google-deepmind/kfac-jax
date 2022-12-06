@@ -119,17 +119,41 @@ class Optimizer(utils.WithStagedMethods):
   ):
     """Initializes the K-FAC optimizer with the provided settings.
 
+    A note on damping:
+
+    One of the main complications of using second-order optimizers like K-FAC is
+    the "damping" parameter. This parameter is multiplied by th identity matrix
+    and (approximately) added to the curvature matrix (i.e. the Fisher or GGN)
+    before it is inverted and multiplied by the gradient when computing the
+    update (before any learning rate scaling). The damping should follow the
+    scale of the objective, so that if you multiply your loss by some factor you
+    should do the same for the damping. Roughly speaking, larger damping values
+    constrain the update vector to a smaller region around zero, which is needed
+    in general since the second-order approximations that underly second-order
+    methods can break down for large updates. (In gradient descent the learning
+    rate plays an analogous role.) The relationship between the damping
+    parameter and the radius of this region is complicated and depends on the
+    scale of the objective amongst other things.
+
+    The optimizer provides a system for adjusting the damping automatically via
+    the ``use_adaptive_damping`` argument, although this system is not
+    completely reliable. Using a fixed value or a manually tuned schedule can
+    work as good or better for some problems, while it can be a very poor choice
+    for others (like deep autoencoders). Empirically we have found that using
+    a fixed value works well enough for common architectures like convnets and
+    transformers.
+
     Args:
       value_and_grad_func: Python callable. The function should return the value
         of the loss to be optimized and its gradients, and optionally the model
         state and auxiliary information (usually statistics to log). The
-        interface should be:
-        ``out_args, loss_grads = value_and_grad_func(*in_args)``.
-        Here, ``in_args`` is ``(params, func_state, rng, batch)``, with ``rng``
-        omitted if ``value_func_has_rng`` is ``False``, and with ``func_state``
-        omitted if ``value_func_has_state`` is ``False``. Meanwhile,
-        ``out_args`` is ``(loss, func_state, aux)``, with ``func_state`` omitted
-        if ``value_func_has_state`` is ``False``, and with ``aux`` omitted if
+        interface should be: ``out_args, loss_grads =
+        value_and_grad_func(*in_args)``. Here, ``in_args`` is ``(params,
+        func_state, rng, batch)``, with ``rng`` omitted if
+        ``value_func_has_rng`` is ``False``, and with ``func_state`` omitted if
+        ``value_func_has_state`` is ``False``. Meanwhile, ``out_args`` is
+        ``(loss, func_state, aux)``, with ``func_state`` omitted if
+        ``value_func_has_state`` is ``False``, and with ``aux`` omitted if
         ``value_func_has_aux`` is ``False``. If both ``value_func_has_state``
         and ``value_func_has_aux`` are ``False``, ``out_args`` should just be
         ``loss`` and not ``(loss,)``.
@@ -147,67 +171,59 @@ class Optimizer(utils.WithStagedMethods):
       value_func_has_rng: Boolean. Specifies whether the provided callable
         ``value_and_grad_func`` additionally takes as input an rng key.
         (Default: ``False``)
-      use_adaptive_learning_rate: Boolean. Specifies whether the optimizer will
-        use the quadratic model induced by the true curvature matrix to
-        automatically pick the learning rate or it would be fixed. If this is
-        set to False the user must provide a value to the learning_rate argument
-        of the step function at each iteration. (Default: ``False``)
+      use_adaptive_learning_rate: Boolean. Specifies whether to use the special
+        rule from the original K-FAC paper for picking the learning rate at each
+        step. Note that this won't work well for stochastic objectives. If this
+        is ``False``, the user must use the ``learning_rate`` argument of the
+        step function, or the constructor argument ``learning_rate_schedule``.
+        (Default: ``False``)
       learning_rate_schedule: Callable. A schedule for the learning rate. This
-        should take as input the current step number and return a single
-        array that represents the learning rate. (Default: ``None``)
-      use_adaptive_momentum: Boolean. Specifies whether the optimizer will
-        use the quadratic model induced by the true curvature matrix to
-        automatically pick the momentum or it would be fixed. If this is set to
-        ``False`` the user must provide a value to the momentum argument of the
-        step function at each iteration. (Default: False)
-      momentum_schedule: Callable. A schedule for the momentum. This should take
-        as input the current step number and return a single array that
-        represents the momentum. (Default: ``None``)
-      use_adaptive_damping: Boolean. Specifies whether the optimizer will
-        use the Levenberg-Marquardt method to try to adjust the damping
-        automatically every ``damping_adaptation_interval`` iterations. If this
-        is set to ``False`` the user must provide a value to the damping
-        argument of the step function at each iteration. (Default: ``False``)
+        should take as input the current step number and return a single array
+        that represents the learning rate. (Default: ``None``)
+      use_adaptive_momentum: Boolean. Specifies whether to use the special
+        rule from the original K-FAC paper for picking the momentum "decay"
+        parameter at each step. Note that this won't work well for stochastic
+        bjectives. If this is ``False``, the user must use the ``momentum``
+        argument of the step function, or the constructor argument
+        ``momentum_schedule``. (Default: ``False``)
+      momentum_schedule: Callable. A schedule for the momentum parameter. This
+        should take as input the current step number and return a single array
+        that represents the momentum. (Default: ``None``)
+      use_adaptive_damping: Boolean. Specifies whether the optimizer will use
+        the Levenberg-Marquardt method to automatically adjust the damping every
+        ``damping_adaptation_interval`` iterations. If this is set to ``False``
+        the user must provide a value to the damping argument of the step
+        function at each iteration, or use the ``damping_schedule`` constructor
+        argument. Note that the effectiveness of this technique seems to vary
+        between problems. (Default: ``False``)
       damping_schedule: Callable. A schedule for the damping. This should take
         as input the current step number and return a single array that
         represents the learning rate. (Default: ``None``)
       initial_damping: Scalar or None. This specifies the initial value of the
-        damping that the optimizer will use when ``use_adaptive_damping`` is set
-        to ``True``. The damping value times the identity matrix is
-        (approximately) added to the curvature matrix (i.e. the Fisher or GGN)
-        before it is inverted and multiplied by the gradient when computing the
-        (raw) update. This quantity should match the scale of the objective, so
-        that if you put a multiplier on your loss you should apply the same
-        multiplier to the damping. Roughly speaking, larger values constrain the
-        update vector to a smaller region around zero, which we want to do when
-        our local quadratic model is a less trustworthy local approximation of
-        the true objective. The damping value is closely related to the trust
-        region radius and to the classical Tikhonov regularization method.
-        (Default: ``None``)
-      min_damping: Scalar. Minimum value the damping parameter can take. Note
-        that the default value of 1e-8 is quite arbitrary, and you may have to
-        adjust this up or down for your particular problem. If you are using a
-        non-zero value of l2_reg you *may* be able to set this to zero.
-        (Default: ``1e-8``)
-      max_damping: Scalar. Maximum value the damping parameter can take.
-        (Default: ``Infinity``)
+        damping that the optimizer will use when using automatic damping
+        adaptation. (Default: ``None``)
+      min_damping: Scalar. Minimum value the damping parameter can take when
+        using automatic damping adaptation. Note that the default value of 1e-8
+        is quite arbitrary, and you may have to adjust this up or down for your
+        particular problem. If you are using a non-zero value of l2_reg you
+        *may* be able to set this to zero. (Default: ``1e-8``)
+      max_damping: Scalar. Maximum value the damping parameter can take when
+        using automatic damping adaptation. (Default: ``Infinity``)
       include_damping_in_quad_change: Boolean. Whether to include the
-        contribution of the extra isotropic damping term in the quadratic model
-        value for the purposes computing the reduction ration (``rho``). This is
-        only used when adapting the damping parameter. Note that the extra
-        damping from the ``l2_reg`` argument is always included.
-        (Default: ``False``)
-      damping_adaptation_interval: Int. The number of steps in between
-        updating the damping parameter. (Default: ``5``)
+        contribution of the damping in the quadratic model for the purposes
+        computing the reduction ration ("rho") in the Levenberg-Marquardt scheme
+        used for adapting the damping. Note that the contribution from the
+        ``l2_reg`` argument is always included. (Default: ``False``)
+      damping_adaptation_interval: Int. The number of steps in between adapting
+        the damping parameter. (Default: ``5``)
       damping_adaptation_decay: Scalar. The damping parameter will be adjusted
-        up or down by
-        ``damping_adaptation_decay ** damping_adaptation_interval``, or remain
-        unchanged, every ``damping_adaptation_interval`` number of iterations.
-        (Default: ``0.9``)
-      damping_lower_threshold: Scalar. The damping parameter is increased if
-        the reduction ratio is below this threshold. (Default: ``0.25``)
-      damping_upper_threshold: Scalar. The damping parameter is decreased if
-        the reduction ratio is below this threshold. (Default: ``0.75``)
+        up or down by ``damping_adaptation_decay **
+        damping_adaptation_interval``, or remain unchanged, every
+        ``damping_adaptation_interval`` number of iterations. (Default: ``0.9``)
+      damping_lower_threshold: Scalar. The damping parameter is increased if the
+        reduction ratio is below this threshold. (Default: ``0.25``)
+      damping_upper_threshold: Scalar. The damping parameter is decreased if the
+        reduction ratio is below this threshold. (Default: ``0.75``)
       always_use_exact_qmodel_for_damping_adjustment: Boolean. When using
         learning rate and/or momentum adaptation, the quadratic model change
         used for damping adaption is always computed using the exact curvature
@@ -215,9 +231,7 @@ class Optimizer(utils.WithStagedMethods):
         approximate curvature matrix to compute the quadratic model change,
         which is what this argument controls. When True, the exact curvature
         matrix will be used, which is more expensive, but could possibly produce
-        a better damping schedule (although it could also produce a worse one).
-        Note that if the damping is not being adapted then this argument has no
-        effect. (Default: ``False``)
+        a better damping schedule. (Default: ``False``)
       norm_constraint: Scalar. If specified, the update is scaled down so that
         its approximate squared Fisher norm ``v^T F v`` is at most the specified
         value. (Note that here ``F`` is the approximate curvature matrix, not
@@ -248,11 +262,11 @@ class Optimizer(utils.WithStagedMethods):
       patterns_to_skip: Tuple. A list of any patterns that should be skipped by
         the graph matcher when auto-tagging. (Default: ``()``)
       auto_register_kwargs: Any additional kwargs to be passed down to
-        :func:`~auto_register_tags`, which is called by the curvature
-        estimator. (Default: ``None``)
+        :func:`~auto_register_tags`, which is called by the curvature estimator.
+        (Default: ``None``)
       layer_tag_to_block_ctor: Dictionary. A mapping from layer tags to block
-        classes which to override the default choices of block approximation
-        for that specific tag. See the documentation for
+        classes which to override the default choices of block approximation for
+        that specific tag. See the documentation for
         :class:`~CurvatureEstimator` for a more detailed description. (Default:
         ``None``)
       multi_device: Boolean. Whether to use pmap and run the optimizer on
@@ -272,10 +286,10 @@ class Optimizer(utils.WithStagedMethods):
         they have been compiled. However, if you are extending this class, and
         clearly understand the risks of modifying attributes, setting this to
         ``False`` will remove the restriction. (Default: ``True``)
-      modifiable_attribute_exceptions: Sequence of strings. Gives a list
-        of names for attributes that can be modified after finalization even
-        when ``forbid_setting_attributes_after_finalize`` is ``True``.
-        (Default: ``()``)
+      modifiable_attribute_exceptions: Sequence of strings. Gives a list of
+        names for attributes that can be modified after finalization even when
+        ``forbid_setting_attributes_after_finalize`` is ``True``. (Default:
+        ``()``)
       include_norms_in_stats: Boolean. It True, the vector norms of the
         gradient, preconditioned gradient, and parameter update are included in
         the statistics returned by the step function. (Default: ``False``)
