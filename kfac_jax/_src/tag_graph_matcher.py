@@ -324,8 +324,11 @@ def make_jax_graph(
     tag_ctor: Optional[TagCtor] = None,
 ) -> JaxprGraph:
   """Creates a :class:`~JaxGraph` instance from the provided function and arguments."""
-  in_tree = jax.tree_util.tree_structure(func_args)
-  closed_jaxpr, out_shapes = jax.make_jaxpr(func, return_shape=True)(*func_args)
+  # we always put spin_state as the third argument
+  func_args_without_spin_state = tuple([arg for idx, arg in enumerate(list(func_args)) if idx != 2])
+  in_tree = jax.tree_util.tree_structure(func_args_without_spin_state)
+  closed_jaxpr, out_shapes = jax.make_jaxpr(func, return_shape=True, static_argnums=[2])(*func_args)
+  # closed_jaxpr, out_shapes = jax.make_jaxpr(func, return_shape=True)(*func_args)
 
   if compute_only_loss_tags:
     make_var_func = jax.core.gensym([closed_jaxpr.jaxpr])
@@ -1264,7 +1267,9 @@ class TaggedFunction:
     self._param_labels = self._compute_parameter_labels()
 
   def __call__(self, *args, **kwargs):
-    flat_args = jax.tree_util.tree_leaves(args)
+    # we always put spin state as the third argument
+    args_without_spin_state = tuple([arg for idx, arg in enumerate(list(args)) if idx != 2])
+    flat_args = jax.tree_util.tree_leaves(args_without_spin_state)
     flat_output = self._flat_func(*flat_args)
     return jax.tree_util.tree_unflatten(self._func_graph.out_tree, flat_output)
 
