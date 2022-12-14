@@ -743,19 +743,28 @@ def _layer_tag_vjp(
     read_primals = functools.partial(tgm.read_env, primals_dict)
     read_tangents = functools.partial(tgm.read_env, tangents_dict)
     layers_info = []
+
     for tag in processed_jaxpr.layer_tags:
+
       info = {}
+
       primals = jax.util.safe_map(read_primals, tuple(tag.invars))
+
       (info["outputs"],
        info["inputs"],
        info["params"]) = tag.primitive.split_all_inputs(primals)
+
       # Due to the ability to preprocess inputs for tags the input gradients
       # could be potentially wrong (e.g. zero) so we don't include them.
       tangents = jax.util.safe_map(read_tangents, tuple(tag.invars))
+
+      # inputs_tangent won't be correct for BN layers, but that won't matter
       (info["outputs_tangent"],
-       _,
+       info["inputs_tangent"],
        info["params_tangent"]) = tag.primitive.split_all_inputs(tangents)
+
       layers_info.append(info)
+
     return tuple(layers_info)
 
   return losses, vjp_func

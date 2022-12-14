@@ -338,6 +338,7 @@ class TestTracer(parameterized.TestCase):
       info["params"] = tuple(param[name] for name in p_names)
       info["params_tangent"] = tuple(param_tangent[name] for name in p_names)
       layers_info.append(info)
+
     layers_info = tuple(layers_info)
 
     # Tracer computation
@@ -345,6 +346,10 @@ class TestTracer(parameterized.TestCase):
         (params, data))
     tracer_losses = [loss.evaluate() for loss in tracer_losses]
     tracer_info = tracer_vjp_func(output_tangents)
+
+    # We don't support testing of inputs_tangent currently
+    for info in tracer_info:
+      info.pop("inputs_tangent")
 
     # Comparison
     self.assertAllClose(loss_values, tracer_losses)
