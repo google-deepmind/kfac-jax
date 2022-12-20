@@ -309,7 +309,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     # Initialize and load dataset
     if self.mode == "train":
       self._train_input = pipe_utils.py_prefetch(
-          datasets.dataset_as_generator(
+          functools.partial(
               self._build_train_input,
               split="train",
               seed=seed,
@@ -322,19 +322,20 @@ class SupervisedExperiment(experiment.AbstractExperiment):
 
     elif self.mode == "eval":
       self._eval_input = dict(
-          train=self._build_eval_input(
+          train=functools.partial(
+              self._build_eval_input,
               split="train",
               seed=seed,
               device_batch_size=self.eval_per_device_batch_size
           ),
-          test=self._build_eval_input(
+          test=functools.partial(
+              self._build_eval_input,
               split="test",
               seed=seed,
               device_batch_size=self.eval_per_device_batch_size
           ),
       )
-      init_batch = next(iter(datasets.tensorflow_datasets.as_numpy(
-          self._eval_input["train"])))
+      init_batch = next(self._eval_input["train"]())
 
     else:
       raise NotImplementedError()
@@ -460,13 +461,13 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     all_stats = dict()
 
     # Evaluates both the train and eval split metrics
-    for name, dataset in self._eval_input.items():
+    for name, dataset_iter_thunk in self._eval_input.items():
 
       logging.info("Running evaluation for %s", name)
 
       averaged_stats = kfac_jax.utils.MultiChunkAccumulator.empty(True)
 
-      for batch in datasets.tensorflow_datasets.as_numpy(dataset):
+      for batch in dataset_iter_thunk():
 
         key, rng = kfac_jax.utils.p_split(rng)
 

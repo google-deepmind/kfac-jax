@@ -15,7 +15,7 @@
 
 """
 import types
-from typing import Any, Callable, Dict, Generator, Mapping, Optional, Tuple, TypeVar
+from typing import Dict, Iterator, Mapping, Optional, Tuple, TypeVar
 
 import chex
 import jax
@@ -27,21 +27,11 @@ tfds = tensorflow_datasets
 
 # Types for annotation
 T = TypeVar("T")
+Batch = Dict[str, chex.Array]
 
 # Special global variables
 _IMAGENET_MEAN_RGB = (0.485, 0.456, 0.406)
 _IMAGENET_STDDEV_RGB = (0.229, 0.224, 0.225)
-
-
-def dataset_as_generator(
-    dataset_func: Callable[..., tf.data.Dataset],
-    *args: Any,
-    **kwargs: Any,
-) -> Callable[[], Generator[Mapping[str, chex.Array], None, None]]:
-  """Returns a function that creates a generator of the TF dataset."""
-  def iterable_func():
-    yield from tensorflow_datasets.as_numpy(dataset_func(*args, **kwargs))
-  return iterable_func
 
 
 def mnist_dataset(
@@ -56,7 +46,7 @@ def mnist_dataset(
     multi_device: bool = True,
     reshuffle_each_iteration: bool = True,
     dtype: str = "float32",
-) -> tf.data.Dataset:
+) -> Iterator[Batch]:
   """Standard MNIST dataset pipeline.
 
   Args:
@@ -118,11 +108,14 @@ def mnist_dataset(
                     reshuffle_each_iteration=reshuffle_each_iteration)
   if repeat:
     ds = ds.repeat()
+
   ds = ds.batch(host_batch_size, drop_remainder=drop_remainder)
   ds = ds.map(preprocess_batch,
               num_parallel_calls=tf.data.experimental.AUTOTUNE)
+
   ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
-  return ds
+
+  return iter(tensorflow_datasets.as_numpy(ds))
 
 
 def imagenet_num_examples_and_split(
@@ -155,7 +148,7 @@ def imagenet_dataset(
     dtype: jnp.dtype = jnp.float32,
     image_size: chex.Shape = (224, 224),
     data_dir: Optional[str] = None,
-) -> tf.data.Dataset:
+) -> Iterator[Batch]:
   """Standard ImageNet dataset pipeline.
 
   Args:
@@ -270,8 +263,10 @@ def imagenet_dataset(
       # but for bf16 some operations will end up silently placed on the TPU and
       # this causes stalls while TF and JAX battle for the accelerator.
       ds = ds.map(cast_fn)
+
   ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
-  return ds
+
+  return iter(tensorflow_datasets.as_numpy(ds))
 
 
 def _imagenet_preprocess_image(
