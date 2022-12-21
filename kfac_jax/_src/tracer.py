@@ -65,7 +65,9 @@ def make_cache_key(
     *args: Any
 ) -> Tuple[utils.PyTreeDef, Tuple[Tuple[chex.Shape, chex.ArrayDType], ...]]:
   """Creates a key for caching Jax function arguments."""
+
   args_flat, tree_structure = jax.tree_util.tree_flatten((func_args, args))
+
   return tree_structure, tuple(map(shape_and_type, args_flat))
 
 
@@ -73,6 +75,7 @@ def extract_tags(
     jaxpr: jax.core.Jaxpr
 ) -> Tuple[Tuple[tags.LayerTagEqn, ...], Tuple[tags.LossTagEqn, ...]]:
   """Extracts the layer and the loss tags from the given Jaxpr."""
+
   return (tuple(eqn for eqn in jaxpr.eqns
                 if isinstance(eqn.primitive, tags.LayerTag)),
           tuple(eqn for eqn in jaxpr.eqns
@@ -100,18 +103,25 @@ def order_layer_tags(
   """
   tags_param_indices = []
   used_indices = set()
+
   for eqn in layer_tags:
+
     # Collect the equation parameter indices
     _, _, tag_vars = eqn.primitive.split_all_inputs(eqn.invars)
     vars_indices = tuple(params_vars_flat.index(v) for v in tag_vars)
+
     if any(i in used_indices for i in vars_indices):
       raise ValueError("Reusing variable in a second block.")
+
     used_indices = used_indices.union(vars_indices)
     tags_param_indices.append(vars_indices)
+
   left_out_indices = set(range(len(params_vars_flat))) - used_indices
+
   if left_out_indices and not allow_left_out_params:
     raise ValueError("The following parameter indices were not assigned a "
                      f"block: {left_out_indices}.")
+
   if not layer_tags:
     return (), ()
   else:
@@ -227,14 +237,17 @@ class ProcessedJaxpr(utils.Finalizable):
       A :class:`~ProcessedJaxpr` representing the model function.
     """
     func_args = tuple(func_args)
+
     if auto_register_tags:
       func = tgm.auto_register_tags(
           func=func,
           func_args=func_args,
           params_index=params_index,
           **auto_registration_kwargs)
+
     typed_jaxpr = jax.make_jaxpr(func)(*func_args)
     jaxpr, consts = typed_jaxpr.jaxpr, typed_jaxpr.literals
+
     in_tree = jax.tree_util.tree_structure(func_args)
 
     return ProcessedJaxpr(
@@ -247,6 +260,7 @@ class ProcessedJaxpr(utils.Finalizable):
 
   def __eq__(self, other: "ProcessedJaxpr") -> bool:
     """Compares two ProcessedJaxpr instances by tree structure."""
+
     # Verify whether input trees are equivalent
     if self.in_tree != other.in_tree:
       return False
@@ -254,15 +268,19 @@ class ProcessedJaxpr(utils.Finalizable):
     # Verify whether layer indices are equivalent
     if len(self.layer_indices) != len(other.layer_indices):
       return False
+
     for ref_l_index, l_index in zip(self.layer_indices, other.layer_indices):
+
       if len(ref_l_index) != len(l_index):
         return False
+
       if any(p_i != p_j for p_i, p_j in zip(ref_l_index, l_index)):
         return False
 
     # Verify layer tags are equivalent
     if len(self.layer_tags) != len(other.layer_tags):
       return False
+
     if any(ref_tag.primitive != tag.primitive
            for ref_tag, tag in zip(self.layer_tags, other.layer_tags)):
       return False
@@ -324,9 +342,11 @@ def cached_transformation(
       *args: Any,
       return_only_jaxpr: bool = False,
   ) -> Union[ProcessedJaxpr, Any]:
+
     # Construct a key and check cache for hits
     key = make_cache_key(func_args)
     jaxpr, f = cache.get(key, (None, None))
+
     if jaxpr is not None:
       if return_only_jaxpr:
         return jaxpr
@@ -342,18 +362,22 @@ def cached_transformation(
         allow_left_out_params=allow_left_out_params,
         **auto_registration_kwargs
     )
+
     if not allow_no_losses and not processed_jaxpr.loss_tags:
       raise ValueError("No registered losses have been found during tracing.")
 
     if cache and raise_error_on_diff_jaxpr:
+
       # If any previous `ProcessedJaxpr` exists verify that they are equivalent
       ref_jaxpr, _ = cache[next(iter(cache))]
+
       if ref_jaxpr != processed_jaxpr:
         raise ValueError("The consecutive tracing of the provided function "
                          "yielded a non-equivalent `ProcessedJaxpr`.")
 
     transformed = functools.partial(transformation, processed_jaxpr)
     cache[key] = (processed_jaxpr, transformed)
+
     if return_only_jaxpr:
       return processed_jaxpr
     else:
@@ -394,19 +418,24 @@ def construct_compute_losses_inputs(
   Returns:
     A function which computes the inputs to the first ``num_losses`` loss tags.
   """
+
   def forward_compute_losses(
       primal_params: utils.Params
   ) -> Tuple[Tuple[LossTagInputs, ...], Tuple[LossTagInputs, ...]]:
     """Computes and returns the inputs to the first ``num_losses`` loss tags."""
+
     # Check the provided inputs match the original primals.
     local_func_args = list(primal_func_args)
     original_params = local_func_args[params_index]
+
     if not utils.abstract_objects_equal(original_params, primal_params):
       raise ValueError("The `primal_params` should have the same abstract "
                        "structure as the original parameters passed in to the "
                        "function.")
+
     local_func_args[params_index] = primal_params
     flat_args = jax.tree_util.tree_leaves(local_func_args)
+
     # Mapping from variable -> value
     env = {}
     read = functools.partial(tgm.read_env, env)
@@ -421,15 +450,20 @@ def construct_compute_losses_inputs(
     losses_p_deps = []
     losses_inputs = []
     for eqn in jaxpr.eqns:
+
       write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
+
       if isinstance(eqn.primitive, tags.LossTag):
         losses_inputs.append(read(eqn.invars))
         losses_p_deps.append(eqn.primitive.extract_parameter_dependants(
             *losses_inputs[-1], **eqn.params))
         losses_so_far += 1
+
       if num_losses is not None and losses_so_far == num_losses:
         break
+
     return tuple(losses_p_deps), tuple(losses_inputs)
+
   return forward_compute_losses
 
 
@@ -455,18 +489,24 @@ def _loss_tags_vjp(
   Returns:
     The computed ``losses`` and ``losses_vjp`` pair.
   """
+
   if not p_jaxpr.loss_tags:
     raise ValueError("The provided `ProcessedJaxpr` has no loss tags.")
+
   losses_func = construct_compute_losses_inputs(
       jaxpr=p_jaxpr.jaxpr,
       consts=p_jaxpr.consts,
       num_losses=len(p_jaxpr.loss_tags),
       primal_func_args=primal_func_args,
       params_index=p_jaxpr.params_index)
+
   primal_params = primal_func_args[p_jaxpr.params_index]
+
   (_, losses_inputs), full_vjp_func = jax.vjp(losses_func, primal_params)
+
   losses = tuple(tag.primitive.loss(*inputs, **tag.params)
                  for tag, inputs in zip(p_jaxpr.loss_tags, losses_inputs))
+
   zero_tangents = jax.tree_util.tree_map(jnp.zeros_like, losses_inputs)
 
   def losses_vjp_func(losses_tangents: Sequence[LossTagInputs]) -> utils.Params:
@@ -478,20 +518,24 @@ def _loss_tags_vjp(
     Returns:
       The parameters' tangents, as a result of the vector-Jacobian product.
     """
+
     if len(losses_tangents) != len(p_jaxpr.loss_tags):
       raise ValueError("The argument `tangents` must be a sequence of the "
                        "tangents to each loss tag in the same order as the "
                        "loss objects that have been returned. The number of "
                        f"loss_tags is {len(p_jaxpr.loss_tags)}, but the length "
                        f"of `tangents` is {len(losses_tangents)}.")
+
     for i, loss_tangents in enumerate(losses_tangents):
       if not isinstance(loss_tangents, Sequence):
         raise ValueError("Each element of the argument `tangents` must be "
                          f"a sequence, but tangents[{i}] has type "
                          f"{type(loss_tangents)}.")
+
     # The tangents of the second entry are always zero, as we compute this only
     # for the parameter dependent arrays.
     params_tangents, = full_vjp_func((losses_tangents, zero_tangents))
+
     return params_tangents
 
   return losses, losses_vjp_func
@@ -522,23 +566,32 @@ def _loss_tags_jvp(
   Returns:
     The computed ``losses`` and ``losses_tangents`` pair.
   """
+
   if not p_jaxpr.loss_tags:
     raise ValueError("The provided `ProcessedJaxpr` has no loss tags.")
+
   losses_func = construct_compute_losses_inputs(
       jaxpr=p_jaxpr.jaxpr,
       consts=p_jaxpr.consts,
       num_losses=len(p_jaxpr.loss_tags),
       primal_func_args=primal_func_args,
       params_index=p_jaxpr.params_index)
+
   primal_params = (primal_func_args[p_jaxpr.params_index],)
+
   tangents = (params_tangents,)
+
   (primals_out, tangents_out) = jax.jvp(losses_func, primal_params, tangents)
+
   _, losses_inputs_primals = primals_out
+
   losses_tangents, _ = tangents_out
+
   losses = tuple(
       tag.primitive.loss(*inputs, **tag.params)
       for tag, inputs in zip(p_jaxpr.loss_tags, losses_inputs_primals)
   )
+
   return losses, losses_tangents
 
 
@@ -566,8 +619,10 @@ def _loss_tags_hvp(
     the resulting :class:`~LossFunction` objects that correspond to every
     loss tag.
   """
+
   if not processed_jaxpr.loss_tags:
     raise ValueError("The provided `ProcessedJaxpr` has no loss tags.")
+
   losses_func = construct_compute_losses_inputs(
       jaxpr=processed_jaxpr.jaxpr,
       consts=processed_jaxpr.consts,
@@ -579,7 +634,9 @@ def _loss_tags_hvp(
       param_primals: utils.Params
   ) -> Tuple[loss_functions.LossFunction, ...]:
     """Computes the sum of all losses as a scalar."""
+
     _, loss_inputs = losses_func(param_primals)
+
     return tuple(tag.primitive.loss(*inputs, **tag.params)
                  for tag, inputs in zip(processed_jaxpr.loss_tags, loss_inputs))
 
@@ -626,7 +683,9 @@ def _layer_tag_vjp(
 
   def forward() -> Tuple[chex.Array, ...]:
     """Computes the values of all inputs to all **layer** tags."""
+
     own_func_args = primal_func_args
+
     # Mapping from variable -> value
     env = {}
     read = functools.partial(tgm.read_env, env)
@@ -640,11 +699,16 @@ def _layer_tag_vjp(
     # Loop through equations and evaluate them
     num_losses_passed = 0
     for eqn in processed_jaxpr.jaxpr.eqns:
+
       write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
+
       if isinstance(eqn.primitive, tags.LossTag):
+
         num_losses_passed += 1
+
         if num_losses_passed == len(processed_jaxpr.loss_tags):
           break
+
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 
     return read(layer_input_vars)
@@ -666,15 +730,22 @@ def _layer_tag_vjp(
       is a tuple of the input values for each loss tag, and ``losses_kwargs``
       is a tuple of the kwargs values of each loss tag.
     """
+
     own_func_args = primal_func_args
+
     # Mapping from variable -> value
     env = {}
     read = functools.partial(tgm.read_env, env)
+
     def write(var, val):
+
       tgm.write_env(env, var, val)
+
       if not isinstance(var, list):
         var = [var]
+
       assert isinstance(var, list)
+
       for v in var:
         if not isinstance(v, jax.core.Literal) and v in aux:
           env[v] = env[v] + aux[v]
@@ -682,22 +753,30 @@ def _layer_tag_vjp(
     # Bind args and consts to environment
     write(processed_jaxpr.jaxpr.invars,
           jax.tree_util.tree_leaves(own_func_args))
+
     write(processed_jaxpr.jaxpr.constvars, processed_jaxpr.consts)
 
     # Loop through equations and evaluate primitives using `bind`
     num_losses_passed = 0
     losses_p_dependants = []
     losses_inputs_values = []
+
     for eqn in processed_jaxpr.jaxpr.eqns:
+
       input_values = tuple(read(eqn.invars))
       write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
+
       if isinstance(eqn.primitive, tags.LossTag):
         loss = eqn.primitive.loss(*input_values, **eqn.params)
+
         losses_p_dependants.append(loss.parameter_dependants)
         losses_inputs_values.append(input_values)
+
         num_losses_passed += 1
+
         if num_losses_passed == len(processed_jaxpr.loss_tags):
           break
+
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 
     # Read the inputs to the loss functions, but also return the target values
@@ -706,17 +785,22 @@ def _layer_tag_vjp(
   # First compute the primal values for the inputs to all layer tags
   layer_input_values = forward()
   primals_dict = dict(zip(layer_input_vars, layer_input_values))
+
   # Update with the values of all parameters, which are inputs to the function
   primals_dict.update(zip(processed_jaxpr.jaxpr.invars,
                           jax.tree_util.tree_leaves(primal_func_args)))
+
   # Create auxiliary values all equal to zero.
   aux_values = jax.tree_util.tree_map(jnp.zeros_like, layer_input_values)
+
   # Create a mapping from all layer tag inputs to the zero values
   aux_dict = dict(zip(layer_input_vars, aux_values))
+
   # These values would now allow us to compute gradients wrt the layer tags
   # inputs, which are intermediate expressions in the Jaxpr.
   _, aux_vjp, losses_inputs = jax.vjp(
       forward_aux, aux_dict, has_aux=True)
+
   # Compute the actual loss objects.
   losses = tuple(tag.primitive.loss(*inputs, **tag.params) for tag, inputs in
                  zip(processed_jaxpr.loss_tags, losses_inputs))
