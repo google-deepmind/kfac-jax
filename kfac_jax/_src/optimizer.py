@@ -670,8 +670,7 @@ class Optimizer(utils.WithStagedMethods):
       sq_norm_scaled_grads = utils.pmean_if_pmap(sq_norm_scaled_grads,
                                                  self.pmap_axis_name)
       norm_constraint_factor = jnp.sqrt(self._norm_constraint / sq_norm_scaled_grads)
-      norm_constraint_factor = jnp.minimum(norm_constraint_factor, 1)
-      preconditioned_grads = utils.scalar_mul(preconditioned_grads, norm_constraint_factor)
+      preconditioned_grads = utils.scalar_mul(preconditioned_grads, jnp.minimum(norm_constraint_factor, 1))
 
     return preconditioned_grads, norm_constraint_factor
 
