@@ -96,6 +96,7 @@ class Optimizer(utils.WithStagedMethods):
       damping_lower_threshold: chex.Numeric = 0.25,
       damping_upper_threshold: chex.Numeric = 0.75,
       always_use_exact_qmodel_for_damping_adjustment: bool = False,
+      norm_constraint_mode = 'fisher',
       norm_constraint: Optional[chex.Numeric] = None,
       num_burnin_steps: int = 10,
       estimation_mode: str = "fisher_gradients",
@@ -360,6 +361,7 @@ class Optimizer(utils.WithStagedMethods):
     self._damping_upper_threshold = damping_upper_threshold
     self._always_use_exact_qmodel_for_damping_adjustment = (
         always_use_exact_qmodel_for_damping_adjustment)
+    self._norm_constraint_mode = norm_constraint_mode
     self._norm_constraint = norm_constraint
     self._num_burnin_steps = num_burnin_steps
     self._estimation_mode = estimation_mode
@@ -643,15 +645,22 @@ class Optimizer(utils.WithStagedMethods):
     )
 
 
-    max_coefficient = None
+    norm_constraint_factor = None
     if self._norm_constraint is not None:
 
       assert not self._use_adaptive_learning_rate
       assert coefficient is not None
 
-      sq_norm_grads = utils.inner_product(preconditioned_grads, grads)
-
-      sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
+      if self._norm_constraint_mode == 'fisher':
+        sq_norm_grads = utils.inner_product(preconditioned_grads, grads)
+        sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
+      elif self._norm_constraint_mode == 'step':
+        sq_norm_grads = utils.inner_product(preconditioned_grads, preconditioned_grads)
+        sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
+      elif self._norm_constraint_mode == 'precond_grad':
+        sq_norm_scaled_grads = utils.inner_product(preconditioned_grads, preconditioned_grads)
+      else:
+        raise ValueError(f"Unknown norm_constraint_mode: {self._norm_constraint_mode}")
 
       # We need to sync the norms here, because reduction can be
       # non-deterministic. They specifically are on GPUs by default for better
@@ -660,13 +669,11 @@ class Optimizer(utils.WithStagedMethods):
       # different devices.
       sq_norm_scaled_grads = utils.pmean_if_pmap(sq_norm_scaled_grads,
                                                  self.pmap_axis_name)
+      norm_constraint_factor = jnp.sqrt(self._norm_constraint / sq_norm_scaled_grads)
+      norm_constraint_factor = jnp.minimum(norm_constraint_factor, 1)
+      preconditioned_grads = utils.scalar_mul(preconditioned_grads, norm_constraint_factor)
 
-      max_coefficient = jnp.sqrt(self._norm_constraint / sq_norm_scaled_grads)
-      coefficient = jnp.minimum(max_coefficient, 1)
-
-      preconditioned_grads = utils.scalar_mul(preconditioned_grads, coefficient)
-
-    return preconditioned_grads, max_coefficient
+    return preconditioned_grads, norm_constraint_factor
 
   def _compute_quad_change_for_damping(
       self,
@@ -954,6 +961,8 @@ class Optimizer(utils.WithStagedMethods):
     batch_size = self._batch_size_extractor(func_args[-1], False)
     if self.multi_device:
       total_batch_size = batch_size * jax.device_count()
+    else:
+      total_batch_size = batch_size
 
     # Update data seen and step counter
     state.data_seen = state.data_seen + total_batch_size
