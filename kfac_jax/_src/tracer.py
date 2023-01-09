@@ -348,9 +348,6 @@ def cached_transformation(
     if not allow_no_losses and not processed_jaxpr.loss_tags:
       raise ValueError("No registered losses have been found during tracing.")
 
-    # TODO: Fix this temporary fix
-    """This is commented out because when using pretraining on multiple geometries
-       it throws an error during optimization """
     if cache and raise_error_on_diff_jaxpr:
       # If any previous `ProcessedJaxpr` exists verify that they are equivalent
       ref_jaxpr, _ = cache[next(iter(cache))]
