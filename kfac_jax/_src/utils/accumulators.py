@@ -183,12 +183,16 @@ class MultiChunkAccumulator(Generic[TPyTree]):
       multi_device: bool
   ) -> "MultiChunkAccumulator[TPyTree]":
     """Creates a zero initialized accumulator as `obj`."""
-    value = parallel.jit_zeros_like(obj) if types.tree_is_empty(obj) else obj
-    weight = jnp.zeros([], dtype=jnp.int32)
 
     if multi_device:
-      weight = parallel.replicate_all_local_devices(weight)
-      value = parallel.replicate_all_local_devices(value)
+      value = (parallel.pmap_zeros_like(obj)
+               if not types.tree_is_empty(obj) else obj)
+      weight = parallel.replicate_all_local_devices(
+          jnp.zeros([], dtype=jnp.int32))
+    else:
+      value = (parallel.jit_zeros_like(obj)
+               if not types.tree_is_empty(obj) else obj)
+      weight = jnp.zeros([], dtype=jnp.int32)
 
     return cls(value, weight, multi_device)
 
