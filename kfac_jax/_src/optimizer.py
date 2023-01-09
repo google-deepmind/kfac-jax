@@ -96,7 +96,7 @@ class Optimizer(utils.WithStagedMethods):
       damping_lower_threshold: chex.Numeric = 0.25,
       damping_upper_threshold: chex.Numeric = 0.75,
       always_use_exact_qmodel_for_damping_adjustment: bool = False,
-      norm_constraint_mode = 'fisher',
+      norm_constraint_mode = 'fisher_scaled',
       norm_constraint: Optional[chex.Numeric] = None,
       num_burnin_steps: int = 10,
       estimation_mode: str = "fisher_gradients",
