@@ -542,7 +542,7 @@ class Optimizer(utils.WithStagedMethods):
   def _setup_func_args_and_rng(
       self,
       params: utils.Params,
-      additional_args: Any,
+      static_args: Any,
       rng: chex.PRNGKey,
       batch: utils.Batch,
       func_state: Optional[utils.FuncState],
@@ -562,7 +562,7 @@ class Optimizer(utils.WithStagedMethods):
         params=params,
         func_state=func_state,
         rng=func_rng,
-        additional_args=additional_args,
+        static_args=static_args,
         batch=batch,
         has_state=self._value_func_has_state,
         has_rng=self._value_func_has_rng,
@@ -753,7 +753,7 @@ class Optimizer(utils.WithStagedMethods):
       self,
       params: utils.Params,
       rng: chex.PRNGKey,
-      additional_args: Any,
+      static_args: Any,
       batch: utils.Batch,
       func_state: Optional[utils.FuncState] = None,
   ) -> "Optimizer.State":
@@ -769,7 +769,7 @@ class Optimizer(utils.WithStagedMethods):
                 params=params,
                 func_state=func_state,
                 rng=rng,
-                additional_args=additional_args,
+                static_args=static_args,
                 batch=self._batch_process_func(batch),
                 has_state=self._value_func_has_state,
                 has_rng=self._value_func_has_rng,
@@ -789,15 +789,15 @@ class Optimizer(utils.WithStagedMethods):
       params: utils.Params,
       rng: chex.PRNGKey,
       batch: utils.Batch,
-      additional_args: Optional[Any] = None,
+      static_args: Optional[Any] = None,
       func_state: Optional[utils.FuncState] = None,
   ) -> "Optimizer.State":
     """Initializes the optimizer and returns the appropriate optimizer state."""
 
     if not self.finalized:
-      self.finalize(params, rng, additional_args, batch, func_state)
+      self.finalize(params, rng, static_args, batch, func_state)
 
-    return self._init(params, rng, additional_args, batch, func_state)
+    return self._init(params, rng, static_args, batch, func_state)
 
   @functools.partial(utils.staged, donate_argnums=[1, 3, 5])
   def _burnin(
@@ -864,7 +864,7 @@ class Optimizer(utils.WithStagedMethods):
       self,
       params: utils.Params,
       state: "Optimizer.State",
-      additional_args: any,
+      static_args: any,
       rng: chex.Array,
       batch: utils.Batch,
       func_state: Optional[utils.FuncState],
@@ -883,7 +883,7 @@ class Optimizer(utils.WithStagedMethods):
         state.damping if self._use_adaptive_damping else damping,
         state.step_counter)
     func_args, rng = self._setup_func_args_and_rng(
-        params, additional_args, rng, batch, func_state)
+        params, static_args, rng, batch, func_state)
 
     # Update curvature estimate
     state.estimator_state = self._update_estimator_curvature(
@@ -1009,7 +1009,7 @@ class Optimizer(utils.WithStagedMethods):
       self,
       params: utils.Params,
       state: "Optimizer.State",
-      additional_args: Any,
+      static_args: Any,
       rng: chex.PRNGKey,
       data_iterator: Optional[Iterator[utils.Batch]] = None,
       batch: Optional[utils.Batch] = None,
@@ -1024,6 +1024,7 @@ class Optimizer(utils.WithStagedMethods):
     Args:
       params: The parameters of the model.
       state: The state of the optimizer.
+      static_args: Static arguments passed to the (optimized) function 
       rng: A Jax PRNG key.
       data_iterator: A data iterator.
       batch: A single batch.
@@ -1078,7 +1079,7 @@ class Optimizer(utils.WithStagedMethods):
     if data_iterator is not None:
       batch = next(data_iterator)
 
-    return self._step(params, state, additional_args, rng, batch, func_state,
+    return self._step(params, state, static_args, rng, batch, func_state,
                       learning_rate, momentum, damping)
 
   def compute_l2_quad_matrix(
@@ -1323,7 +1324,7 @@ def make_func_args(
     params: utils.Params,
     func_state: Optional[utils.FuncState],
     rng: Optional[chex.PRNGKey],
-    additional_args: Any,
+    static_args: Any,
     batch: utils.Batch,
     has_state: bool,
     has_rng: bool,
@@ -1340,6 +1341,7 @@ def make_func_args(
     func_state: The function state, if ``has_state`` is ``True``, ``None``
       otherwise.
     rng: The PRNG, if ``has_rng`` is ``True``, ``None`` otherwise.
+    static_args: Static arguments passed to the function
     batch: The batch of data.
     has_state: Whether the function has a function state.
     has_rng: Whether the function uses an rng.
@@ -1353,18 +1355,19 @@ def make_func_args(
   if has_rng and rng is None:
     raise ValueError("`rng=None`, but argument `has_rng=True`.")
 
-  # make sure additional_args (spin_state) is always the third returned argument
+  # make sure static_args is always the third returned argument
+  # this is important for filtering static arguments out of jaxpr
   if not has_state and not has_rng:
-    return params, batch, additional_args
+    return params, batch, static_args
 
   elif not has_rng:
-    return params, func_state, additional_args, batch
+    return params, func_state, static_args, batch
 
   elif not has_state:
-    return params, rng, additional_args, batch
+    return params, rng, static_args, batch
 
   else:
-    return params, func_state, additional_args, rng, batch
+    return params, func_state, static_args, rng, batch
 
 
 def extract_func_outputs(
