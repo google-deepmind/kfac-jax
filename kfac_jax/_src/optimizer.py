@@ -647,18 +647,19 @@ class Optimizer(utils.WithStagedMethods):
 
     norm_constraint_factor = None
     if self._norm_constraint is not None:
-
       assert not self._use_adaptive_learning_rate
       assert coefficient is not None
 
       if self._norm_constraint_mode == 'fisher':
         sq_norm_grads = utils.inner_product(preconditioned_grads, grads)
-        sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
-      elif self._norm_constraint_mode == 'step':
-        sq_norm_grads = utils.inner_product(preconditioned_grads, preconditioned_grads)
-        sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
+      elif self._norm_constraint_mode == 'fisher_scaled':
+        sq_norm_grads = utils.inner_product(preconditioned_grads, grads)
+        sq_norm_grads = sq_norm_grads * coefficient ** 2
       elif self._norm_constraint_mode == 'precond_grad':
-        sq_norm_scaled_grads = utils.inner_product(preconditioned_grads, preconditioned_grads)
+        sq_norm_grads = utils.inner_product(preconditioned_grads, preconditioned_grads)
+      elif self._norm_constraint_mode == 'precond_grad_scaled':
+        sq_norm_grads = utils.inner_product(preconditioned_grads, preconditioned_grads)
+        sq_norm_grads = sq_norm_grads * coefficient ** 2
       else:
         raise ValueError(f"Unknown norm_constraint_mode: {self._norm_constraint_mode}")
 
@@ -667,9 +668,8 @@ class Optimizer(utils.WithStagedMethods):
       # performance. Hence although grads and preconditioned_grads are synced,
       # the inner_product operation can still produce different answers on
       # different devices.
-      sq_norm_scaled_grads = utils.pmean_if_pmap(sq_norm_scaled_grads,
-                                                 self.pmap_axis_name)
-      norm_constraint_factor = jnp.sqrt(self._norm_constraint / sq_norm_scaled_grads)
+      sq_norm_grads = utils.pmean_if_pmap(sq_norm_grads, self.pmap_axis_name)
+      norm_constraint_factor = jnp.sqrt(self._norm_constraint / sq_norm_grads)
       preconditioned_grads = utils.scalar_mul(preconditioned_grads, jnp.minimum(norm_constraint_factor, 1))
 
     return preconditioned_grads, norm_constraint_factor
