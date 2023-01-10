@@ -13,18 +13,18 @@
 # limitations under the License.
 """K-FAC optimizer."""
 import functools
-from typing import Any, Callable, Iterator, Mapping, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Any, Callable, Iterator, Mapping, Optional, Sequence, Tuple, Union
 
 import chex
 import jax
 from jax import lax
 import jax.numpy as jnp
-
 from kfac_jax._src import curvature_estimator
 from kfac_jax._src import utils
+from typing_extensions import TypeAlias
 
 # Types for annotation
-OptimizerState = TypeVar("OptimizerState", bound="Optimizer.State")
+OptimizerState: TypeAlias = "Optimizer.State"
 ScheduleType = Callable[[chex.Array], Optional[chex.Array]]
 FuncArgsVariants = Union[
     Tuple[utils.Params, utils.Batch],
