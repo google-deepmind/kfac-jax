@@ -97,9 +97,17 @@ def get_sum(obj: TPyTree) -> TPyTree:
   return get_first(compute_sum(obj))
 
 
-broadcast_all_local_devices = jax.pmap(lambda x: x)
 pmap_zeros_like = jax.pmap(lambda x: jax.tree_util.tree_map(jnp.zeros_like, x))
 jit_zeros_like = jax.jit(lambda x: jax.tree_util.tree_map(jnp.zeros_like, x))
+
+
+def broadcast_all_local_devices(obj: TPyTree) -> TPyTree:
+  """Distributes `obj` along the 0-th axis to all local Jax devices."""
+  obj_shards = jax.tree_map(
+      lambda arr: arr.split(jax.local_device_count(), axis=0),
+      obj,
+  )
+  return jax.device_put_sharded(obj_shards, devices=jax.local_devices())
 
 
 def replicate_all_local_devices(obj: TPyTree) -> TPyTree:
@@ -107,11 +115,7 @@ def replicate_all_local_devices(obj: TPyTree) -> TPyTree:
   if types.tree_is_empty(obj):
     return obj
 
-  n = jax.local_device_count()
-  obj_stacked = jax.tree_util.tree_map(
-      lambda x: jnp.stack([x] * n, axis=0), obj)
-
-  return broadcast_all_local_devices(obj_stacked)
+  return jax.device_put_replicated(obj, devices=jax.local_devices())
 
 
 def make_different_rng_key_on_all_devices(rng: chex.PRNGKey) -> chex.PRNGKey:
