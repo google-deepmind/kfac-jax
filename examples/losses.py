@@ -71,8 +71,8 @@ def softmax_cross_entropy(
 
   if register_loss:
     if not isinstance(weight, float):
-      raise NotImplementedError("We currently don't support non-constant loss "
-                                "weights in K-FAC.")
+      raise NotImplementedError("Non-constant loss weights are not currently "
+                                "supported.")
 
     # Currently the registration functions only support 2D array inputs values
     # for `logits`, and so we need the reshapes below.
@@ -83,6 +83,9 @@ def softmax_cross_entropy(
         weight=weight)
 
   max_logits = jnp.max(logits, keepdims=True, axis=-1)
+
+  # It's unclear whether this stop_gradient is a good idea.
+  # See https://github.com/google/jax/issues/13529
   max_logits = lax.stop_gradient(max_logits)
 
   logits = logits - max_logits
@@ -125,10 +128,13 @@ def squared_error(
     register_loss: bool = True,
 ) -> chex.Array:
   """Squared error loss."""
+
   if prediction.shape != targets.shape:
     raise ValueError("prediction and targets should have the same shape.")
+
   if register_loss:
     kfac_jax.register_squared_error_loss(prediction, targets, weight)
+
   return weight * jnp.sum(jnp.square(prediction - targets), axis=-1)
 
 

@@ -604,9 +604,12 @@ class Optimizer(utils.WithStagedMethods):
       func_args: FuncArgsVariants,
   ) -> Tuple[chex.Array, utils.Params, utils.FuncState, utils.FuncAux]:
     """Computes the model loss value and its gradients."""
+
     out, grads = self._value_and_grad_func(*func_args)
+
     loss, func_state, aux = extract_func_outputs(
         out, self._value_func_has_aux, self._value_func_has_state)
+
     return loss, grads, func_state, aux
 
   def _maybe_update_inverse_cache(
@@ -750,6 +753,7 @@ class Optimizer(utils.WithStagedMethods):
 
     damping, rho = self._compute_new_damping_and_rho(
         old_loss, new_loss, quad_change, old_damping)
+
     return damping, rho, new_loss
 
   @utils.staged
