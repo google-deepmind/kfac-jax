@@ -964,6 +964,8 @@ class Optimizer(utils.WithStagedMethods):
     batch_size = self._batch_size_extractor(func_args[-1])
     if self.multi_device:
       total_batch_size = batch_size * jax.device_count()
+    else:
+      total_batch_size = batch_size
 
     # Update data seen and step counter
     state.data_seen = state.data_seen + total_batch_size
