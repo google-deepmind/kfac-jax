@@ -107,11 +107,7 @@ def replicate_all_local_devices(obj: TPyTree) -> TPyTree:
   if types.tree_is_empty(obj):
     return obj
 
-  n = jax.local_device_count()
-  obj_stacked = jax.tree_util.tree_map(
-      lambda x: jnp.stack([x] * n, axis=0), obj)
-
-  return broadcast_all_local_devices(obj_stacked)
+  return jax.device_put_replicated(obj, devices=jax.local_devices())
 
 
 def make_different_rng_key_on_all_devices(rng: chex.PRNGKey) -> chex.PRNGKey:
