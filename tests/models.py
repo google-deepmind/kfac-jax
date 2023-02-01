@@ -134,12 +134,10 @@ class _Conv2D(hk.Conv2D):
           ),
           feature_group_count=1,
           lhs_dilation=(1, 1),
-          lhs_shape=x.shape,
           padding=((0, 1), (0, 1)),
           precision=(jax.lax.Precision.HIGHEST, jax.lax.Precision.HIGHEST),
           preferred_element_type=None,
           rhs_dilation=(1, 1),
-          rhs_shape=params[0].shape,
           window_strides=self.stride,
       )
     return y, layer_values, aux

@@ -90,8 +90,7 @@ def conv_general_dilated_equivalent(
   params1 = equation1.params
   params2 = equation2.params
   for k in ("window_strides", "padding",
-            "lhs_dilation", "rhs_dilation",
-            "lhs_shape", "rhs_shape"):
+            "lhs_dilation", "rhs_dilation"):
     if len(params1[k]) != len(params2[k]):
       return False
   if (len(params1["dimension_numbers"].lhs_spec) !=
