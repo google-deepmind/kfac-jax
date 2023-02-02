@@ -1008,7 +1008,7 @@ class Optimizer(utils.WithStagedMethods):
       state.damping = None
 
     if self._value_func_has_state:
-      return params, state, func_state, stats, preconditioned_gradient, grads
+      return params, state, func_state, stats
     else:
       assert func_state is None
       return params, state, stats
