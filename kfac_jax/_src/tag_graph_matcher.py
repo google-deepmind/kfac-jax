@@ -277,12 +277,15 @@ class JaxprGraph:
     # leaf_vars depends on them
 
     to_process_eqns = [self.var_to_creation_op[v] for v in leaf_vars]
+    processed_vars = set()
     while to_process_eqns:
       next_eqn = to_process_eqns.pop()
       eqns.append(next_eqn)
       for v in next_eqn.invars:
-        if v not in root_vars and v in self.var_to_creation_op:
+        if (not isinstance(v, jax.core.Literal) and v not in root_vars and
+            v not in processed_vars and v in self.var_to_creation_op):
           to_process_eqns.append(self.var_to_creation_op[v])
+          processed_vars.add(v)
     return tuple(eqns)
   #
   # @functools.cached_property
