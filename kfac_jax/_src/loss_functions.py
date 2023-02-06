@@ -1355,6 +1355,10 @@ def register_categorical_predictive_distribution(
       raise ValueError(f"The logits ndim is {logits.ndim} and the targets ndim "
                        f"must be either equal or one less than it, but is "
                        f"{targets.ndim}.")
+
+  else:
+    tag_cls = CategoricalLogitsNegativeLogProbLoss_tag
+
   args = [logits]
   args_names = ["logits"]
 
