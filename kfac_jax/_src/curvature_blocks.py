@@ -201,9 +201,15 @@ class CurvatureBlock(utils.Finalizable):
   @property
   def parameters_shapes(self) -> Tuple[Shape, ...]:
     """The shapes of the parameter variables of the block's tag equation."""
-
     return tuple(jax.tree_util.tree_map(
         lambda x: tuple(x.aval.shape), self.parameter_variables))
+
+  @property
+  def dtype(self) -> chex.ArrayDType:
+    dtypes = set(p.aval.dtype for p in self.parameter_variables)  # pytype: disable=attribute-error
+    if len(dtypes) > 1:
+      raise ValueError("Not all parameters are the same dtype.")
+    return dtypes.pop()
 
   @property
   def parameters_canonical_order(self) -> Tuple[int, ...]:
@@ -666,8 +672,8 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
     return Diagonal.State(
         cache=None,
-        diagonal_factors=tuple(utils.WeightedMovingAverage.zero(s)
-                               for s in self.parameters_shapes),
+        diagonal_factors=tuple(utils.WeightedMovingAverage.zero(
+            shape, self.dtype) for shape in self.parameters_shapes),
     )
 
   def _multiply_matpower_unscaled(
@@ -854,18 +860,20 @@ class Full(CurvatureBlock, abc.ABC):
     cache = {}
 
     if len(exact_powers_to_cache) > self._eigen_decomposition_threshold:
-      cache["eigenvalues"] = jnp.zeros([self.dim])
-      cache["eigen_vectors"] = jnp.zeros([self.dim, self.dim])
+      cache["eigenvalues"] = jnp.zeros([self.dim], self.dtype)
+      cache["eigen_vectors"] = jnp.zeros([self.dim, self.dim], self.dtype)
+
     elif cache_eigenvalues:
-      cache["eigenvalues"] = jnp.zeros([self.dim])
+      cache["eigenvalues"] = jnp.zeros([self.dim], self.dtype)
 
     if len(exact_powers_to_cache) <= self._eigen_decomposition_threshold:
       for power in exact_powers_to_cache:
-        cache[str(power)] = jnp.zeros([self.dim, self.dim])
+        cache[str(power)] = jnp.zeros([self.dim, self.dim], self.dtype)
 
     return Full.State(
         cache=cache,
-        matrix=utils.WeightedMovingAverage.zero((self.dim, self.dim)),
+        matrix=utils.WeightedMovingAverage.zero(
+            [self.dim, self.dim], self.dtype),
     )
 
   def _multiply_matpower_unscaled(
@@ -978,8 +986,8 @@ class Full(CurvatureBlock, abc.ABC):
     else:
 
       if eigenvalues:
-        state.cache["eigenvalues"] = (
-            scale * utils.safe_psd_eigh(state.matrix.value)[0])
+        state.cache["eigenvalues"] = scale * utils.safe_psd_eigh(
+            state.matrix.value)[0]
 
       for power in exact_powers:
 
@@ -1078,26 +1086,29 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
     cache = {}
 
     if cache_eigenvalues or exact_powers_to_cache:
-      cache["inputs_factor_eigenvalues"] = jnp.zeros([d_in])
-      cache["outputs_factor_eigenvalues"] = jnp.zeros([d_out])
+      cache["inputs_factor_eigenvalues"] = jnp.zeros([d_in], self.dtype)
+      cache["outputs_factor_eigenvalues"] = jnp.zeros([d_out], self.dtype)
 
     if exact_powers_to_cache:
-      cache["inputs_factor_eigen_vectors"] = jnp.zeros([d_in, d_in])
-      cache["outputs_factor_eigen_vectors"] = jnp.zeros([d_out, d_out])
+      cache["inputs_factor_eigen_vectors"] = jnp.zeros([d_in, d_in], self.dtype)
+      cache["outputs_factor_eigen_vectors"] = jnp.zeros(
+          [d_out, d_out], self.dtype)
 
     for power in approx_powers_to_cache:
       if power != -1:
         raise NotImplementedError(f"Approximations for power {power} is not "
                                   f"yet implemented.")
       cache[str(power)] = dict(
-          inputs_factor=jnp.zeros([d_in, d_in]),
-          outputs_factor=jnp.zeros([d_out, d_out]),
+          inputs_factor=jnp.zeros([d_in, d_in], self.dtype),
+          outputs_factor=jnp.zeros([d_out, d_out], self.dtype),
       )
 
     return TwoKroneckerFactored.State(
         cache=cache,
-        inputs_factor=utils.WeightedMovingAverage.zero((d_in, d_in)),
-        outputs_factor=utils.WeightedMovingAverage.zero((d_out, d_out)),
+        inputs_factor=utils.WeightedMovingAverage.zero(
+            [d_in, d_in], self.dtype),
+        outputs_factor=utils.WeightedMovingAverage.zero(
+            [d_out, d_out], self.dtype),
     )
 
   def _multiply_matpower_unscaled(
@@ -1226,7 +1237,6 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
     factor_scale = jnp.power(scale, 0.5)
 
     if eigenvalues or exact_powers:
-
       s_i, q_i = utils.safe_psd_eigh(state.inputs_factor.value)
       s_o, q_o = utils.safe_psd_eigh(state.outputs_factor.value)
 

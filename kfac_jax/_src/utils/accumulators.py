@@ -56,10 +56,14 @@ class WeightedMovingAverage(Generic[TPyTree]):
     self.raw_value = parallel.pmean_if_pmap(self.raw_value, pmap_axis_name)
 
   @classmethod
-  def zero(cls, shape: chex.Shape) -> "WeightedMovingAverage":
+  def zero(
+      cls,
+      shape: chex.Shape,
+      dtype: Optional[chex.ArrayDType] = None,
+  ) -> "WeightedMovingAverage":
     """Initializes a `WeightedMovingAverage` with a single array of zeros."""
     return WeightedMovingAverage(
-        weight=jnp.zeros([]), raw_value=jnp.zeros(shape))
+        weight=jnp.zeros([], dtype), raw_value=jnp.zeros(shape, dtype))
 
   @classmethod
   def zeros_like(cls, value: PyTree) -> "WeightedMovingAverage":
