@@ -407,7 +407,6 @@ class ImplicitExactCurvature:
       self,
       func_args: utils.FuncArgs,
       loss_inner_vectors: Sequence[chex.Array],
-      put_stop_grad_on_loss_factor: bool = False,
   ) -> utils.Params:
     """Multiplies the vector with the factor of the Fisher matrix.
 
@@ -416,8 +415,6 @@ class ImplicitExactCurvature:
         Fisher matrix.
       loss_inner_vectors: The vector which to multiply with the Fisher factor
         matrix.
-      put_stop_grad_on_loss_factor: Adds a stop gradient on the multiplication
-        by the loss factors
 
     Returns:
       The product ``Bv``, where ``F = BB^T``.
@@ -433,9 +430,6 @@ class ImplicitExactCurvature:
     fisher_factor_vectors = self._multiply_loss_fisher_factor(
         losses, loss_inner_vectors)
 
-    if put_stop_grad_on_loss_factor:
-      fisher_factor_vectors = jax.lax.stop_gradient(fisher_factor_vectors)
-
     vectors = vjp(fisher_factor_vectors)
     batch_size = self.batch_size(func_args)
 
@@ -446,7 +440,6 @@ class ImplicitExactCurvature:
       self,
       func_args: utils.FuncArgs,
       loss_inner_vectors: Sequence[chex.Array],
-      put_stop_grad_on_loss_factor: bool = False,
   ) -> utils.Params:
     """Multiplies the vector with the factor of the GGN matrix.
 
@@ -455,19 +448,19 @@ class ImplicitExactCurvature:
         matrix.
       loss_inner_vectors: The vector which to multiply with the GGN factor
         matrix.
-      put_stop_grad_on_loss_factor: Adds a stop gradient on the multiplication
-        by the loss factors
 
     Returns:
       The product ``Bv``, where ``G = BB^T``.
     """
     losses, vjp = self._loss_tags_vjp(func_args)
+
     ggn_factor_vectors = self._multiply_loss_ggn_factor(
         losses, loss_inner_vectors)
-    if put_stop_grad_on_loss_factor:
-      ggn_factor_vectors = jax.lax.stop_gradient(ggn_factor_vectors)
+
     vectors = vjp(ggn_factor_vectors)
+
     batch_size = self.batch_size(func_args)
+
     return utils.scalar_div(vectors, jnp.sqrt(batch_size))
 
   @utils.auto_scope_method

@@ -152,8 +152,11 @@ class LossFunction(utils.Finalizable):
     """
     def evaluate_sum(inputs: Sequence[Array]) -> Array:
       """Evaluates the loss summed over all axis, including batch etc."""
+
       instance = self.copy_with_different_inputs(inputs)
+
       return jnp.sum(instance.evaluate(targets, coefficient_mode))
+
     return jax.grad(evaluate_sum)(self.parameter_dependants)
 
   def multiply_ggn(
@@ -1352,6 +1355,10 @@ def register_categorical_predictive_distribution(
       raise ValueError(f"The logits ndim is {logits.ndim} and the targets ndim "
                        f"must be either equal or one less than it, but is "
                        f"{targets.ndim}.")
+
+  else:
+    tag_cls = CategoricalLogitsNegativeLogProbLoss_tag
+
   args = [logits]
   args_names = ["logits"]
 

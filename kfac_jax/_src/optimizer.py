@@ -604,9 +604,12 @@ class Optimizer(utils.WithStagedMethods):
       func_args: FuncArgsVariants,
   ) -> Tuple[chex.Array, utils.Params, utils.FuncState, utils.FuncAux]:
     """Computes the model loss value and its gradients."""
+
     out, grads = self._value_and_grad_func(*func_args)
+
     loss, func_state, aux = extract_func_outputs(
         out, self._value_func_has_aux, self._value_func_has_state)
+
     return loss, grads, func_state, aux
 
   def _maybe_update_inverse_cache(
@@ -639,7 +642,7 @@ class Optimizer(utils.WithStagedMethods):
       state: "Optimizer.State",
       grads: utils.Params,
       coefficient: Optional[chex.Array],
-  ) -> utils.Params:
+  ) -> Tuple[utils.Params, Optional[chex.Array]]:
     """Computes the preconditioned gradient, maybe applying norm-constraint."""
 
     preconditioned_grads = self.estimator.multiply_inverse(
@@ -672,8 +675,10 @@ class Optimizer(utils.WithStagedMethods):
       coefficient = jnp.minimum(max_coefficient, 1)
 
       preconditioned_grads = utils.scalar_mul(preconditioned_grads, coefficient)
+    else:
+      sq_norm_scaled_grads = None
 
-    return preconditioned_grads
+    return preconditioned_grads, sq_norm_scaled_grads
 
   def _compute_quad_change_for_damping(
       self,
@@ -750,6 +755,7 @@ class Optimizer(utils.WithStagedMethods):
 
     damping, rho = self._compute_new_damping_and_rho(
         old_loss, new_loss, quad_change, old_damping)
+
     return damping, rho, new_loss
 
   @utils.staged
@@ -911,8 +917,9 @@ class Optimizer(utils.WithStagedMethods):
     state = self._maybe_update_inverse_cache(state)
 
     # Compute proposed directions
-    preconditioned_gradient = self._compute_preconditioned_gradient(
-        state, grads, learning_rate)
+    preconditioned_gradient, sq_norm_scaled_grads = (
+        self._compute_preconditioned_gradient(state, grads, learning_rate)
+    )
 
     vectors = (preconditioned_gradient, state.velocities)
 
@@ -966,6 +973,10 @@ class Optimizer(utils.WithStagedMethods):
     state.step_counter = state.step_counter + 1
 
     # Statistics with useful information
+    # Unlike other norm stats, sq_norm_scaled_grads has to be computed if
+    # norm_constraint is not None, so log it by default even if the other
+    # norm stats are not logged. This reduces the overall computational cost if
+    # no other grad stats are desired.
     stats = dict(
         step=state.step_counter,
         batch_size=jnp.asarray(total_batch_size, dtype=jnp.int32),
@@ -977,6 +988,7 @@ class Optimizer(utils.WithStagedMethods):
         damping=state.damping,
         rho=rho,
         quad_model_change=quad_model_change,
+        scaled_grad_norm_sq=sq_norm_scaled_grads,
     )
 
     if self._value_func_has_aux:

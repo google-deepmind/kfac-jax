@@ -1707,12 +1707,13 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   @property
   def num_inputs_channels(self) -> int:
     """The number of channels in the inputs to the layer."""
-    return self._layer_tag_eq.params["lhs_shape"][self.inputs_channel_index]
+    return self._layer_tag_eq.invars[1].aval.shape[  # pytype: disable=attribute-error
+        self.inputs_channel_index]
 
   @property
   def num_outputs_channels(self) -> int:
     """The number of channels in the outputs to the layer."""
-    return self._layer_tag_eq.params["rhs_shape"][
+    return self._layer_tag_eq.invars[0].aval.shape[  # pytype: disable=attribute-error
         self.weights_output_channel_index]
 
   def num_locations(
