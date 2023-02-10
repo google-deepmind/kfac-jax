@@ -435,7 +435,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   ) -> Dict[str, chex.Array]:
     """Evaluates a single batch."""
 
-    del global_step, opt_state  # This might be used in subclasses
+    del global_step  # This might be used in subclasses
 
     func_args = kfac_jax.optimizer.make_func_args(
         params=params,
@@ -447,6 +447,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     )
     loss, stats = self.eval_model_func(*func_args)
     stats["loss"] = loss
+    stats["data_seen"] = opt_state.data_seen
 
     return kfac_jax.utils.pmean_if_pmap(stats, "eval_axis")
 
