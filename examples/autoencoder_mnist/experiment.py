@@ -60,7 +60,7 @@ def autoencoder_loss(
     average_loss: bool = True,
 ) -> Tuple[chex.Array, Dict[str, chex.Array]]:
   """Evaluates the loss of the autoencoder."""
-  del is_training  # not used
+
   if isinstance(batch, Mapping):
     batch = batch["images"]
 
@@ -69,16 +69,18 @@ def autoencoder_loss(
   cross_entropy = jnp.sum(losses.sigmoid_cross_entropy(logits, batch), axis=-1)
   averaged_cross_entropy = jnp.mean(cross_entropy)
 
-  params_l2 = losses.l2_regularizer(params, False, False)
   loss = averaged_cross_entropy if average_loss else cross_entropy
-  regularized_loss = loss + l2_reg * params_l2
+
+  l2_reg_val = losses.l2_regularizer(params, False, False)
+  if is_training:
+    loss = loss + l2_reg * l2_reg_val
 
   error = nn.sigmoid(logits) - batch.reshape([batch.shape[0], -1])
   mean_squared_error = jnp.mean(jnp.sum(error * error, axis=1), axis=0)
 
-  return regularized_loss, dict(
+  return loss, dict(
       cross_entropy=averaged_cross_entropy,
-      regualrizer=params_l2,
+      l2_reg_val=l2_reg_val,
       mean_squared_error=mean_squared_error,
   )
 

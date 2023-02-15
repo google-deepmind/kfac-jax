@@ -58,21 +58,21 @@ def classifier_loss(
     average_loss: bool = True,
 ) -> Tuple[chex.Array, Dict[str, chex.Array]]:
   """Evaluates the loss of the classifier network."""
-  del is_training  # not used
 
   logits = convolutional_classifier().apply(params, batch["images"])
 
-  cross_entropy = losses.softmax_cross_entropy(logits, batch["labels"])
+  loss, stats = losses.classifier_loss_and_stats(
+      logits=logits,
+      labels_as_int=batch["labels"],
+      params=params,
+      l2_reg=l2_reg if is_training else 0.0,
+      haiku_exclude_batch_norm=False,
+      haiku_exclude_biases=False,
+      average_loss=average_loss,
+      top_k_stats=(1,),
+  )
 
-  if average_loss:
-    cross_entropy = jnp.mean(cross_entropy)
-
-  params_l2 = losses.l2_regularizer(params, False, False)
-  regularized_loss = cross_entropy + l2_reg * params_l2
-
-  accuracy = losses.top_k_accuracy(logits, batch["labels"], 1)
-
-  return regularized_loss, dict(accuracy=accuracy)
+  return loss, stats
 
 
 class ClassifierMnistExperiment(training.MnistExperiment):
