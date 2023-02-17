@@ -98,6 +98,7 @@ class Optimizer(utils.WithStagedMethods):
       always_use_exact_qmodel_for_damping_adjustment: bool = False,
       norm_constraint_mode = 'fisher_scaled',
       norm_constraint: Optional[chex.Numeric] = None,
+      scale_by_std_deviation: bool = False,
       num_burnin_steps: int = 10,
       estimation_mode: str = "fisher_gradients",
       curvature_ema: chex.Numeric = 0.95,
@@ -363,6 +364,7 @@ class Optimizer(utils.WithStagedMethods):
         always_use_exact_qmodel_for_damping_adjustment)
     self._norm_constraint_mode = norm_constraint_mode
     self._norm_constraint = norm_constraint
+    self._scale_by_std_deviation = scale_by_std_deviation
     self._num_burnin_steps = num_burnin_steps
     self._estimation_mode = estimation_mode
     self._curvature_ema = curvature_ema
@@ -920,13 +922,16 @@ class Optimizer(utils.WithStagedMethods):
     preconditioned_gradient, norm_constraint_factor = self._compute_preconditioned_gradient(
         state, grads, learning_rate)
 
-    vectors = (preconditioned_gradient, state.velocities)
-
     if self._include_norms_in_stats:
       precon_grad_norm = utils.norm(preconditioned_gradient)
     if self._include_per_param_norms_in_stats:
       precon_grad_norm_per_param = utils.per_parameter_norm(
           preconditioned_gradient, "precon_grad_norm")
+
+    if self._scale_by_std_deviation:
+      preconditioned_gradient = utils.scalar_mul(preconditioned_gradient, jnp.minimum(1 / jnp.sqrt(aux['E_var']), 1))
+
+    vectors = (preconditioned_gradient, state.velocities)
 
     # Compute the coefficients for the vectors
     coefficients, quad_model_change = self._coefficients_and_quad_change(
