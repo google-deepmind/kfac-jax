@@ -827,7 +827,6 @@ def pi_adjusted_kronecker_inverse(
   def regular_inverse() -> Tuple[chex.Array, ...]:
     # We distribute the damping only inside the non-scalar factors
     non_scalars = sum(1 if di != 1 else 0 for di in dims)
-    d_hat = jnp.power(damping / c, 1.0 / non_scalars)
 
     # We distribute the overall scale over each factor, including scalars
     if non_scalars == 0:
@@ -835,6 +834,7 @@ def pi_adjusted_kronecker_inverse(
       c_k = jnp.power(c + damping, 1.0 / len(arrays))
     else:
       c_k = jnp.power(c, 1.0 / len(arrays))
+      d_hat = jnp.power(damping / c, 1.0 / non_scalars)
 
     a_hats_inv = []
     for a in us:
