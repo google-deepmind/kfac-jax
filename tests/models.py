@@ -163,7 +163,7 @@ class _LayerNorm(hk.LayerNorm):
     self._explicit_tagging = explicit_tagging
     super().__init__(*args, create_scale=True, create_offset=True, **kwargs)
 
-  def __call__(self, inputs: LayerInputs, *_) -> LayerInputs:
+  def __call__(self, inputs: LayerInputs, *_) -> LayerInputs:  # pytype: disable=signature-mismatch  # jax-ndarray
     x, layer_values, aux = inputs
 
     mean = jnp.mean(x, axis=self.axis, keepdims=True)

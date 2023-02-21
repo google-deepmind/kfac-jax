@@ -374,7 +374,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   ) -> datasets.tf.data.Dataset:
     """Constructs the training dataset."""
 
-  def step(
+  def step(  # pytype: disable=signature-mismatch  # jax-ndarray
       self,
       global_step: jnp.ndarray,
       rng: jnp.ndarray,
