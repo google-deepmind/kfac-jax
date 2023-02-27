@@ -406,7 +406,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
 
     self._python_step += 1
 
-    return kfac_jax.utils.get_first(stats)
+    return kfac_jax.utils.get_first(stats)  # questionable?
 
   #                  _
   #   _____   ____ _| |
@@ -445,9 +445,13 @@ class SupervisedExperiment(experiment.AbstractExperiment):
         has_state=self.has_func_state,
         has_rng=self.has_rng
     )
+
     loss, stats = self.eval_model_func(*func_args)
+
     stats["loss"] = loss
-    stats["data_seen"] = opt_state.data_seen
+
+    if hasattr(opt_state, "data_seen"):
+      stats["data_seen"] = opt_state.data_seen
 
     return kfac_jax.utils.pmean_if_pmap(stats, "eval_axis")
 
