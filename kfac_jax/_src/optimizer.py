@@ -11,7 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """K-FAC optimizer."""
+
 import functools
 from typing import Any, Callable, Iterator, Mapping, Optional, Sequence, Tuple, Union
 
@@ -122,7 +124,7 @@ class Optimizer(utils.WithStagedMethods):
     A note on damping:
 
     One of the main complications of using second-order optimizers like K-FAC is
-    the "damping" parameter. This parameter is multiplied by th identity matrix
+    the "damping" parameter. This parameter is multiplied by the identity matrix
     and (approximately) added to the curvature matrix (i.e. the Fisher or GGN)
     before it is inverted and multiplied by the gradient when computing the
     update (before any learning rate scaling). The damping should follow the
@@ -708,6 +710,7 @@ class Optimizer(utils.WithStagedMethods):
       func_args: Optional[FuncArgsVariants] = None,
   ) -> Tuple[Tuple[chex.Array, ...], Optional[chex.Array]]:
     """The correct update coefficients and corresponding quadratic change."""
+
     # Compute the coefficients of the update vectors
     # The learning rate is defined as the negative of the coefficient by which
     # we multiply the gradients, while the momentum is the coefficient by
@@ -748,6 +751,7 @@ class Optimizer(utils.WithStagedMethods):
       new_func_args: FuncArgsVariants,
   ) -> Tuple[chex.Array, chex.Array, chex.Array]:
     """Updates the damping parameter."""
+
     new_loss = self.compute_loss_value(new_func_args)
 
     # Sync
@@ -965,8 +969,11 @@ class Optimizer(utils.WithStagedMethods):
 
     # Compute per-device and total batch size
     batch_size = self._batch_size_extractor(func_args[-1])
+
     if self.multi_device:
       total_batch_size = batch_size * jax.device_count()
+    else:
+      total_batch_size = batch_size
 
     # Update data seen and step counter
     state.data_seen = state.data_seen + total_batch_size
@@ -1031,11 +1038,13 @@ class Optimizer(utils.WithStagedMethods):
     """Performs a single update step using the optimizer.
 
     Args:
-      params: The parameters of the model.
-      state: The state of the optimizer.
-      rng: A Jax PRNG key.
-      data_iterator: A data iterator.
-      batch: A single batch.
+      params: The current parameters of the model.
+      state: The current state of the optimizer.
+      rng: A Jax PRNG key. Should be different for each iteration and
+        each Jax process/host.
+      data_iterator: A data iterator to use (if not passing ``batch``).
+      batch: A single batch used to compute the update. Should only pass one
+        of ``data_iterator`` or ``batch``.
       func_state: Any function state that gets passed in and returned.
       learning_rate: Learning rate to use if the optimizer was created with
         ``use_adaptive_learning_rate=True``, ``None`` otherwise.
@@ -1047,8 +1056,10 @@ class Optimizer(utils.WithStagedMethods):
         damping.
       global_step_int: The global step as a python int. Note that this must
         match the step internal to the optimizer that is part of its state.
+
     Returns:
-      (params, state, stats) or (params, state, func_state, stats), where
+      (params, state, stats) if ``value_func_has_state=False`` and
+      (params, state, func_state, stats) otherwise, where
 
           * params is the updated model parameters.
 
@@ -1056,8 +1067,9 @@ class Optimizer(utils.WithStagedMethods):
 
           * func_state is the updated function state.
 
-          * stats is a dictionary of key statistics provided to be logged.
+          * stats is a dictionary of useful statistics including the loss.
     """
+
     if (data_iterator is None) == (batch is None):
       raise ValueError("Exactly one of the arguments ``data_iterator`` and "
                        "``batch`` must be provided.")
