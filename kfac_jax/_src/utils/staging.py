@@ -173,7 +173,7 @@ def staged(
   else:
     donate_argnums: Tuple[int, ...] = tuple(donate_argnums)
 
-  bcast_argnums = static_argnums
+  bcast_argnums = static_argnums or ()
 
   # shift static_argnums by 1 and include instance (self)
   static_argnums = (0,) + tuple(i + 1 for i in (static_argnums or ()))
@@ -214,7 +214,7 @@ def staged(
 
           outs.append(method(instance, *args_i))
 
-        outs = jax.tree_util.tree_map(jnp.stack, *outs)
+        outs = jax.tree_util.tree_map(lambda *args_: jnp.stack(args_), *outs)
 
       elif instance.debug:
         outs = method(instance, *args)
