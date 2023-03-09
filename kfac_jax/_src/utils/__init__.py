@@ -36,6 +36,7 @@ ValueAndGradFunc = types.ValueAndGradFunc
 AssumedFuncOutput = types.AssumedFuncOutput
 tree_is_empty = types.tree_is_empty
 abstract_objects_equal = types.abstract_objects_equal
+is_array_instance = types.is_array_instance
 del types
 
 # misc

@@ -67,7 +67,7 @@ compute_sum = jax.pmap(lambda x: lax.psum(x, "i"), axis_name="i")
 def index_if_not_scalar(value: chex.Numeric, index: int = 0) -> chex.Numeric:
   """Index `value` at axis 0 if it is not a scalar, otherwise return it."""
 
-  if isinstance(value, chex.Array):
+  if types.is_array_instance(value):
 
     if value.ndim > 0:
       return value[index]

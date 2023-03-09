@@ -1285,7 +1285,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
           else:
             vjp_vec[i] = loss.multiply_ggn_factor_replicated_one_hot([index])
 
-          if isinstance(vjp_vec[i], chex.Array):
+          if utils.is_array_instance(vjp_vec[i]):
             # In the special case of only one parameter, it still needs to be a
             # tuple for the tangents.
             vjp_vec[i] = (vjp_vec[i],)

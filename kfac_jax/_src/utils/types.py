@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC annotation types and general tree operations."""
+import sys
 from typing import Any, Callable, Sequence, TypeVar, Union, Tuple
 
 import chex
@@ -57,3 +58,20 @@ def abstract_objects_equal(
           all(e1.shape == e2.shape and (e1.dtype == e2.dtype or not check_dtype)
               for e1, e2 in zip(jax.tree_util.tree_leaves(obj1),
                                 jax.tree_util.tree_leaves(obj2))))
+
+
+def is_array_instance(var: chex.Numeric) -> bool:
+  """Return true if var is a instance of a jax or numpy array type."""
+  if sys.version_info >= (3, 10):
+    return isinstance(var, chex.Array)
+  else:
+    # python 3.9 and earlier don't support instance on Generics (e.g. Union).
+    # Instead fallback to comparing to a tuple which (currently) matches
+    # chex.Array.
+    array_types = (
+        chex.ArrayDevice,
+        chex.ArrayNumpy,
+        chex.ArrayBatched,
+        chex.ArraySharded,
+    )
+    return isinstance(var, array_types)
