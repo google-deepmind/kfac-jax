@@ -138,7 +138,7 @@ class TestTracer(parameterized.TestCase):
 
     # Tracer computation
     tracer_jvp = tracer.loss_tags_jvp(model_func)
-    tracer_losses, tracer_loss_tangents = tracer_jvp((params, data), p_tangents)
+    tracer_losses, tracer_loss_tangents = tracer_jvp((params, data), p_tangents)  # pytype: disable=attribute-error  # always-use-return-annotations
     tracer_losses_values = [loss.evaluate() for loss in tracer_losses]
 
     self.assertAllClose(loss_values, tracer_losses_values)
@@ -162,7 +162,7 @@ class TestTracer(parameterized.TestCase):
 
     jvp = tracer.loss_tags_jvp(model_func)
     def func(data_):
-      losses, loss_tangents = jvp((params, data_), p_tangents)
+      losses, loss_tangents = jvp((params, data_), p_tangents)  # pytype: disable=attribute-error  # always-use-return-annotations
       losses = [loss.evaluate() for loss in losses]
       return losses, loss_tangents
 
@@ -196,7 +196,7 @@ class TestTracer(parameterized.TestCase):
 
     # Tracer computation
     trace_vjp = tracer.loss_tags_vjp(model_func)
-    tracer_losses, tracer_vjp_func = trace_vjp((params, data))
+    tracer_losses, tracer_vjp_func = trace_vjp((params, data))  # pytype: disable=attribute-error  # always-use-return-annotations
     tracer_losses = [loss.evaluate() for loss in tracer_losses]
     tracer_p_tangents = tracer_vjp_func(output_tangents)
 
@@ -224,14 +224,14 @@ class TestTracer(parameterized.TestCase):
     vjp = tracer.loss_tags_vjp(model_func)
 
     def func1(data_):
-      losses, _ = vjp((params, data_))
+      losses, _ = vjp((params, data_))  # pytype: disable=attribute-error  # always-use-return-annotations
       return [loss.evaluate() for loss in losses]
 
     self.compare_multi_batch(func1, data, data_size, "concatenate")
 
     def func2(data_and_output_tangents):
       data_, output_tangents_ = data_and_output_tangents
-      _, vjp_func = vjp((params, data_))
+      _, vjp_func = vjp((params, data_))  # pytype: disable=attribute-error  # always-use-return-annotations
       return vjp_func(output_tangents_)
 
     self.compare_multi_batch(func2, (data, output_tangents), data_size, "sum")
@@ -263,7 +263,7 @@ class TestTracer(parameterized.TestCase):
 
     # Tracer computation
     tracer_hvp = tracer.loss_tags_hvp(model_func)
-    tracer_hvp_vectors, _ = tracer_hvp((params, data), p_tangents)
+    tracer_hvp_vectors, _ = tracer_hvp((params, data), p_tangents)  # pytype: disable=attribute-error  # always-use-return-annotations
 
     # Comparison
     self.assertAllClose(hvp_vectors, tracer_hvp_vectors, atol=5e-6)
@@ -342,7 +342,7 @@ class TestTracer(parameterized.TestCase):
     layers_info = tuple(layers_info)
 
     # Tracer computation
-    tracer_losses, tracer_vjp_func = tracer.layer_tags_vjp(model_func)(
+    tracer_losses, tracer_vjp_func = tracer.layer_tags_vjp(model_func)(  # pytype: disable=attribute-error  # always-use-return-annotations
         (params, data))
     tracer_losses = [loss.evaluate() for loss in tracer_losses]
     tracer_info = tracer_vjp_func(output_tangents)
@@ -375,7 +375,7 @@ class TestTracer(parameterized.TestCase):
 
     def func(data_and_output_tangents):
       data_, output_tangents_ = data_and_output_tangents
-      losses, vjp_func = vjp((params, data_))
+      losses, vjp_func = vjp((params, data_))  # pytype: disable=attribute-error  # always-use-return-annotations
       losses = [loss.evaluate() for loss in losses]
       layers_info = vjp_func(output_tangents_)
       for info in layers_info:

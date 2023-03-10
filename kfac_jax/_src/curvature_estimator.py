@@ -499,7 +499,7 @@ class ImplicitExactCurvature:
     Returns:
       Shapes of loss inner vectors in a tuple, and the batch size as an int.
     """
-    losses, _ = self._loss_tags_vjp(func_args)
+    losses, _ = self._loss_tags_vjp(func_args)  # pytype: disable=attribute-error  # always-use-return-annotations
     batch_size = self.batch_size(func_args)
 
     if mode == "fisher":
@@ -523,7 +523,7 @@ class ImplicitExactCurvature:
       A tuple over losses of tuples containing the shapes of their different
       inputs, and the batch size (as an int).
     """
-    losses, _ = self._loss_tags_vjp(func_args)
+    losses, _ = self._loss_tags_vjp(func_args)  # pytype: disable=attribute-error  # always-use-return-annotations
     batch_size = self.batch_size(func_args)
 
     return (tuple(tuple(x.shape for x in loss.parameter_dependants)
@@ -904,7 +904,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     blocks_list = []
     counters = dict()
 
-    for tag_eqn, idx in zip(self._jaxpr.layer_tags, self._jaxpr.layer_indices):
+    for tag_eqn, idx in zip(self._jaxpr.layer_tags, self._jaxpr.layer_indices):  # pytype: disable=attribute-error  # always-use-return-annotations
 
       # Correctly get the block class
       if idx in self._index_to_block_ctor:
@@ -964,7 +964,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
   @property
   def jaxpr(self) -> tracer.ProcessedJaxpr:
     self._check_finalized()
-    return self._jaxpr
+    return self._jaxpr  # pytype: disable=bad-return-type  # always-use-return-annotations
 
   @property
   def params_structure_vector_of_indices(self) -> utils.Params:
@@ -1053,7 +1053,7 @@ class BlockDiagonalCurvature(CurvatureEstimator):
     return jax.tree_util.tree_unflatten(self.jaxpr.params_tree, values_flat)
 
   def _finalize(self, func_args: utils.FuncArgs):
-    self._jaxpr = self._vjp(func_args, return_only_jaxpr=True)
+    self._jaxpr = self._vjp(func_args, return_only_jaxpr=True)  # pytype: disable=annotation-type-mismatch  # always-use-return-annotations
     self._create_blocks()
 
   @utils.auto_scope_method
