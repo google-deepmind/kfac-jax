@@ -157,8 +157,8 @@ def imagenet_dataset(
     image_size: chex.Shape = (224, 224),
     data_dir: Optional[str] = None,
     extra_preprocessing_func: Optional[
-        Callable[[jnp.DeviceArray, jnp.DeviceArray],
-                 Tuple[jnp.DeviceArray, jnp.DeviceArray]]] = None,
+        Callable[[jax.Array, jax.Array],
+                 Tuple[jax.Array, jax.Array]]] = None,
 ) -> Iterator[Batch]:
   """Standard ImageNet dataset pipeline.
 
