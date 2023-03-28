@@ -739,7 +739,7 @@ def _layer_tag_vjp(
 
     def write(var, val):
 
-      tgm.write_env(env, var, val)
+      tgm.write_env(env, var, val)  # pytype: disable=wrong-arg-types  # numpy-scalars
 
       if not isinstance(var, list):
         var = [var]
@@ -849,7 +849,7 @@ def _layer_tag_vjp(
 
       layers_info.append(info)
 
-    return tuple(layers_info)
+    return tuple(layers_info)  # pytype: disable=bad-return-type  # numpy-scalars
 
   return losses, vjp_func
 

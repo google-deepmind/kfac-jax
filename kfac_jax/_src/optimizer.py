@@ -698,7 +698,7 @@ class Optimizer(utils.WithStagedMethods):
       quad_model = self.compute_approx_quad_model(state, [delta], grads)
 
     w = jnp.ones([])
-    return self._solve_quad_model(quad_model, damping, [delta], [w])[1]
+    return self._solve_quad_model(quad_model, damping, [delta], [w])[1]  # pytype: disable=bad-return-type  # numpy-scalars
 
   def _coefficients_and_quad_change(
       self,
@@ -722,7 +722,7 @@ class Optimizer(utils.WithStagedMethods):
 
       quad_model = self.compute_exact_quad_model(vectors, grads, func_args)
 
-      return self._solve_quad_model(quad_model, state.damping,
+      return self._solve_quad_model(quad_model, state.damping,  # pytype: disable=bad-return-type  # numpy-scalars
                                     vectors, coefficients)
     else:
       assert all(c is not None for c in coefficients)

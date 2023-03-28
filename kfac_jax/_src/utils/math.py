@@ -377,7 +377,7 @@ def pi_adjusted_kronecker_inverse(
 
   # kron(arrays) = c * kron(us)
   c = jnp.exp(jnp.sum(jnp.log(jnp.stack(norms)) - jnp.log(jnp.stack(dims))))
-  damping = damping.astype(c.dtype)
+  damping = damping.astype(c.dtype)  # pytype: disable=attribute-error  # numpy-scalars
 
   def regular_inverse() -> Tuple[chex.Array, ...]:
 

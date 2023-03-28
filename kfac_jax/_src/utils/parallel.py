@@ -69,7 +69,7 @@ def index_if_not_scalar(value: chex.Numeric, index: int = 0) -> chex.Numeric:
 
   if types.is_array_instance(value):
 
-    if value.ndim > 0:
+    if value.ndim > 0:  # pytype: disable=attribute-error  # numpy-scalars
       return value[index]
     else:
       return value
@@ -131,13 +131,13 @@ def check_and_fix_format_for_pmap(obj: TPyTree) -> TPyTree:
   def check_and_fix(x: chex.Numeric) -> chex.Array:
 
     # broadcast any 0D scalars
-    if isinstance(x, numbers.Number) or not x.shape:
+    if isinstance(x, numbers.Number) or not x.shape:  # pytype: disable=attribute-error  # numpy-scalars
       return jnp.stack([x] * device_count, axis=0)
 
     # otherwise, ensure that arrays have the right shape
-    assert x.shape[0] == device_count
+    assert x.shape[0] == device_count  # pytype: disable=attribute-error  # numpy-scalars
 
-    return x
+    return x  # pytype: disable=bad-return-type  # numpy-scalars
 
   return jax.tree_util.tree_map(check_and_fix, obj)
 

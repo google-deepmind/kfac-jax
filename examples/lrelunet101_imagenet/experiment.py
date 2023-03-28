@@ -47,7 +47,7 @@ class ScaledUniformOrthogonal(hk.initializers.Initializer):
     self.scale = scale
     self.axis = axis
 
-  def __call__(self, shape: chex.Shape, dtype: chex.ArrayDType) -> chex.Array:
+  def __call__(self, shape: chex.Shape, dtype: chex.ArrayDType) -> chex.Array:  # pytype: disable=signature-mismatch  # numpy-scalars
     # This has essentially copied from https://github.com/deepmind/dks
 
     if self.axis != -1:

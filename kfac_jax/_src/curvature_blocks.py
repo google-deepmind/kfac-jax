@@ -233,7 +233,7 @@ class CurvatureBlock(utils.Finalizable):
   def dim(self) -> int:
     """The number of elements of all parameter variables together."""
 
-    return sum(utils.product(shape) for shape in self.parameters_shapes)
+    return sum(utils.product(shape) for shape in self.parameters_shapes)  # pytype: disable=bad-return-type  # numpy-scalars
 
   def scale(self, state: "CurvatureBlock.State", use_cache: bool) -> Numeric:
     """A scalar pre-factor of the curvature approximation.
@@ -740,7 +740,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
   ) -> "Diagonal.State":
     pass
 
-  def _update_cache(
+  def _update_cache(  # pytype: disable=signature-mismatch  # numpy-scalars
       self,
       state: "Diagonal.State",
       identity_weight: Numeric,
@@ -1220,7 +1220,7 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
   ) -> "TwoKroneckerFactored.State":
     pass
 
-  def _update_cache(
+  def _update_cache(  # pytype: disable=signature-mismatch  # numpy-scalars
       self,
       state: "TwoKroneckerFactored.State",
       identity_weight: Numeric,
@@ -1698,7 +1698,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   @property
   def weights_spatial_size(self) -> int:
     """The spatial filter size of the weights."""
-    return utils.product(self.weights_spatial_shape)
+    return utils.product(self.weights_spatial_shape)  # pytype: disable=bad-return-type  # numpy-scalars
 
   @property
   def weights_spatial_shape(self) -> chex.Shape:

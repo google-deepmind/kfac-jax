@@ -503,10 +503,10 @@ class ImplicitExactCurvature:
     batch_size = self.batch_size(func_args)
 
     if mode == "fisher":
-      return (tuple(loss.fisher_factor_inner_shape for loss in losses),
+      return (tuple(loss.fisher_factor_inner_shape for loss in losses),  # pytype: disable=bad-return-type  # numpy-scalars
               batch_size)
     elif mode == "ggn":
-      return tuple(loss.ggn_factor_inner_shape for loss in losses), batch_size
+      return tuple(loss.ggn_factor_inner_shape for loss in losses), batch_size  # pytype: disable=bad-return-type  # numpy-scalars
     else:
       raise ValueError(f"Unrecognized mode: {mode}")
 
@@ -526,7 +526,7 @@ class ImplicitExactCurvature:
     losses, _ = self._loss_tags_vjp(func_args)  # pytype: disable=attribute-error  # always-use-return-annotations
     batch_size = self.batch_size(func_args)
 
-    return (tuple(tuple(x.shape for x in loss.parameter_dependants)
+    return (tuple(tuple(x.shape for x in loss.parameter_dependants)  # pytype: disable=bad-return-type  # numpy-scalars
                   for loss in losses),
             batch_size)
 

@@ -517,7 +517,7 @@ class DistributionNegativeLogProbLoss(NegativeLogProbLoss):
     return -self.dist.log_prob(targets)  # keeps leading dims intact
 
   def sample(self, rng: chex.PRNGKey) -> Array:
-    return self.dist.sample(seed=rng)
+    return self.dist.sample(seed=rng)  # pytype: disable=bad-return-type  # numpy-scalars
 
   @property
   def fisher_factor_inner_shape(self) -> chex.Shape:
@@ -1244,7 +1244,7 @@ def register_squared_error_loss(
       (Default: 1.0)
   """
   register_normal_predictive_distribution(
-      prediction, targets, variance=0.5, weight=weight)
+      prediction, targets, variance=0.5, weight=weight)  # pytype: disable=bad-return-type  # numpy-scalars
 
 
 def register_multi_bernoulli_predictive_distribution(
@@ -1408,4 +1408,4 @@ def register_softmax_cross_entropy_loss(
   register_categorical_predictive_distribution(logits,
                                                targets=targets,
                                                mask=mask,
-                                               weight=weight)
+                                               weight=weight)  # pytype: disable=bad-return-type  # numpy-scalars

@@ -110,7 +110,7 @@ class OptaxWrapper:
         has_aux=self._value_func_has_aux,
         has_state=self._value_func_has_state,
     )
-    stats["loss"] = loss
+    stats["loss"] = loss  # pytype: disable=unsupported-operands  # numpy-scalars
     stats, grads = jax.lax.pmean((stats, grads), axis_name="optax_axis")
 
     # Compute and apply updates via our optimizer.

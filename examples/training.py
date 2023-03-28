@@ -453,9 +453,9 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     if hasattr(opt_state, "data_seen"):
       stats["data_seen"] = opt_state.data_seen
 
-    return kfac_jax.utils.pmean_if_pmap(stats, "eval_axis")
+    return kfac_jax.utils.pmean_if_pmap(stats, "eval_axis")  # pytype: disable=bad-return-type  # numpy-scalars
 
-  def evaluate(
+  def evaluate(  # pytype: disable=signature-mismatch  # numpy-scalars
       self,
       global_step: chex.Array,
       rng: chex.PRNGKey,
@@ -559,7 +559,7 @@ def train_standalone_supervised(
     jnp.savez(f"{storage_folder}/snapshot_final.npz",
               *jax.tree_util.tree_leaves(experiment_instance.snapshot_state()))
     jnp.savez(f"{storage_folder}/stats.npz", **stats)
-  return stats
+  return stats  # pytype: disable=bad-return-type  # numpy-scalars
 
 
 class MnistExperiment(SupervisedExperiment):

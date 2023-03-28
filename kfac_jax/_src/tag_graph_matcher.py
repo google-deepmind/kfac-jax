@@ -817,7 +817,7 @@ def write_env(
       val = [val]
     return jax.tree_util.tree_map(lambda x, y: write_env(env, x, y), var, val)
   elif isinstance(var, (jax.core.Literal, Var)):
-    env[var] = val
+    env[var] = val  # pytype: disable=container-type-mismatch  # numpy-scalars
   else:
     raise NotImplementedError()
 

@@ -338,11 +338,11 @@ def squared_error_loss(
   x, y = batch["images"], batch["targets"]
 
   y_hat, layer_values = model_func(
-      explicit_tagging=explicit_tagging, output_dim=y.shape[-1],
+      explicit_tagging=explicit_tagging, output_dim=y.shape[-1],  # pytype: disable=attribute-error  # numpy-scalars
   ).apply(params, x)
 
-  assert y_hat.shape == y.shape
-  y = y.reshape((-1, y.shape[-1]))
+  assert y_hat.shape == y.shape  # pytype: disable=attribute-error  # numpy-scalars
+  y = y.reshape((-1, y.shape[-1]))  # pytype: disable=attribute-error  # numpy-scalars
   y_hat = y_hat.reshape((-1, y_hat.shape[-1]))
 
   loss_functions.register_squared_error_loss(y_hat, y, weight=0.5)
@@ -396,8 +396,8 @@ def linear_squared_error_autoencoder_loss(
     return_layer_values: bool = False,
 ) -> LossOutputs:
   """A linear autoencoder with squared error."""
-  batch["images"] = batch["images"].reshape(batch["images"].shape[0], -1)
-  batch["targets"] = batch["images"]
+  batch["images"] = batch["images"].reshape(batch["images"].shape[0], -1)  # type: ignore  # numpy-scalars
+  batch["targets"] = batch["images"]  # pytype: disable=unsupported-operands  # numpy-scalars
   model_func = functools.partial(
       autoencoder, layer_widths=layer_widths, activation=_special_identity)
   return squared_error_loss(
@@ -420,7 +420,7 @@ def autoencoder_deterministic_loss(
     activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
 ) -> chex.Array:
   """Evaluate the autoencoder with a deterministic loss."""
-  x = batch["images"].reshape((batch["images"].shape[0], -1))
+  x = batch["images"].reshape((batch["images"].shape[0], -1))  # pytype: disable=attribute-error  # numpy-scalars
   logits, _ = autoencoder(
       layer_widths, x.shape[-1], explicit_tagging, activation=activation,
   ).apply(params, x)
@@ -441,7 +441,7 @@ def autoencoder_with_two_losses(
     activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
 ) -> LossOutputs:
   """Evaluate the autoencoder with two losses."""
-  x = batch["images"].reshape((batch["images"].shape[0], -1))
+  x = batch["images"].reshape((batch["images"].shape[0], -1))  # pytype: disable=attribute-error  # numpy-scalars
 
   logits, layer_values = autoencoder(
       layer_widths, x.shape[-1], explicit_tagging, activation=activation,
