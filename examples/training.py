@@ -482,7 +482,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
         averaged_stats.add(stats, 1)
 
       # Extract all stats
-      for k, v in averaged_stats.value.items():
+      for k, v in averaged_stats.value.items():  # pytype: disable=attribute-error  # numpy-scalars
         all_stats[f"{name}_{k}"] = kfac_jax.utils.get_first(v)
 
       logging.info("Evaluation for %s is completed with %d number of batches.",

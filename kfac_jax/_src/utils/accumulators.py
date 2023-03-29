@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC for accumulating statistics."""
-from typing import Any, Optional, Generic
+from typing import Any, Optional, Generic, Union  # pylint: disable=unused-import
 
 import chex
 import jax
@@ -160,7 +160,7 @@ class MultiChunkAccumulator(Generic[TPyTree]):
       elif not isinstance(weight, jax.Array):
         raise ValueError("`weight` should be an instance of float, int or "
                          "jax.Array.")
-      elif self._weight.shape != weight.shape:
+      elif self._weight.shape != weight.shape:  # pytype: disable=attribute-error  # numpy-scalars
         raise ValueError("If `weight` is an `jnp.ndarray` then should have the "
                          "same shape as the weight of the accumulator.")
       else:
