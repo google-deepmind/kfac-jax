@@ -63,13 +63,15 @@ class WeightedMovingAverage(Generic[TPyTree]):
   ) -> "WeightedMovingAverage":
     """Initializes a `WeightedMovingAverage` with a single array of zeros."""
     return WeightedMovingAverage(
-        weight=jnp.zeros([], dtype), raw_value=jnp.zeros(shape, dtype))
+        weight=jnp.zeros([], dtype=dtype),
+        raw_value=jnp.zeros(shape, dtype=dtype))
 
   @classmethod
   def zeros_like(cls, value: PyTree) -> "WeightedMovingAverage":
     """Initializes a `WeightedMovingAverage` with zeros structure like `value`."""
     return WeightedMovingAverage(
-        weight=jnp.zeros([]),
+        weight=jnp.array(
+            0.0, dtype=types.get_float_dtype_and_check_consistency(value)),
         raw_value=jax.tree_util.tree_map(jnp.zeros_like, value)
     )
 
@@ -77,6 +79,10 @@ class WeightedMovingAverage(Generic[TPyTree]):
     """Returns a copy of the PyTree structure (but not the JAX arrays)."""
     (flattened, structure) = jax.tree_util.tree_flatten(self)
     return jax.tree_util.tree_unflatten(structure, flattened)
+
+  def clear(self):
+    self.weight = jnp.zeros_like(self.weight)
+    self.raw_value = jnp.zeros_like(self.raw_value)
 
 
 class MultiChunkAccumulator(Generic[TPyTree]):
@@ -151,33 +157,44 @@ class MultiChunkAccumulator(Generic[TPyTree]):
         to the accumulator.
       weight: The relative weight of the `value_obj`.
     """
+
     value_obj = jax.tree_util.tree_map(lambda x: x * weight, value_obj)
 
     if self._accumulator is None:
+
       self._accumulator = value_obj
+
       if isinstance(weight, types.CHEX_SCALAR_TYPES):
         self._weight = jnp.full_like(self._weight, weight)
+
       elif not isinstance(weight, jax.Array):
         raise ValueError("`weight` should be an instance of float, int or "
                          "jax.Array.")
+
       elif self._weight.shape != weight.shape:  # pytype: disable=attribute-error  # numpy-scalars
         raise ValueError("If `weight` is an `jnp.ndarray` then should have the "
                          "same shape as the weight of the accumulator.")
       else:
         self._weight = weight
+
       return
 
     if not types.tree_is_empty(self._accumulator):
+
       if types.tree_is_empty(value_obj):
         raise ValueError("The provided `value_obj` has an empty PyTree "
                          "structure, but the accumulator has been initialized "
                          "with a non-empty PyTree object.")
+
       self._accumulator = jax.tree_util.tree_map(
           jnp.add, self._accumulator, value_obj)
+
     elif not types.tree_is_empty(value_obj):
+
       raise ValueError("The provided `value_obj` has a non-empty PyTree "
                        "structure, but the accumulator has been initialized "
                        "with an empty PyTree object.")
+
     self._weight = self._weight + weight
 
   @classmethod

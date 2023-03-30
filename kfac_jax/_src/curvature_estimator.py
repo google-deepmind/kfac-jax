@@ -650,9 +650,9 @@ class CurvatureEstimator(utils.Finalizable):
           vary across different blocks.
       use_cached: Whether to use a cached (and possibly stale) version of the
           curvature matrix estimate.
-      pmap_axis_name: When calling this method within a pmap context this
-        argument specifies the axis name over which to aggregate across
-        multiple devices/hosts.
+      pmap_axis_name: The name of any pmap axis, which will be used for
+          aggregating any computed values over multiple devices, as well as
+          parallelizing the computation over devices in a block-wise fashion.
 
     Returns:
       A parameter structured vector containing the product.
@@ -1113,8 +1113,6 @@ class BlockDiagonalCurvature(CurvatureEstimator):
               power=power,
               exact_power=exact_power,
               use_cached=use_cached,
-              pmap_axis_name=(None if self._distributed_multiplies
-                              else pmap_axis_name),
               )
           )
 
@@ -1326,8 +1324,6 @@ class BlockDiagonalCurvature(CurvatureEstimator):
               exact_powers=exact_powers,
               approx_powers=approx_powers,
               eigenvalues=eigenvalues,
-              pmap_axis_name=(None if self._distributed_cache_updates
-                              else pmap_axis_name)
               )
           )
 
@@ -1581,7 +1577,6 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
         exact_powers=exact_powers,
         approx_powers=approx_powers,
         eigenvalues=eigenvalues,
-        pmap_axis_name=pmap_axis_name,
     )
 
     return BlockDiagonalCurvature.State(blocks_states=(block_state,))

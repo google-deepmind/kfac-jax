@@ -17,6 +17,7 @@ from typing import Any, Callable, Sequence, TypeVar, Union, Tuple
 
 import chex
 import jax
+import jax.numpy as jnp
 
 # Types for annotation
 T = TypeVar("T")
@@ -75,3 +76,27 @@ def is_array_instance(var: chex.Numeric) -> bool:
         chex.ArraySharded,
     )
     return isinstance(var, array_types)
+
+
+def get_float_dtype_and_check_consistency(
+    obj: PyTree
+) -> jnp.dtype:
+  """Checks that all leaves have the same float dtype, and returns this."""
+
+  leaves = jax.tree_util.tree_leaves(obj)
+
+  dtype = None
+
+  for leaf in leaves:
+
+    if leaf.dtype in {jnp.float32, jnp.float64}:  # include bfloat16 etc?
+
+      if dtype is not None and leaf.dtype != dtype:
+        raise ValueError("Inconsistent dtypes detected.")
+      else:
+        dtype = leaf.dtype
+
+    else:
+      raise ValueError("Non-float dtype detected.")
+
+  return dtype

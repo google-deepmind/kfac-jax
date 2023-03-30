@@ -653,17 +653,25 @@ def patches_moments_explicit(
 
   def loop_cond(args):
     return args[0] < c
+
   def loop_body(args):
+
     i, image, matrix_result, vector_result = args
+
     matrix_update, vector_update = general_loop_body(i, image)
+
     matrix_result = lax.dynamic_update_slice(
         matrix_result, matrix_update, (0, 0, 0, 0, i))
+
     vector_result = lax.dynamic_update_slice(
         vector_result, vector_update, (0, 0, i))
+
     return i + 1, image, matrix_result, vector_result
+
   init_vals = (0, inputs,
-               jnp.zeros(matrix_target_shape),
-               jnp.zeros(vector_target_shape))
+               jnp.zeros(matrix_target_shape, dtype=inputs.dtype),
+               jnp.zeros(vector_target_shape, dtype=inputs.dtype))
+
   return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]
 
 

@@ -323,7 +323,6 @@ class CurvatureBlock(utils.Finalizable):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> Tuple[Array, ...]:
     """Computes ``(BlockMatrix + identity_weight I)**power`` times ``vector``.
 
@@ -350,9 +349,7 @@ class CurvatureBlock(utils.Finalizable):
         to use the most recent curvature estimates. The cached version is
         going to be *at least* as fresh as the value provided to the last call
         to :func:`~CurvatureBlock.update_cache` with the same value of ``power``
-      pmap_axis_name: The name of any pmap axis, which may be used to
-        parallelize the computation over devices in a block-wise fashion.
-        .
+
     Returns:
       A tuple of arrays, representing the result of the matrix-vector product.
     """
@@ -364,7 +361,6 @@ class CurvatureBlock(utils.Finalizable):
         power=power,
         exact_power=exact_power,
         use_cached=use_cached,
-        pmap_axis_name=pmap_axis_name,
     )
 
     return utils.scalar_mul(result, jnp.power(scale, power))
@@ -378,7 +374,6 @@ class CurvatureBlock(utils.Finalizable):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> Tuple[Array, ...]:
     """Performs matrix-vector multiplication, ignoring ``self.scale``."""
 
@@ -389,7 +384,6 @@ class CurvatureBlock(utils.Finalizable):
       identity_weight: Numeric,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> Tuple[Array, ...]:
     """Computes ``(BlockMatrix + identity_weight I)`` times ``vector``."""
 
@@ -400,7 +394,6 @@ class CurvatureBlock(utils.Finalizable):
         power=1,
         exact_power=exact_power,
         use_cached=use_cached,
-        pmap_axis_name=pmap_axis_name,
     )
 
   def multiply_inverse(
@@ -410,7 +403,6 @@ class CurvatureBlock(utils.Finalizable):
       identity_weight: Numeric,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> Tuple[Array, ...]:
     """Computes ``(BlockMatrix + identity_weight I)^-1`` times ``vector``."""
 
@@ -421,7 +413,6 @@ class CurvatureBlock(utils.Finalizable):
         power=-1,
         exact_power=exact_power,
         use_cached=use_cached,
-        pmap_axis_name=pmap_axis_name,
     )
 
   @utils.auto_scope_method
@@ -496,7 +487,6 @@ class CurvatureBlock(utils.Finalizable):
       exact_powers: Optional[ScalarOrSequence],
       approx_powers: Optional[ScalarOrSequence],
       eigenvalues: bool,
-      pmap_axis_name: Optional[str],
   ) -> "CurvatureBlock.State":
     """Updates the cached estimates of the different powers specified.
 
@@ -510,8 +500,6 @@ class CurvatureBlock(utils.Finalizable):
       eigenvalues: Specifies whether to update the cached eigenvalues
           of the block. If they have not been cached before, this will create an
           entry with them in the block's cache.
-      pmap_axis_name: The name of any pmap axis, which may be used for
-          aggregating any computed values over multiple devices.
 
     Returns:
         The updated state.
@@ -522,7 +510,6 @@ class CurvatureBlock(utils.Finalizable):
         exact_powers=_to_real_set(exact_powers),
         approx_powers=_to_real_set(approx_powers),
         eigenvalues=eigenvalues,
-        pmap_axis_name=pmap_axis_name,
     )
 
   @abc.abstractmethod
@@ -533,7 +520,6 @@ class CurvatureBlock(utils.Finalizable):
       exact_powers: Set[Scalar],
       approx_powers: Set[Scalar],
       eigenvalues: bool,
-      pmap_axis_name: Optional[str],
   ) -> "CurvatureBlock.State":
     """The cache updating function, ignoring ``self.scale``."""
 
@@ -592,10 +578,9 @@ class ScaledIdentity(CurvatureBlock):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> Tuple[Array, ...]:
 
-    del exact_power, use_cached, pmap_axis_name  # Unused
+    del exact_power, use_cached  # Unused
 
     identity_weight = identity_weight + 1.0
 
@@ -636,7 +621,6 @@ class ScaledIdentity(CurvatureBlock):
       exact_powers: Set[Scalar],
       approx_powers: Set[Scalar],
       eigenvalues: bool,
-      pmap_axis_name: Optional[str],
   ) -> CurvatureBlock.State:
 
     return state.copy()
@@ -684,10 +668,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> Tuple[Array, ...]:
-
-    del pmap_axis_name  # unused
 
     factors = tuple(f.value + identity_weight for f in state.diagonal_factors)
 
@@ -721,7 +702,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
     # This function call will return a copy of state:
     state = self._update_curvature_matrix_estimate(
-        state, estimation_data, ema_old, ema_new, batch_size, pmap_axis_name)
+        state, estimation_data, ema_old, ema_new, batch_size)
 
     for factor in state.diagonal_factors:
       factor.sync(pmap_axis_name)
@@ -736,7 +717,6 @@ class Diagonal(CurvatureBlock, abc.ABC):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> "Diagonal.State":
     pass
 
@@ -747,7 +727,6 @@ class Diagonal(CurvatureBlock, abc.ABC):
       exact_powers: Numeric,
       approx_powers: Numeric,
       eigenvalues: bool,
-      pmap_axis_name: Optional[str],
   ) -> "Diagonal.State":
 
     return state.copy()
@@ -884,10 +863,7 @@ class Full(CurvatureBlock, abc.ABC):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> Tuple[Array, ...]:
-
-    del pmap_axis_name  # unused
 
     vector = self.parameters_list_to_single_vector(vector)
 
@@ -942,7 +918,7 @@ class Full(CurvatureBlock, abc.ABC):
 
     # This function call will return a copy of state:
     state = self._update_curvature_matrix_estimate(
-        state, estimation_data, ema_old, ema_new, batch_size, pmap_axis_name)
+        state, estimation_data, ema_old, ema_new, batch_size)
 
     state.matrix.sync(pmap_axis_name)
 
@@ -956,7 +932,6 @@ class Full(CurvatureBlock, abc.ABC):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> "Full.State":
     pass
 
@@ -967,7 +942,6 @@ class Full(CurvatureBlock, abc.ABC):
       exact_powers: Set[Scalar],
       approx_powers: Set[Scalar],
       eigenvalues: bool,
-      pmap_axis_name: Optional[str],
   ) -> "Full.State":
 
     # Copy this first since we mutate it later in this function.
@@ -1119,7 +1093,6 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> Tuple[Array, ...]:
 
     vector = self.parameters_shaped_list_to_single_matrix(vector)
@@ -1132,6 +1105,8 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
           vector,
           a_is_symmetric=True)
 
+      # TODO(jamesmartens,botev): consider replacing this with factored damping
+      # for the sake of consistency with the inverse.
       result = result + identity_weight * vector
 
     elif exact_power:
@@ -1164,8 +1139,7 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
         (inputs_factor, outputs_factor) = utils.pi_adjusted_kronecker_inverse(
             state.inputs_factor.value,
             state.outputs_factor.value,
-            damping=identity_weight,
-            pmap_axis_name=pmap_axis_name)
+            damping=identity_weight)
 
       result = utils.kronecker_product_mul_v(
           outputs_factor,
@@ -1201,7 +1175,7 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
 
     # This function call will return a copy of state:
     state = self._update_curvature_matrix_estimate(
-        state, estimation_data, ema_old, ema_new, batch_size, pmap_axis_name)
+        state, estimation_data, ema_old, ema_new, batch_size)
 
     state.inputs_factor.sync(pmap_axis_name)
     state.outputs_factor.sync(pmap_axis_name)
@@ -1216,7 +1190,6 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> "TwoKroneckerFactored.State":
     pass
 
@@ -1227,7 +1200,6 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       exact_powers: Numeric,
       approx_powers: Numeric,
       eigenvalues: bool,
-      pmap_axis_name: Optional[str],
   ) -> "TwoKroneckerFactored.State":
 
     # Copy this first since we mutate it later in this function.
@@ -1261,8 +1233,7 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
        cache["outputs_factor"]) = utils.pi_adjusted_kronecker_inverse(
            state.inputs_factor.value,
            state.outputs_factor.value,
-           damping=identity_weight,
-           pmap_axis_name=pmap_axis_name)
+           damping=identity_weight)
 
       cache["inputs_factor"] /= factor_scale
       cache["outputs_factor"] /= factor_scale
@@ -1308,7 +1279,6 @@ class NaiveDiagonal(Diagonal):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> "NaiveDiagonal.State":
 
     # Copy this first since we mutate it later in this function.
@@ -1336,7 +1306,6 @@ class NaiveFull(Full):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> Full.State:
 
     # Copy this first since we mutate it later in this function.
@@ -1375,7 +1344,6 @@ class DenseDiagonal(Diagonal):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> "Diagonal.State":
 
     # Copy this first since we mutate it later in this function.
@@ -1408,7 +1376,6 @@ class DenseFull(Full):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> "Full.State":
 
     # Copy this first since we mutate it later in this function.
@@ -1451,10 +1418,7 @@ class DenseTwoKroneckerFactored(TwoKroneckerFactored):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> TwoKroneckerFactored.State:
-
-    del pmap_axis_name
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1558,7 +1522,6 @@ class Conv2DDiagonal(Diagonal):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> Diagonal.State:
 
     # Copy this first since we mutate it later in this function.
@@ -1661,7 +1624,6 @@ class Conv2DFull(Full):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> Full.State:
 
     # Copy this first since we mutate it later in this function.
@@ -1816,10 +1778,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> TwoKroneckerFactored.State:
-
-    del pmap_axis_name
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1895,7 +1854,6 @@ class ScaleAndShiftDiagonal(Diagonal):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> Diagonal.State:
 
     # Copy this first since we mutate it later in this function.
@@ -1957,10 +1915,7 @@ class ScaleAndShiftFull(Full):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> Full.State:
-
-    del pmap_axis_name
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()

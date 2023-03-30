@@ -19,14 +19,16 @@ from typing import Callable, Optional, Sequence, Union, Iterable, Tuple
 import chex
 import jax
 from jax import lax
+from jax.experimental.sparse import linalg as experimental_splinalg
 import jax.numpy as jnp
 from jax.scipy import linalg
 
-from kfac_jax._src.utils import parallel
 from kfac_jax._src.utils import types
 
 import numpy as np
+import optax
 import tree
+
 
 PyTree = types.PyTree
 TPyTree = types.TPyTree
@@ -132,23 +134,29 @@ def weighted_sum_of_objects(
 def _inner_product_float64(obj1: PyTree, obj2: PyTree) -> chex.Array:
   """Computes inner product explicitly in float64 precision."""
 
-  def array_ip(x, y):
-    x = jnp.array(jnp.reshape(x, [-1]), dtype=jnp.float64)
-    y = jnp.array(jnp.reshape(y, [-1]), dtype=jnp.float64)
-    return jnp.dot(x, y, precision=lax.Precision.HIGHEST)
+  raise NotImplementedError()
 
-  with jax.experimental.enable_x64():
+  # This function isn't currently working due to a break in
+  # jax.experimental.enable_x64.
 
-    elements_inner_products = jax.tree_util.tree_map(array_ip, obj1, obj2)
+  # def array_ip(x, y):
+  #   x = jnp.array(jnp.reshape(x, [-1]), dtype=jnp.float64)
+  #   y = jnp.array(jnp.reshape(y, [-1]), dtype=jnp.float64)
+  #   return jnp.dot(x, y, precision=lax.Precision.HIGHEST)
 
-    flat_list = jax.tree_util.tree_leaves(elements_inner_products)
-    result = flat_list[0]
+  # original_dtype = types.get_float_dtype_and_check_consistency((obj1, obj2))
 
-    for element_ip in flat_list[1:]:
-      result = result + element_ip
+  # with jax.experimental.enable_x64():
 
-  # Convert back to default Jax dtype (usually float32)
-  return jnp.array(result)
+  #   elements_inner_products = jax.tree_util.tree_map(array_ip, obj1, obj2)
+
+  #   flat_list = jax.tree_util.tree_leaves(elements_inner_products)
+  #   result = flat_list[0]
+
+  #   for element_ip in flat_list[1:]:
+  #     result = result + element_ip
+
+  # return jnp.array(result, dtype=original_dtype)
 
 
 def inner_product(
@@ -329,10 +337,110 @@ def psd_inv_cholesky(matrix: chex.Array, damping: chex.Array) -> chex.Array:
   return linalg.solve(matrix + damping * identity, identity, assume_a="pos")
 
 
+def psd_matrix_norm(
+    matrix: chex.Array,
+    norm_type: str = "avg_trace",
+    method_2norm: str = "lobpcg",
+    rng_key: Optional[chex.PRNGKey] = None
+) -> chex.Array:
+  """Computes one of several different matrix norms for PSD matrices.
+
+  Args:
+    matrix: a square matrix represented as a 2D array, a 1D vector giving the
+      diagonal, or a 0D scalar (which gets interpreted as a 1x1 matrix). Must be
+      positive semi-definite (PSD).
+    norm_type: a string specifying the type of matrix norm. Can be "2_norm" for
+      the matrix 2-norm aka the spectral norm, "avg_trace" for the average of
+      diagonal entries, "1_norm" for the matrix 1-norm, or "avg_fro" for the
+      Frobenius norm divided by the square root of the number of rows.
+    method_2norm: a string specifying the method used to compute 2-norms. Can
+      be "lobpcg" (recommended) or "power_iteration".
+    rng_key: an optional JAX PRNGKey key to used initialize the lobpcg method
+      for computing the 2-norm.
+
+  Returns:
+    A 0D scalar giving the requested norm.
+  """
+
+  if norm_type == "2_norm":
+
+    if matrix.ndim == 0:
+      return matrix
+
+    elif matrix.ndim == 1:
+      return jnp.max(matrix)
+
+    elif matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]:
+
+      if method_2norm == "lobpcg":
+
+        if rng_key is None:
+          rng_key = jax.random.PRNGKey(123)
+
+        v = jax.random.normal(rng_key, shape=[matrix.shape[0], 1])
+
+        return experimental_splinalg.lobpcg_standard(
+            matrix, v, m=300, tol=1e-8)[0][0]
+
+      elif method_2norm == "power_iteration":
+        return optax.power_iteration(
+            matrix, num_iters=300, error_tolerance=1e-7)[1]
+
+      else:
+        raise ValueError(f"Unrecognized method string: '{norm_type}'")
+
+    else:
+      raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
+
+  elif norm_type == "avg_trace":
+
+    if matrix.ndim == 0:
+      return matrix
+
+    elif matrix.ndim == 1:
+      return jnp.sum(matrix) / matrix.shape[0]
+
+    elif matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]:
+      return jnp.trace(matrix) / matrix.shape[0]
+
+    else:
+      raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
+
+  elif norm_type == "1_norm":
+
+    if matrix.ndim == 0:
+      return matrix
+
+    elif matrix.ndim == 1:
+      return jnp.max(matrix)
+
+    elif matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]:
+      return jnp.linalg.norm(matrix, ord=1)
+
+    else:
+      raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
+
+  elif norm_type == "avg_fro":
+
+    if matrix.ndim == 0:
+      return matrix
+
+    elif matrix.ndim == 1:
+      return jnp.linalg.norm(matrix) / jnp.sqrt(matrix.shape[0])
+
+    elif matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]:
+      return jnp.linalg.norm(matrix) / jnp.sqrt(matrix.shape[0])
+
+    else:
+      raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
+
+  else:
+    raise ValueError(f"Unrecognized norm type: '{norm_type}'")
+
+
 def pi_adjusted_kronecker_inverse(
     *arrays: chex.Array,
     damping: chex.Numeric,
-    pmap_axis_name: Optional[str],
 ) -> Tuple[chex.Array, ...]:
   """Computes pi-adjusted factored damping inverses.
 
@@ -352,7 +460,6 @@ def pi_adjusted_kronecker_inverse(
       as representing the diagonal of a matrix) or scalars (which are
       interpreted as being a 1x1 matrix). All matrices must be PSD.
     damping: The weight of the identity added to the Kronecker product.
-    pmap_axis_name: A `jax.pmap` axis name to use for synchronization.
 
   Returns:
     A list of factors with the same length as the input `arrays` whose Kronecker
@@ -364,25 +471,24 @@ def pi_adjusted_kronecker_inverse(
   # distribute the damping to each single non-scalar factor `u_i` equally before
   # inverting them.
 
-  # Need the a[None] in order to support a scalar input, with shape ().
-  norms = [jnp.sum(a[None]) if a.ndim < 2 else jnp.trace(a) for a in arrays]
+  norm_type = "avg_trace"
 
-  # We need to sync the norms here, because reduction can be non-deterministic.
-  # They specifically are on GPUs by default for better performance.
-  norms = parallel.pmean_if_pmap(norms, pmap_axis_name)
+  norms = [psd_matrix_norm(a, norm_type=norm_type) for a in arrays]
 
   # Compute the normalized factors `u_i`, such that Trace(u_i) / dim(u_i) = 1
-  dims = [1 if a.size == 1 else a.shape[0] for a in arrays]
-  us = [ai * di / ni for ai, di, ni in zip(arrays, dims, norms)]
+  us = [ai / ni for ai, ni in zip(arrays, norms)]
 
   # kron(arrays) = c * kron(us)
-  c = jnp.exp(jnp.sum(jnp.log(jnp.stack(norms)) - jnp.log(jnp.stack(dims))))
+
+  c = jnp.prod(jnp.array(norms))
+
   damping = damping.astype(c.dtype)  # pytype: disable=attribute-error  # numpy-scalars
 
   def regular_inverse() -> Tuple[chex.Array, ...]:
 
+    non_scalars = sum(1 if a.size != 1 else 0 for a in arrays)
+
     # We distribute the damping only inside the non-scalar factors
-    non_scalars = sum(1 if di != 1 else 0 for di in dims)
     d_hat = jnp.power(damping / c, 1.0 / non_scalars)
 
     # We distribute the overall scale over each factor, including scalars
@@ -392,46 +498,53 @@ def pi_adjusted_kronecker_inverse(
     else:
       c_k = jnp.power(c, 1.0 / len(arrays))
 
-    a_hats_inv = []
-    for a in us:
+    u_hats_inv = []
 
-      if a.size == 1:
-        inv = jnp.ones_like(a)
+    for u in us:
 
-      elif a.ndim == 2:
-        inv = psd_inv_cholesky(a, d_hat)
+      if u.size == 1:
+        inv = jnp.ones_like(u)  # damping not used in the scalar factors
 
-      else:
-        inv = 1.0 / (a + d_hat)
+      elif u.ndim == 2:
+        inv = psd_inv_cholesky(u, d_hat)
 
-      a_hats_inv.append(inv / c_k)
+      else:  # diagonal case
+        assert u.ndim == 1
+        inv = 1.0 / (u + d_hat)
 
-    return tuple(a_hats_inv)
+      u_hats_inv.append(inv / c_k)
+
+    return tuple(u_hats_inv)
 
   def zero_inverse() -> Tuple[chex.Array, ...]:
+
     # In the special case where for some reason one of the factors is zero, then
     # the inverse is just `damping^-1 * I`, hence we write each factor as
     # `damping^(1/k) * I`.
+
     c_k = jnp.power(damping, 1.0 / len(arrays))
 
-    a_hats_inv = []
-    for a in us:
+    u_hats_inv = []
 
-      if a.ndim == 2:
-        inv = jnp.eye(a.shape[0], dtype=a.dtype)
+    for u in us:
+
+      if u.ndim == 2:
+        inv = jnp.eye(u.shape[0], dtype=u.dtype)
 
       else:
-        inv = jnp.ones_like(a)
+        inv = jnp.ones_like(u)
 
-      a_hats_inv.append(inv / c_k)
+      u_hats_inv.append(inv / c_k)
 
-    return tuple(a_hats_inv)
+    return tuple(u_hats_inv)
 
   if get_special_case_zero_inv():
+
     return lax.cond(
         jnp.greater(c, 0.0),
         regular_inverse,
         zero_inverse)
+
   else:
     return regular_inverse()
 
@@ -745,7 +858,7 @@ def loop_and_parallelize_average(
       summed_value, _ = jax.lax.scan(
           scan_fn,
           init=jax.tree_util.tree_map(
-              lambda x: jnp.zeros(x.shape), output_tree),
+              jnp.zeros_like, output_tree),
           xs=loop_args)
 
       averaged_value = scalar_div(summed_value, num_parallel_chunks)

@@ -27,6 +27,7 @@ PyTree = types.PyTree
 TPyTree = types.TPyTree
 
 
+# TODO(jamesmartens,botev): add a test for this function?
 def in_pmap(axis_name: Optional[str]) -> bool:
   """Returns whether we are in a pmap with the given axis name."""
 

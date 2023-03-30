@@ -37,6 +37,8 @@ AssumedFuncOutput = types.AssumedFuncOutput
 tree_is_empty = types.tree_is_empty
 abstract_objects_equal = types.abstract_objects_equal
 is_array_instance = types.is_array_instance
+get_float_dtype_and_check_consistency = (
+    types.get_float_dtype_and_check_consistency)
 del types
 
 # misc
@@ -66,7 +68,8 @@ broadcast_all_local_devices = parallel.broadcast_all_local_devices
 pmap_zeros_like = parallel.pmap_zeros_like
 jit_zeros_like = parallel.jit_zeros_like
 replicate_all_local_devices = parallel.replicate_all_local_devices
-make_different_rng_key_on_all_devices = parallel.make_different_rng_key_on_all_devices
+make_different_rng_key_on_all_devices = (
+    parallel.make_different_rng_key_on_all_devices)
 p_split = parallel.p_split
 p_split_num = parallel.p_split_num
 check_and_fix_format_for_pmap = parallel.check_and_fix_format_for_pmap
@@ -104,6 +107,7 @@ kronecker_product_mul_v = math.kronecker_product_mul_v
 kronecker_eigen_basis_mul_v = math.kronecker_eigen_basis_mul_v
 safe_psd_eigh = math.safe_psd_eigh
 loop_and_parallelize_average = math.loop_and_parallelize_average
+psd_matrix_norm = math.psd_matrix_norm
 del math
 
 # accumulators

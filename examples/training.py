@@ -298,6 +298,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
 
   def initialize_state(self):
     """Initializes all the experiment's state variables."""
+
     init_rng, seed_rng = jax.random.split(self.init_rng)
     init_rng = kfac_jax.utils.replicate_all_local_devices(init_rng)
 
@@ -405,6 +406,14 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     stats["progress"] = self.progress(self._python_step)
 
     self._python_step += 1
+
+    for name in self.config.get("per_device_stats_to_log", []):
+
+      gathered_stat = jnp.reshape(
+          kfac_jax.utils.host_all_gather(stats[name]), [-1])
+
+      for i in range(gathered_stat.shape[0]):
+        stats[f"{name}_{i}"] = jnp.array([gathered_stat[i]])
 
     return kfac_jax.utils.get_first(stats)  # questionable?
 
