@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC for accumulating statistics."""
-from typing import Any, Optional, Generic, Union  # pylint: disable=unused-import
+from typing import Any, Optional, Generic
 
 import chex
 import jax
