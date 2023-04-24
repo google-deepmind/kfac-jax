@@ -81,6 +81,22 @@ class Optimizer(utils.WithStagedMethods):
     data_seen: Numeric
     step_counter: Numeric
 
+    def as_dict(self) -> Dict[str, Any]:
+      return {
+          "velocities": self.velocities,
+          "estimator_state": self.estimator_state.as_dict(),
+          "damping": self.damping,
+          "data_seen": self.data_seen,
+          "step_counter": self.step_counter,
+      }
+
+    @classmethod
+    def from_dict(cls, dict_representation: Dict[str, Any]) -> OptimizerState:
+      dict_representation["estimator_state"] = (
+          curvature_estimator.BlockDiagonalCurvature.State.from_dict(
+              dict_representation["estimator_state"]))
+      return cls(**dict_representation)
+
   def __init__(
       self,
       value_and_grad_func: ValueAndGradFunc,
@@ -113,13 +129,12 @@ class Optimizer(utils.WithStagedMethods):
       register_only_generic: bool = False,
       patterns_to_skip: Sequence[str] = (),
       auto_register_kwargs: Optional[Dict[str, Any]] = None,
-      layer_tag_to_block_ctor:
-      Optional[Dict[str, curvature_estimator.CurvatureBlockCtor]] = None,
-      multi_device: bool = False,
+      layer_tag_to_block_ctor: Optional[
+          Dict[str, curvature_estimator.CurvatureBlockCtor]
+      ] = None,
       debug: bool = False,
       batch_size_extractor: Callable[[Batch], Numeric] =
       utils.default_batch_size_extractor,
-      pmap_axis_name: str = "kfac_axis",
       forbid_setting_attributes_after_finalize: bool = True,
       modifiable_attribute_exceptions: Sequence[str] = (),
       include_norms_in_stats: bool = False,
@@ -279,16 +294,11 @@ class Optimizer(utils.WithStagedMethods):
         that specific tag. See the documentation for
         :class:`~CurvatureEstimator` for a more detailed description. (Default:
         ``None``)
-      multi_device: Boolean. Whether to use pmap and run the optimizer on
-        multiple devices. (Default: ``False``)
       debug: Boolean. If neither the step or init functions should be jitted.
-        Note that this also overrides ``multi_device`` and prevents using pmap.
         (Default: ``False``)
       batch_size_extractor: A function that takes as input the function
         arguments and returns the batch size for a single device.
         (Default: ``kfac.utils.default_batch_size_extractor``)
-      pmap_axis_name: String. The name of the pmap axis to use when
-        ``multi_device`` is set to True. (Default: ``kfac_axis``)
       forbid_setting_attributes_after_finalize: Boolean. By default after the
         object is finalized, you can not set any of its properties. This is done
         in order to protect the user from making changes to the object
@@ -318,8 +328,6 @@ class Optimizer(utils.WithStagedMethods):
         (Default: True)
     """
     super().__init__(
-        multi_device=multi_device,
-        pmap_axis_name=pmap_axis_name if multi_device else None,
         debug=debug,
         forbid_setting_attributes_after_finalize=
         forbid_setting_attributes_after_finalize,
@@ -347,7 +355,7 @@ class Optimizer(utils.WithStagedMethods):
     self._value_func_has_state = value_func_has_state
     self._value_func_has_rng = value_func_has_rng
     self._value_func: ValueFunc = convert_value_and_grad_to_value_func(
-        value_and_grad_func,
+        self._value_and_grad_func,
         has_aux=value_func_has_aux,
     )
     self._l2_reg = jnp.asarray(l2_reg)
@@ -413,10 +421,16 @@ class Optimizer(utils.WithStagedMethods):
         batch_size_extractor=batch_size_extractor,
     )
 
-    # Each subclass should call finalize on its own, so this gets called only
-    # for instances of exactly this class type.
-    if type(self) == Optimizer:  # pylint: disable=unidiomatic-typecheck
-      self.finalize()
+    self._mesh = None
+    self._params_sharding = None
+    self._func_state_sharding = None
+    self._state_sharding = None
+    self._scalar_sharding = None
+
+  @property
+  def state_sharding(self) -> jax.sharding.NamedSharding:
+    assert self._state_sharding is not None
+    return self._state_sharding
 
   @property
   def num_burnin_steps(self) -> int:
@@ -527,12 +541,9 @@ class Optimizer(utils.WithStagedMethods):
                        "not pass a value to the step function.")
 
     if global_step_int is None:
-      if self.multi_device:
-        return int(utils.get_first(step_counter))
-      else:
-        return int(step_counter)
-
-    return global_step_int
+      return int(step_counter)
+    else:
+      return global_step_int
 
   @utils.staged
   def _setup_state_and_schedules(
@@ -609,7 +620,6 @@ class Optimizer(utils.WithStagedMethods):
         batch_size=self._batch_size_extractor(func_args[-1]),
         rng=rng,
         func_args=func_args,
-        pmap_axis_name=self.pmap_axis_name
     )
 
   @utils.auto_scope_method
@@ -644,7 +654,6 @@ class Optimizer(utils.WithStagedMethods):
             exact_powers=self._exact_powers_to_cache,
             approx_powers=self._approx_powers_to_cache,
             eigenvalues=False,
-            pmap_axis_name=self.pmap_axis_name,
         ),
         lambda state_: state_,
         state.estimator_state
@@ -669,7 +678,6 @@ class Optimizer(utils.WithStagedMethods):
         identity_weight=self.l2_reg + damping,
         exact_power=self._use_exact_inverses,
         use_cached=self._use_cached_inverses,
-        pmap_axis_name=self.pmap_axis_name,
     )
 
     if self._norm_constraint is not None:
@@ -765,13 +773,72 @@ class Optimizer(utils.WithStagedMethods):
 
     new_loss = self.compute_loss_value(new_func_args)
 
-    # Sync
-    new_loss = utils.pmean_if_pmap(new_loss, self.pmap_axis_name)
-
     damping, rho = self._compute_new_damping_and_rho(
         old_loss, new_loss, quad_change, old_damping)
 
     return damping, rho, new_loss
+
+  def _finalize(
+      self,
+      params: Params,
+      rng: PRNGKey,
+      batch: Batch,
+      func_state: Optional[FuncState] = None,
+  ):
+    if not self._estimator.finalized:
+      self._estimator.finalize(
+          make_func_args(
+              params=params,
+              func_state=func_state,
+              rng=rng,
+              batch=self._batch_process_func(batch),
+              has_state=self._value_func_has_state,
+              has_rng=self._value_func_has_rng,
+          ),
+      )
+
+    # Compute shardings
+    self._params_sharding = utils.get_sharding(params)
+    self._mesh = jax.tree_util.tree_leaves(self._params_sharding)[0].mesh
+    self._func_state_sharding = utils.get_sharding(func_state)
+    self._scalar_sharding = jax.sharding.NamedSharding(
+        self._mesh, jax.sharding.PartitionSpec()
+    )
+    self._state_sharding = Optimizer.State(
+        velocities=self._params_sharding,
+        estimator_state=self.estimator.state_sharding(
+            self._params_sharding,
+            exact_powers_to_cache=self._exact_powers_to_cache,
+            approx_powers_to_cache=self._approx_powers_to_cache,
+            cache_eigenvalues=False,
+        ),
+        damping=self._scalar_sharding,
+        data_seen=self._scalar_sharding,
+        step_counter=self._scalar_sharding,
+    )
+
+  def _shard_params(self, params: Params) -> Params:
+    return jax.lax.with_sharding_constraint(params, self._params_sharding)
+
+  def _shard_state(self, state: OptimizerState) -> OptimizerState:
+    return jax.lax.with_sharding_constraint(state, self._state_sharding)
+
+  def _shard_func_state(self, func_state: FuncState) -> FuncState:
+    if func_state is None:
+      return
+    return jax.lax.with_sharding_constraint(
+        func_state, self._func_state_sharding)
+
+  def _shard_func_state_acc(
+      self,
+      acccumulator: utils.MultiChunkAccumulator,
+  ) -> utils.MultiChunkAccumulator:
+    if self._func_state_sharding is None:
+      return acccumulator
+    return jax.lax.with_sharding_constraint(
+        acccumulator,
+        utils.MultiChunkAccumulator.state_sharding(self._func_state_sharding),
+    )
 
   @utils.staged
   def _init(
@@ -780,11 +847,11 @@ class Optimizer(utils.WithStagedMethods):
       rng: PRNGKey,
       batch: Batch,
       func_state: Optional[FuncState] = None,
-  ) -> "Optimizer.State":
+  ) -> OptimizerState:
     """A staged function to initialize the optimizer state ."""
 
-    return Optimizer.State(
-        velocities=jax.tree_util.tree_map(jnp.zeros_like, params),
+    return self._shard_state(Optimizer.State(
+        velocities=params,
         estimator_state=self.estimator.init(
             rng=rng,
             func_args=make_func_args(
@@ -803,7 +870,7 @@ class Optimizer(utils.WithStagedMethods):
                  if self._use_adaptive_damping else None),
         data_seen=jnp.array(0, dtype=int),
         step_counter=jnp.array(0, dtype=int)
-    )
+    ))
 
   def init(
       self,
@@ -813,11 +880,15 @@ class Optimizer(utils.WithStagedMethods):
       func_state: Optional[FuncState] = None,
   ) -> "Optimizer.State":
     """Initializes the optimizer and returns the appropriate optimizer state."""
-
     if not self.finalized:
       self.finalize(params, rng, batch, func_state)
 
-    return self._init(params, rng, batch, func_state)
+    return self._init(
+        params,
+        rng,
+        batch,
+        func_state,
+    )
 
   @functools.partial(utils.staged, donate_argnums=[1, 3, 5])
   def _burnin(
@@ -849,7 +920,7 @@ class Optimizer(utils.WithStagedMethods):
 
     accumulator.add(func_state)
 
-    return state, accumulator
+    return self._shard_state(state), self._shard_func_state_acc(accumulator)
 
   def burnin(
       self,
@@ -863,16 +934,19 @@ class Optimizer(utils.WithStagedMethods):
     """Runs all burnin steps required."""
 
     if num_steps > 0:
-      rng = self._rng_split(rng, num_steps)
-
-      accumulator = utils.MultiChunkAccumulator.zeros_like(
-          func_state, self.multi_device)
+      rng = jax.random.split(rng, num_steps)
+      accumulator = utils.MultiChunkAccumulator.zeros_like(func_state)
 
       for rng_i in rng:
         batch = next(data_iterator)
-
         state, accumulator = self._burnin(
-            params, state, rng_i, batch, func_state, accumulator)
+            params,
+            state,
+            rng_i,
+            batch,
+            func_state,
+            accumulator,
+        )
 
       func_state = accumulator.value_and_clear()
 
@@ -917,9 +991,7 @@ class Optimizer(utils.WithStagedMethods):
 
     # Compute loss and gradients
     loss, grads, func_state, aux = self._compute_loss_and_grads(func_args)
-
-    # Sync
-    loss, grads = utils.pmean_if_pmap((loss, grads), self.pmap_axis_name)
+    func_state = self._shard_func_state(func_state)
 
     if self._include_norms_in_stats:
       grad_norm = utils.norm(grads)
@@ -964,7 +1036,7 @@ class Optimizer(utils.WithStagedMethods):
       update_norm_per_param = utils.per_parameter_norm(delta, "update_norm")
 
     # Update parameters
-    params = jax.tree_util.tree_map(jnp.add, params, delta)
+    params = self._shard_params(jax.tree_util.tree_map(jnp.add, params, delta))
 
     # Optionally compute the reduction ratio and update the damping
     if self._use_adaptive_damping:
@@ -979,17 +1051,11 @@ class Optimizer(utils.WithStagedMethods):
     else:
       new_loss, rho = jnp.nan, jnp.nan
 
-    # Compute per-device and total batch size
-    batch_size = self._batch_size_extractor(func_args[-1])
-
-    if self.multi_device:
-      total_batch_size = batch_size * jax.device_count()
-    else:
-      total_batch_size = batch_size
-
     # Update data seen and step counter
-    state.data_seen = state.data_seen + total_batch_size
+    batch_size = self._batch_size_extractor(func_args[-1])
+    state.data_seen = state.data_seen + batch_size
     state.step_counter = state.step_counter + 1
+    state = self._shard_state(state)
 
     # Statistics with useful information
     # Unlike other norm stats, sq_norm_scaled_grads has to be computed if
@@ -998,7 +1064,7 @@ class Optimizer(utils.WithStagedMethods):
     # no other grad stats are desired.
     stats = dict(
         step=state.step_counter,
-        batch_size=jnp.asarray(total_batch_size, dtype=jnp.int32),
+        batch_size=jnp.asarray(batch_size, dtype=jnp.int32),
         data_seen=state.data_seen,
         loss=loss,
         new_loss=new_loss,
@@ -1024,6 +1090,8 @@ class Optimizer(utils.WithStagedMethods):
       stats.update(grad_norm_per_param)
       stats.update(precon_grad_norm_per_param)
       stats.update(update_norm_per_param)
+
+    stats = jax.lax.with_sharding_constraint(stats, self._scalar_sharding)
 
     if self._value_func_has_state:
       return params, state, func_state, stats
@@ -1078,7 +1146,6 @@ class Optimizer(utils.WithStagedMethods):
 
           * stats is a dictionary of useful statistics including the loss.
     """
-
     if (data_iterator is None) == (batch is None):
       raise ValueError("Exactly one of the arguments ``data_iterator`` and "
                        "``batch`` must be provided.")
@@ -1095,7 +1162,7 @@ class Optimizer(utils.WithStagedMethods):
 
       if data_iterator is not None:
 
-        rng, burnin_rng = self._rng_split(rng, 2)
+        rng, burnin_rng = jax.random.split(rng)
         state, func_state = self.burnin(
             num_steps=self.num_burnin_steps,
             params=params,
@@ -1108,8 +1175,16 @@ class Optimizer(utils.WithStagedMethods):
     if data_iterator is not None:
       batch = next(data_iterator)
 
-    return self._step(params, state, rng, batch, func_state,
-                      learning_rate, momentum, damping)
+    return self._step(
+        params,
+        state,
+        rng,
+        batch,
+        func_state,
+        learning_rate,
+        momentum,
+        damping,
+    )
 
   def compute_l2_quad_matrix(
       self,
@@ -1169,7 +1244,6 @@ class Optimizer(utils.WithStagedMethods):
           identity_weight=0.0,
           exact_power=True,
           use_cached=False,
-          pmap_axis_name=self.pmap_axis_name,
       )
 
     c_vectors = [c_times_v(v_i) for v_i in vectors]
@@ -1240,13 +1314,6 @@ class Optimizer(utils.WithStagedMethods):
     A_no_diag, D, b = quad_model_parameters
     A = A_no_diag + self.compute_l2_quad_matrix(vectors)
     A_damped = A + damping * D
-
-    # Sync.
-    # TODO(jamesmartens, botev): we should perform this earlier since it's
-    # dangerous to have the convention of doing it right before use (especially
-    # since the convention everywhere else is to sync quantities immediately
-    # after they are first computed).
-    A, A_damped, b = utils.pmean_if_pmap((A, A_damped, b), self.pmap_axis_name)
     # This needs explicit annotation
     A_damped: Array
 

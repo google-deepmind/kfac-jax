@@ -13,17 +13,16 @@
 # limitations under the License.
 """K-FAC utilities for classes with staged methods."""
 import functools
-import operator
 from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
 import jax
-import jax.numpy as jnp
 
 from kfac_jax._src.utils import misc
 from kfac_jax._src.utils import parallel
 from kfac_jax._src.utils import types
 
 TArrayTree = types.TArrayTree
+ArrayTree = types.ArrayTree
 
 
 class WithStagedMethods(misc.Finalizable):
@@ -54,19 +53,12 @@ class WithStagedMethods(misc.Finalizable):
 
   def __init__(
       self,
-      multi_device: bool = False,
-      pmap_axis_name: Optional[str] = None,
       debug: bool = False,
       **parent_kwargs: Any,
   ):
     """Initializes the instance.
 
     Args:
-      multi_device: Whether any of decorated staged methods are to be run on a
-        single or multiple devices. If this is set to `True` than any call
-        would internally be delegated to `jax.pmap` and otherwise to  `jax.jit`.
-      pmap_axis_name: The name of the pmap axis to use when running on
-        multiple devices. This is required if `multi_device=True`.
       debug: If this is set `True` than any call to a stage method would
         directly call the method and would not stage/compile it.
       **parent_kwargs: Any additional keyword arguments for the parent class.
@@ -78,25 +70,8 @@ class WithStagedMethods(misc.Finalizable):
       parent_kwargs["excluded_attribute_names"] = ("_in_staging",)
 
     super().__init__(**parent_kwargs)
-
-    if multi_device and not isinstance(pmap_axis_name, str):
-      raise ValueError("When `multi_device=True` you must pass in a string for "
-                       "`pmap_axis_name`.")
-
-    self._multi_device = multi_device
-    self._pmap_axis_name = pmap_axis_name
     self._debug = debug
     self._in_staging = False
-
-  @property
-  def multi_device(self) -> bool:
-    """Indicates whether staged method will be run across multiple devices."""
-    return self._multi_device
-
-  @property
-  def pmap_axis_name(self) -> Optional[str]:
-    """The name of the `jax.pmap` axis to use for staged methods."""
-    return self._pmap_axis_name
 
   @property
   def debug(self) -> bool:
@@ -114,21 +89,18 @@ class WithStagedMethods(misc.Finalizable):
 
   def get_first(self, obj: TArrayTree) -> TArrayTree:
     """Indexes the `obj` PyTree leaves over leading axis if `multi_device`."""
-    return parallel.get_first(obj) if self.multi_device else obj
+    return obj
 
   def copy_obj(self, obj: TArrayTree) -> TArrayTree:
     """Copies the object."""
-    if self.multi_device:
-      return parallel.pmap_copy_obj(obj)
-    else:
-      return parallel.copy_obj(obj)
+    return parallel.copy_obj(obj)
 
-  def replicate(self, obj: TArrayTree) -> TArrayTree:
-    """Replicates the object to all local devices if `multi_device`."""
-    if self.multi_device:
-      return parallel.replicate_all_local_devices(obj)
-    else:
-      return obj
+  # def replicate(self, obj: PyTree) -> PyTree:
+  #   """Replicates the object to all local devices if `multi_device`."""
+  #   if self.multi_device:
+  #     return parallel.replicate_all_local_devices(obj)
+  #   else:
+  #     return obj
 
 
 def staged(
@@ -173,76 +145,24 @@ def staged(
   else:
     donate_argnums: Tuple[int, ...] = tuple(donate_argnums)
 
-  bcast_argnums = static_argnums or ()
-
   # shift static_argnums by 1 and include instance (self)
   static_argnums = (0,) + tuple(i + 1 for i in (static_argnums or ()))
   # shift donate_argnums by 1 and include state
   donate_argnums = tuple(i + 1 for i in donate_argnums)
 
-  pmap_funcs = {}
-  jitted_func = jax.jit(method,
-                        static_argnums=static_argnums,
-                        donate_argnums=donate_argnums)
+  jitted_method = jax.jit(
+      method, donate_argnums=donate_argnums, static_argnums=static_argnums)
 
   @functools.wraps(method)
-  def decorated(instance: "WithStagedMethods", *args: Any) -> TArrayTree:
+  def decorated(
+      instance: "WithStagedMethods",
+      *args: Any,
+  ) -> ArrayTree:
 
-    if instance.in_staging:
+    if instance.in_staging or instance.debug:
       return method(instance, *args)
 
     with instance.staging_context():
-      if instance.multi_device and instance.debug:
-        # In this case we want to call `method` once for each device index.
-        # Note that this might not always produce sensible behavior, and will
-        # depend on the details of the method and if it has side effects on the
-        # state of the class.
-
-        outs = []
-        non_bcast_args = [args[i] if i not in bcast_argnums else None
-                          for i in range(len(args))]
-
-        for i in range(jax.local_device_count()):
-
-          non_bcast_args_i = jax.tree_util.tree_map(
-              operator.itemgetter(i), non_bcast_args)
-
-          args_i = [
-              non_bcast_args_i[j] if j not in bcast_argnums else args[j]
-              for j in range(len(args))
-          ]
-
-          outs.append(method(instance, *args_i))
-
-        outs = jax.tree_util.tree_map(lambda *args_: jnp.stack(args_), *outs)
-
-      elif instance.debug:
-        outs = method(instance, *args)
-
-      elif instance.multi_device:
-
-        new_args = list(args)
-
-        for i in range(len(args)):
-          if i + 1 not in static_argnums:
-            new_args[i] = parallel.check_and_fix_format_for_pmap(args[i])
-
-        func = pmap_funcs.get(instance.pmap_axis_name)
-
-        if func is None:
-          func = jax.pmap(
-              method,
-              static_broadcasted_argnums=static_argnums,
-              donate_argnums=donate_argnums,
-              axis_name=instance.pmap_axis_name,
-          )
-          pmap_funcs[instance.pmap_axis_name] = func
-
-        outs = func(instance, *new_args)
-
-      else:
-        outs = jitted_func(instance, *args)
-
-    return outs
+      return jitted_method(instance, *args)
 
   return decorated

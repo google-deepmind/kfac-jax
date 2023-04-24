@@ -85,6 +85,10 @@ class OptaxWrapper:
         axis_name=self.pmap_axis_name,
     )
 
+  @property
+  def state_sharding(self) -> jax.sharding.NamedSharding:
+    raise NotImplementedError()
+
   def init(
       self,
       params: Params,
@@ -438,7 +442,6 @@ def create_optimizer(
         value_func_has_aux=has_aux,
         value_func_has_state=has_func_state,
         value_func_has_rng=has_rng,
-        multi_device=True,
         **kwargs,
     )
   elif name == "sgd":
