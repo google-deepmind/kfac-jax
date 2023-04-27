@@ -24,6 +24,8 @@ import kfac_jax
 from tests import models
 import numpy as np
 
+StateType = kfac_jax.curvature_estimator.StateType
+
 
 NON_LINEAR_MODELS_AND_CURVATURE_TYPE = [
     model + ("ggn",) for model in models.NON_LINEAR_MODELS
@@ -48,12 +50,12 @@ PIECEWISE_LINEAR_MODELS_AND_CURVATURE = [
 
 @functools.partial(jax.jit, static_argnums=(0, 3, 4))
 def compute_exact_approx_curvature(
-    estimator: kfac_jax.CurvatureEstimator,
+    estimator: kfac_jax.CurvatureEstimator[StateType],
     rng: chex.PRNGKey,
     func_args: kfac_jax.utils.FuncArgs,
     batch_size: int,
     curvature_type: str,
-) -> kfac_jax.curvature_estimator.StateType:
+) -> StateType:
   """Computes the full Fisher matrix approximation for the estimator."""
   state = estimator.init(
       rng=rng,

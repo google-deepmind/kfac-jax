@@ -14,7 +14,6 @@
 """K-FAC for accumulating statistics."""
 from typing import Any, Optional, Generic
 
-import chex
 import jax
 import jax.numpy as jnp
 
@@ -22,76 +21,107 @@ from kfac_jax._src.utils import misc
 from kfac_jax._src.utils import parallel
 from kfac_jax._src.utils import types
 
-PyTree = types.PyTree
-TPyTree = types.TPyTree
+Array = types.Array
+Numeric = types.Numeric
+Shape = types.Shape
+DType = types.DType
+ArrayTree = types.ArrayTree
+TArrayTree = types.TArrayTree
 
 
 @misc.pytree_dataclass
-class WeightedMovingAverage(Generic[TPyTree]):
+class WeightedMovingAverage(Generic[TArrayTree]):
   """A wrapped class for an arbitrary weighted moving average."""
-  weight: chex.Array
-  raw_value: TPyTree
+  weight: Numeric
+  raw_value: Optional[TArrayTree]
 
   @property
-  def value(self) -> TPyTree:
+  def value(self) -> TArrayTree:
     """The value of the underlying arrays data structure."""
+    if self.raw_value is None:
+      raise ValueError("`raw_value` has not been set yet.")
     return jax.tree_util.tree_map(lambda x: x / self.weight, self.raw_value)
 
   def update(
       self,
-      value: TPyTree,
-      old_weight_multiplier: chex.Numeric,
-      new_weight: chex.Numeric,
-  ) -> None:
+      value: TArrayTree,
+      old_weight_multiplier: Numeric,
+      new_weight: Numeric,
+  ):
     """Updates the underlying array and weight accordingly."""
-    self.weight = self.weight * old_weight_multiplier + new_weight
-    self.raw_value = jax.tree_util.tree_map(
-        lambda x, y: x * old_weight_multiplier + y * new_weight,
-        self.raw_value,
-        value,
-    )
+    if self.raw_value is None:
+      self.raw_value = value
+      self.weight = jnp.asarray(new_weight).astype(self.weight.dtype)
 
-  def sync(self, pmap_axis_name: Optional[str]) -> None:
+    else:
+      self.weight = self.weight * old_weight_multiplier + new_weight
+      self.raw_value = jax.tree_util.tree_map(
+          lambda x, y: x * old_weight_multiplier + y * new_weight,
+          self.raw_value,
+          value,
+      )
+
+  def sync(self, pmap_axis_name: Optional[str]):
     """Syncs the underlying array across devices."""
+    if self.raw_value is None:
+      raise ValueError("`raw_value` has not been set yet.")
     self.raw_value = parallel.pmean_if_pmap(self.raw_value, pmap_axis_name)
 
-  @classmethod
-  def zero(
-      cls,
-      shape: chex.Shape,
-      dtype: Optional[chex.ArrayDType] = None,
-  ) -> "WeightedMovingAverage":
-    """Initializes a `WeightedMovingAverage` with a single array of zeros."""
-    return WeightedMovingAverage(
-        weight=jnp.zeros([], dtype=dtype),
-        raw_value=jnp.zeros(shape, dtype=dtype))
+  def clear(self, value_to_none: bool = False):
+    """Resets the weighted average."""
+    self.weight = jnp.zeros_like(self.weight)
+    self.raw_value = None if value_to_none else jnp.zeros_like(self.raw_value)
 
-  @classmethod
-  def zeros_like(cls, value: PyTree) -> "WeightedMovingAverage":
-    """Initializes a `WeightedMovingAverage` with zeros structure like `value`."""
-    return WeightedMovingAverage(
-        weight=jnp.array(
-            0.0, dtype=types.get_float_dtype_and_check_consistency(value)),
-        raw_value=jax.tree_util.tree_map(jnp.zeros_like, value)
-    )
+  def value_and_clear(self) -> TArrayTree:
+    """Retrieves the value of the weighted average and clears it."""
+    value = self.value
+    self.clear()
+    return value
 
-  def copy(self):
+  def copy(self) -> "WeightedMovingAverage[TArrayTree]":
     """Returns a copy of the PyTree structure (but not the JAX arrays)."""
     (flattened, structure) = jax.tree_util.tree_flatten(self)
     return jax.tree_util.tree_unflatten(structure, flattened)
 
-  def clear(self):
-    self.weight = jnp.zeros_like(self.weight)
-    self.raw_value = jnp.zeros_like(self.raw_value)
+  @classmethod
+  def zeros_array(
+      cls,
+      shape: Shape,
+      dtype: Optional[DType] = None,
+  ) -> "WeightedMovingAverage[Array]":
+    """Initializes a `WeightedMovingAverage` with a single array of zeros."""
+    return WeightedMovingAverage(
+        weight=jnp.zeros([], dtype=dtype),
+        raw_value=jnp.zeros(shape, dtype=dtype),
+    )
+
+  @classmethod
+  def zeros_like(cls, value: TArrayTree) -> "WeightedMovingAverage[TArrayTree]":
+    """Initializes a `WeightedMovingAverage` with zeros structure like `value`."""
+    return WeightedMovingAverage(
+        weight=jnp.array(
+            0.0, dtype=types.get_float_dtype_and_check_consistency(value)
+        ),
+        raw_value=jax.tree_util.tree_map(jnp.zeros_like, value),
+    )
+
+  @classmethod
+  def empty(cls, dtype: Optional[DType] = None) -> "WeightedMovingAverage[Any]":
+    """Returns an empty moving average instance."""
+    weight = jnp.zeros([]) if dtype is None else jnp.zeros([], dtype=dtype)
+    return WeightedMovingAverage(weight=weight, raw_value=None)
+
+  def __repr__(self) -> str:
+    return f"{self.__class__.__name__}({self.weight!r}, {self.raw_value!r})"
 
 
-class MultiChunkAccumulator(Generic[TPyTree]):
+class MultiChunkAccumulator(Generic[TArrayTree]):
   """Statistics accumulation, abstracted over multiple chunks."""
 
   def __init__(
       self,
-      init_obj_value: Optional[TPyTree],
-      weight: chex.Numeric,
+      init_obj_value: Optional[TArrayTree],
+      weight: Numeric,
       multi_device: bool,
   ):
     """Initializes an accumulator instance with the provided object and counter.
@@ -108,12 +138,12 @@ class MultiChunkAccumulator(Generic[TPyTree]):
     self._multi_device = multi_device
 
   @property
-  def accumulator(self) -> TPyTree:
+  def accumulator(self) -> TArrayTree:
     """The current value of the underlying not-normalized accumulator."""
     return self._accumulator
 
   @property
-  def weight(self) -> chex.Numeric:
+  def weight(self) -> Numeric:
     """The current normalization weight of the underlying accumulator."""
     return self._weight
 
@@ -123,7 +153,7 @@ class MultiChunkAccumulator(Generic[TPyTree]):
     return self._multi_device
 
   @property
-  def value(self) -> TPyTree:
+  def value(self) -> TArrayTree:
     """The current normalized value of the accumulator."""
 
     if types.tree_is_empty(self.accumulator):
@@ -139,13 +169,13 @@ class MultiChunkAccumulator(Generic[TPyTree]):
     self._accumulator = None
     self._weight = None
 
-  def value_and_clear(self) -> TPyTree:
+  def value_and_clear(self) -> TArrayTree:
     """Retrieves the normalized value of the accumulator and clears it."""
     value = self.value
     self.clear()
     return value
 
-  def add(self, value_obj: TPyTree, weight: chex.Numeric = 1):
+  def add(self, value_obj: TArrayTree, weight: Numeric = 1):
     """Adds an element to the moving average and the max.
 
     The exact update equation for the statistics are:
@@ -164,7 +194,7 @@ class MultiChunkAccumulator(Generic[TPyTree]):
 
       self._accumulator = value_obj
 
-      if isinstance(weight, types.CHEX_SCALAR_TYPES):
+      if isinstance(weight, types.SCALAR_TYPES):
         self._weight = jnp.full_like(self._weight, weight)
 
       elif not isinstance(weight, jax.Array):
@@ -200,9 +230,9 @@ class MultiChunkAccumulator(Generic[TPyTree]):
   @classmethod
   def zeros_like(
       cls,
-      obj: TPyTree,
+      obj: TArrayTree,
       multi_device: bool
-  ) -> "MultiChunkAccumulator[TPyTree]":
+  ) -> "MultiChunkAccumulator[TArrayTree]":
     """Creates a zero initialized accumulator as `obj`."""
 
     if multi_device:

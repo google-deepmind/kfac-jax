@@ -16,10 +16,9 @@ import dataclasses
 import functools
 import itertools
 import pprint
-from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple, TypeVar, Union
+from typing import Any, Callable, Mapping, Optional, Sequence, TypeVar, Tuple, Union, Dict, Set
 
 from absl import logging
-import chex
 import immutabledict
 import jax
 import jax.numpy as jnp
@@ -30,6 +29,8 @@ import numpy as np
 HIGHER_ORDER_NAMES = ("cond", "while", "scan", "xla_call", "xla_pmap")
 
 # Types for annotation
+Array = utils.Array
+PyTreeDef = utils.PyTreeDef
 Var = jax.core.Var
 Vars = Sequence[Var]
 Jaxpr = jax.core.Jaxpr
@@ -42,7 +43,7 @@ JaxprOrClosedJaxpr = Union[Jaxpr, ClosedJaxpr]
 EquivalenceFunction = Callable[[JaxprEqn, JaxprEqn], bool]
 MakeVarFunc = Callable[[jax.core.AbstractValue], Var]
 VarProcessor = Callable[[Vars, MakeVarFunc], Tuple[Vars, JaxprEqns]]
-PatternComputeFunc = Callable[[chex.Array, Sequence[chex.Array]], chex.Array]
+PatternComputeFunc = Callable[[Array, Sequence[Array]], Array]
 ParameterExtractorFunc = Callable[[JaxprEqns], Mapping[str, Any]]
 TagCtor = Callable[[Vars, Vars, JaxprEqns, MakeVarFunc], JaxprEqn]
 
@@ -224,9 +225,9 @@ class JaxprGraph:
   """
   name: str
   closed_jaxpr: ClosedJaxpr
-  params_tree: chex.PyTreeDef
+  params_tree: PyTreeDef
   params_vars: Vars
-  out_tree: chex.PyTreeDef
+  out_tree: PyTreeDef
   tag_ctor: Optional[TagCtor]
   # Until we stop supporting Python 3.7 we can't use @functools.cached_property,
   # so we set these attributes in __post_init__
@@ -318,7 +319,7 @@ class JaxprGraph:
 
 def make_jax_graph(
     func: utils.Func,
-    func_args: Sequence[Any],
+    func_args: utils.FuncArgs,
     params_index: Union[int, Sequence[int]],
     name: str,
     compute_only_loss_tags: bool,
@@ -789,9 +790,9 @@ def find_layer_tags_and_patterns(
 
 
 def read_env(
-    env: Mapping[Var, chex.Array],
-    var: Union[jax.core.Literal, Var, Sequence[Var]],
-) -> Union[float, chex.Array, Sequence[chex.Array]]:
+    env: Mapping[Var, Array],
+    var: Union[jax.core.Literal, Vars],
+) -> Union[float, Array, Sequence[Array]]:
   """Reads from the variable-to-array environment during tracing."""
   if isinstance(var, (list, tuple)):
     return jax.tree_util.tree_map(lambda x: read_env(env, x), var)
@@ -805,10 +806,10 @@ def read_env(
 
 
 def write_env(
-    env: MutableMapping[Var, chex.Array],
-    var: Union[Var, List[Var]],
-    val: Union[chex.Array, List[chex.Array]],
-) -> None:
+    env: Dict[Var, Array],
+    var: Union[Var, Vars],
+    val: Union[Array, Sequence[Array]],
+):
   """Writes to the variable-to-array environment during tracing."""
   if isinstance(var, tuple):
     raise NotImplementedError()
@@ -953,7 +954,7 @@ def merge_broadcasts_jaxpr(jaxpr: J) -> J:
 #             |___/
 
 
-def _dense(x: chex.Array, params: Sequence[chex.Array]) -> chex.Array:
+def _dense(x: Array, params: Sequence[Array]) -> Array:
   """Example of a dense layer function."""
   w, *opt_b = params
   y = jnp.matmul(x, w)
@@ -987,7 +988,7 @@ def _make_dense_pattern(
   )
 
 
-def _conv2d(x: chex.Array, params: Sequence[chex.Array]) -> chex.Array:
+def _conv2d(x: Array, params: Sequence[Array]) -> Array:
   """Example of a conv2d layer function."""
   w = params[0]
   y = jax.lax.conv_general_dilated(
@@ -1029,11 +1030,11 @@ def _make_conv2d_pattern(
 
 
 def _scale_and_shift(
-    x: chex.Array,
-    params: Sequence[chex.Array],
+    x: Array,
+    params: Sequence[Array],
     has_scale: bool,
     has_shift: bool,
-) -> chex.Array:
+) -> Array:
   """Example of a scale and shift function."""
   if has_scale and has_shift:
     scale, shift = params
@@ -1080,11 +1081,11 @@ def _make_scale_and_shift_pattern(
 
 
 def _normalization_haiku(
-    inputs: Sequence[chex.Array],
-    params: Sequence[chex.Array],
+    inputs: Sequence[Array],
+    params: Sequence[Array],
     has_scale: bool,
     has_shift: bool,
-) -> chex.Array:
+) -> Array:
   """Example of normalization as is defined in Haiku."""
   if len(params) not in (1, 2):
     raise ValueError("The inputs to the `normalization_haiku` computation must "

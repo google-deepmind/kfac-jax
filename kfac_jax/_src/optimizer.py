@@ -15,9 +15,8 @@
 """K-FAC optimizer."""
 
 import functools
-from typing import Any, Callable, Iterator, Mapping, Optional, Sequence, Tuple, Union
+from typing import Callable, Iterator, Optional, Sequence, Any, Generic, Tuple, Union, Dict
 
-import chex
 import jax
 from jax import lax
 import jax.numpy as jnp
@@ -26,27 +25,36 @@ from kfac_jax._src import utils
 from typing_extensions import TypeAlias
 
 # Types for annotation
+Array = utils.Array
+PRNGKey = utils.PRNGKey
+Numeric = utils.Numeric
+Params = utils.Params
+Batch = utils.Batch
+FuncState = Any
+# FuncState = utils.FuncState
+FuncAux = utils.FuncAux
+
 OptimizerState: TypeAlias = "Optimizer.State"
-ScheduleType = Callable[[chex.Array], Optional[chex.Array]]
+ScheduleType = Callable[[Array], Optional[Array]]
 FuncArgsVariants = Union[
-    Tuple[utils.Params, utils.Batch],
-    Tuple[utils.Params, utils.FuncState, utils.Batch],
-    Tuple[utils.Params, chex.PRNGKey, utils.Batch],
-    Tuple[utils.Params, utils.FuncState, chex.PRNGKey, utils.Batch],
+    Tuple[Params, Batch],
+    Tuple[Params, FuncState, Batch],
+    Tuple[Params, PRNGKey, Batch],
+    Tuple[Params, FuncState, PRNGKey, Batch],
 ]
 FuncOutputs = Union[
-    chex.Array,
-    Tuple[chex.Array, utils.FuncState],
-    Tuple[chex.Array, utils.FuncAux],
-    Tuple[chex.Array, Tuple[utils.FuncState, utils.FuncAux]],
+    Array,
+    Tuple[Array, FuncState],
+    Tuple[Array, FuncAux],
+    Tuple[Array, Tuple[FuncState, FuncAux]],
 ]
 ValueFunc = Callable[..., FuncOutputs]
-ValueAndGradFunc = Callable[..., Tuple[FuncOutputs, utils.Params]]
+ValueAndGradFunc = Callable[..., Tuple[FuncOutputs, Params]]
 ReturnWithFuncState = Tuple[
-    utils.Params, OptimizerState, utils.FuncState, Mapping[str, chex.Array]
+    Params, OptimizerState, FuncState, Dict[str, Array]
 ]
 ReturnWithoutFuncState = Tuple[
-    utils.Params, OptimizerState, Mapping[str, chex.Array]
+    Params, OptimizerState, Dict[str, Array]
 ]
 ReturnEither = Union[ReturnWithFuncState, ReturnWithoutFuncState]
 
@@ -55,7 +63,7 @@ class Optimizer(utils.WithStagedMethods):
   """The K-FAC optimizer."""
 
   @utils.pytree_dataclass
-  class State(utils.State):
+  class State(Generic[Params], utils.State):
     r"""Persistent state of the optimizer.
 
     Attributes:
@@ -67,16 +75,16 @@ class Optimizer(utils.WithStagedMethods):
       data_seen: The number of training cases that the optimizer has processed.
       step_counter: An integer giving the current step number :math:`t`.
     """
-    velocities: utils.Params
+    velocities: Params
     estimator_state: curvature_estimator.BlockDiagonalCurvature.State
-    damping: Optional[chex.Array]
-    data_seen: chex.Numeric
-    step_counter: chex.Numeric
+    damping: Optional[Array]
+    data_seen: Numeric
+    step_counter: Numeric
 
   def __init__(
       self,
       value_and_grad_func: ValueAndGradFunc,
-      l2_reg: chex.Numeric,
+      l2_reg: Numeric,
       value_func_has_aux: bool = False,
       value_func_has_state: bool = False,
       value_func_has_rng: bool = False,
@@ -86,30 +94,30 @@ class Optimizer(utils.WithStagedMethods):
       momentum_schedule: Optional[ScheduleType] = None,
       use_adaptive_damping: bool = False,
       damping_schedule: Optional[ScheduleType] = None,
-      initial_damping: Optional[chex.Numeric] = None,
-      min_damping: chex.Numeric = 1e-8,
-      max_damping: chex.Numeric = jnp.inf,
+      initial_damping: Optional[Numeric] = None,
+      min_damping: Numeric = 1e-8,
+      max_damping: Numeric = jnp.inf,
       include_damping_in_quad_change: bool = False,
       damping_adaptation_interval: int = 5,
-      damping_adaptation_decay: chex.Numeric = 0.9,
-      damping_lower_threshold: chex.Numeric = 0.25,
-      damping_upper_threshold: chex.Numeric = 0.75,
+      damping_adaptation_decay: Numeric = 0.9,
+      damping_lower_threshold: Numeric = 0.25,
+      damping_upper_threshold: Numeric = 0.75,
       always_use_exact_qmodel_for_damping_adjustment: bool = False,
-      norm_constraint: Optional[chex.Numeric] = None,
+      norm_constraint: Optional[Numeric] = None,
       num_burnin_steps: int = 10,
       estimation_mode: str = "fisher_gradients",
-      curvature_ema: chex.Numeric = 0.95,
+      curvature_ema: Numeric = 0.95,
       inverse_update_period: int = 5,
       use_exact_inverses: bool = False,
-      batch_process_func: Optional[Callable[[utils.Batch], utils.Batch]] = None,
+      batch_process_func: Optional[Callable[[Batch], Batch]] = None,
       register_only_generic: bool = False,
       patterns_to_skip: Sequence[str] = (),
-      auto_register_kwargs: Optional[Mapping[str, Any]] = None,
+      auto_register_kwargs: Optional[Dict[str, Any]] = None,
       layer_tag_to_block_ctor:
-      Optional[Mapping[str, curvature_estimator.CurvatureBlockCtor]] = None,
+      Optional[Dict[str, curvature_estimator.CurvatureBlockCtor]] = None,
       multi_device: bool = False,
       debug: bool = False,
-      batch_size_extractor: Callable[[utils.Batch], chex.Numeric] =
+      batch_size_extractor: Callable[[Batch], Numeric] =
       utils.default_batch_size_extractor,
       pmap_axis_name: str = "kfac_axis",
       forbid_setting_attributes_after_finalize: bool = True,
@@ -349,7 +357,7 @@ class Optimizer(utils.WithStagedMethods):
 
     if momentum_schedule is not None:
 
-      def schedule_with_first_step_zero(global_step: chex.Array) -> chex.Array:
+      def schedule_with_first_step_zero(global_step: Array) -> Array:
         value = momentum_schedule(global_step)
         check = jnp.equal(global_step, 0)
         return check * jnp.zeros_like(value) + (1 - check) * value
@@ -416,7 +424,7 @@ class Optimizer(utils.WithStagedMethods):
     return self._num_burnin_steps
 
   @property
-  def l2_reg(self) -> chex.Array:
+  def l2_reg(self) -> Array:
     """The weight of the additional diagonal term added to the curvature."""
     return self._l2_reg
 
@@ -426,7 +434,7 @@ class Optimizer(utils.WithStagedMethods):
     return self._estimator
 
   @property
-  def damping_decay_factor(self) -> chex.Numeric:
+  def damping_decay_factor(self) -> Numeric:
     """How fast to decay the damping, when using damping adaptation."""
     return self._damping_adaptation_decay ** self._damping_adaptation_interval
 
@@ -447,30 +455,30 @@ class Optimizer(utils.WithStagedMethods):
   def should_update_damping(
       self,
       state: "Optimizer.State",
-  ) -> chex.Array:
+  ) -> Array:
     """Whether at the current step the optimizer should update the damping."""
     return (state.step_counter + 1) % self._damping_adaptation_interval == 0
 
   @functools.partial(utils.staged, static_argnums=1)
   def _rng_split(
       self,
-      rng: chex.PRNGKey,
+      rng: PRNGKey,
       num: int,
-  ) -> Tuple[chex.Array, ...]:
+  ) -> Tuple[Array, ...]:
     """Splits the ``rng`` key."""
     return tuple(jax.random.split(rng, num))
 
   @utils.auto_scope_method
-  def compute_loss_value(self, func_args: FuncArgsVariants) -> chex.Array:
+  def compute_loss_value(self, func_args: FuncArgsVariants) -> Array:
     """Computes the value of the loss function being optimized."""
     return self._value_func(*func_args)
 
   def verify_args_and_get_step_counter(
       self,
-      step_counter: chex.Array,
-      learning_rate: Optional[chex.Array] = None,
-      momentum: Optional[chex.Array] = None,
-      damping: Optional[chex.Array] = None,
+      step_counter: Array,
+      learning_rate: Optional[Array] = None,
+      momentum: Optional[Array] = None,
+      damping: Optional[Array] = None,
       global_step_int: Optional[int] = None,
   ) -> int:
     """Verifies that the arguments passed to the step function are correct."""
@@ -529,11 +537,11 @@ class Optimizer(utils.WithStagedMethods):
   @utils.staged
   def _setup_state_and_schedules(
       self,
-      learning_rate: Optional[chex.Array],
-      momentum: Optional[chex.Array],
-      damping: Optional[chex.Array],
-      step_counter: chex.Array
-  ) -> Tuple[Optional[chex.Array], Optional[chex.Array], chex.Array]:
+      learning_rate: Optional[Array],
+      momentum: Optional[Array],
+      damping: Optional[Array],
+      step_counter: Array
+  ) -> Tuple[Optional[Array], Optional[Array], Array]:
     """Helper function for setting up learning rate, momentum and damping."""
 
     # Compute schedules if applicable
@@ -556,11 +564,11 @@ class Optimizer(utils.WithStagedMethods):
 
   def _setup_func_args_and_rng(
       self,
-      params: utils.Params,
-      rng: chex.PRNGKey,
-      batch: utils.Batch,
-      func_state: Optional[utils.FuncState],
-  ) -> Tuple[FuncArgsVariants, chex.Array]:
+      params: Params,
+      rng: PRNGKey,
+      batch: Batch,
+      func_state: Optional[FuncState],
+  ) -> Tuple[FuncArgsVariants, Array]:
     """Helper function for setting up the model function arguments correctly."""
 
     # Preprocess the batch and construct correctly the function arguments
@@ -587,9 +595,9 @@ class Optimizer(utils.WithStagedMethods):
       self,
       estimator_state: curvature_estimator.BlockDiagonalCurvature.State,
       func_args: FuncArgsVariants,
-      rng: chex.PRNGKey,
-      ema_old: chex.Numeric,
-      ema_new: chex.Numeric,
+      rng: PRNGKey,
+      ema_old: Numeric,
+      ema_new: Numeric,
   ) -> curvature_estimator.BlockDiagonalCurvature.State:
     """Updates the curvature estimator state."""
 
@@ -608,7 +616,7 @@ class Optimizer(utils.WithStagedMethods):
   def _compute_loss_and_grads(
       self,
       func_args: FuncArgsVariants,
-  ) -> Tuple[chex.Array, utils.Params, utils.FuncState, utils.FuncAux]:
+  ) -> Tuple[Array, Params, FuncState, FuncAux]:
     """Computes the model loss value and its gradients."""
 
     out, grads = self._value_and_grad_func(*func_args)
@@ -621,7 +629,7 @@ class Optimizer(utils.WithStagedMethods):
   def _maybe_update_inverse_cache(
       self,
       state: "Optimizer.State",
-      damping: chex.Array,
+      damping: Array,
   ) -> "Optimizer.State":
     """Updates the estimator state cache if it is the right iteration."""
 
@@ -649,10 +657,10 @@ class Optimizer(utils.WithStagedMethods):
   def _compute_preconditioned_gradient(
       self,
       state: "Optimizer.State",
-      grads: utils.Params,
-      coefficient: Optional[chex.Array],
-      damping: chex.Array,
-  ) -> Tuple[utils.Params, Optional[chex.Array]]:
+      grads: Params,
+      coefficient: Optional[Array],
+      damping: Array,
+  ) -> Tuple[Params, Optional[Array]]:
     """Computes the preconditioned gradient, maybe applying norm-constraint."""
 
     preconditioned_grads = self.estimator.multiply_inverse(
@@ -685,11 +693,11 @@ class Optimizer(utils.WithStagedMethods):
   def _compute_quad_change_for_damping(
       self,
       state: "Optimizer.State",
-      delta: utils.Params,
-      grads: utils.Params,
-      damping: chex.Array,
+      delta: Params,
+      grads: Params,
+      damping: Array,
       func_args: FuncArgsVariants,
-  ) -> chex.Array:
+  ) -> Array:
     """The quadratic model change, when lr and momentum are non-adaptive."""
 
     assert not (self._use_adaptive_learning_rate or self._use_adaptive_momentum)
@@ -701,18 +709,18 @@ class Optimizer(utils.WithStagedMethods):
       quad_model = self.compute_approx_quad_model(state, [delta], grads)
 
     w = jnp.ones([])
-    return self._solve_quad_model(quad_model, damping, [delta], [w])[1]  # pytype: disable=bad-return-type  # numpy-scalars
+    return self._solve_quad_model(quad_model, damping, [delta], [w])[1]
 
   def _coefficients_and_quad_change(
       self,
       state: "Optimizer.State",
-      vectors: Sequence[utils.Params],
-      grads: utils.Params,
-      learning_rate: Optional[chex.Array],
-      momentum: Optional[chex.Array],
-      damping: chex.Array,
+      vectors: Sequence[Params],
+      grads: Params,
+      learning_rate: Optional[Array],
+      momentum: Optional[Array],
+      damping: Array,
       func_args: Optional[FuncArgsVariants] = None,
-  ) -> Tuple[Tuple[chex.Array, ...], Optional[chex.Array]]:
+  ) -> Tuple[Tuple[Optional[Array], Optional[Array]], Array]:
     """The correct update coefficients and corresponding quadratic change."""
 
     # Compute the coefficients of the update vectors
@@ -726,7 +734,7 @@ class Optimizer(utils.WithStagedMethods):
 
       quad_model = self.compute_exact_quad_model(vectors, grads, func_args)
 
-      return self._solve_quad_model(quad_model, damping, vectors, coefficients)  # pytype: disable=bad-return-type  # numpy-scalars
+      return self._solve_quad_model(quad_model, damping, vectors, coefficients)
     else:
       assert all(c is not None for c in coefficients)
 
@@ -748,11 +756,11 @@ class Optimizer(utils.WithStagedMethods):
   @utils.auto_scope_method
   def _update_damping(
       self,
-      old_damping: chex.Array,
-      old_loss: chex.Array,
-      quad_change: chex.Array,
+      old_damping: Array,
+      old_loss: Array,
+      quad_change: Array,
       new_func_args: FuncArgsVariants,
-  ) -> Tuple[chex.Array, chex.Array, chex.Array]:
+  ) -> Tuple[Array, Array, Array]:
     """Updates the damping parameter."""
 
     new_loss = self.compute_loss_value(new_func_args)
@@ -768,10 +776,10 @@ class Optimizer(utils.WithStagedMethods):
   @utils.staged
   def _init(
       self,
-      params: utils.Params,
-      rng: chex.PRNGKey,
-      batch: utils.Batch,
-      func_state: Optional[utils.FuncState] = None,
+      params: Params,
+      rng: PRNGKey,
+      batch: Batch,
+      func_state: Optional[FuncState] = None,
   ) -> "Optimizer.State":
     """A staged function to initialize the optimizer state ."""
 
@@ -799,10 +807,10 @@ class Optimizer(utils.WithStagedMethods):
 
   def init(
       self,
-      params: utils.Params,
-      rng: chex.PRNGKey,
-      batch: utils.Batch,
-      func_state: Optional[utils.FuncState] = None,
+      params: Params,
+      rng: PRNGKey,
+      batch: Batch,
+      func_state: Optional[FuncState] = None,
   ) -> "Optimizer.State":
     """Initializes the optimizer and returns the appropriate optimizer state."""
 
@@ -814,11 +822,11 @@ class Optimizer(utils.WithStagedMethods):
   @functools.partial(utils.staged, donate_argnums=[1, 3, 5])
   def _burnin(
       self,
-      params: utils.Params,
+      params: Params,
       state: "Optimizer.State",
-      rng: chex.Array,
-      batch: utils.Batch,
-      func_state: Optional[utils.FuncState],
+      rng: Array,
+      batch: Batch,
+      func_state: Optional[FuncState],
       accumulator: utils.MultiChunkAccumulator
   ) -> Tuple["Optimizer.State", utils.MultiChunkAccumulator]:
     """A single burnin step, updating only the curvature estimate."""
@@ -846,12 +854,12 @@ class Optimizer(utils.WithStagedMethods):
   def burnin(
       self,
       num_steps: int,
-      params: utils.Params,
+      params: Params,
       state: "Optimizer.State",
-      rng: chex.PRNGKey,
-      data_iterator: Iterator[utils.Batch],
-      func_state: Optional[utils.FuncState] = None,
-  ) -> Tuple["Optimizer.State", Optional[utils.FuncState]]:
+      rng: PRNGKey,
+      data_iterator: Iterator[Batch],
+      func_state: Optional[FuncState] = None,
+  ) -> Tuple["Optimizer.State", Optional[FuncState]]:
     """Runs all burnin steps required."""
 
     if num_steps > 0:
@@ -874,14 +882,14 @@ class Optimizer(utils.WithStagedMethods):
   @utils.auto_scope_method
   def _step(
       self,
-      params: utils.Params,
+      params: Params,
       state: "Optimizer.State",
-      rng: chex.Array,
-      batch: utils.Batch,
-      func_state: Optional[utils.FuncState],
-      learning_rate: Optional[chex.Array],
-      momentum: Optional[chex.Array],
-      damping: Optional[chex.Array]
+      rng: Array,
+      batch: Batch,
+      func_state: Optional[FuncState],
+      learning_rate: Optional[Array],
+      momentum: Optional[Array],
+      damping: Optional[Array]
   )-> ReturnEither:
     """A single full step of the optimizer."""
 
@@ -1025,15 +1033,15 @@ class Optimizer(utils.WithStagedMethods):
 
   def step(
       self,
-      params: utils.Params,
+      params: Params,
       state: "Optimizer.State",
-      rng: chex.PRNGKey,
-      data_iterator: Optional[Iterator[utils.Batch]] = None,
-      batch: Optional[utils.Batch] = None,
-      func_state: Optional[utils.FuncState] = None,
-      learning_rate: Optional[chex.Array] = None,
-      momentum: Optional[chex.Array] = None,
-      damping: Optional[chex.Array] = None,
+      rng: PRNGKey,
+      data_iterator: Optional[Iterator[Batch]] = None,
+      batch: Optional[Batch] = None,
+      func_state: Optional[FuncState] = None,
+      learning_rate: Optional[Array] = None,
+      momentum: Optional[Array] = None,
+      damping: Optional[Array] = None,
       global_step_int: Optional[int] = None
   )-> ReturnEither:
     """Performs a single update step using the optimizer.
@@ -1105,8 +1113,8 @@ class Optimizer(utils.WithStagedMethods):
 
   def compute_l2_quad_matrix(
       self,
-      vectors: Sequence[utils.Params]
-  ) -> chex.Array:
+      vectors: Sequence[Params]
+  ) -> Array:
     """Computes the matrix corresponding to the prior/regularizer.
 
     Args:
@@ -1121,10 +1129,10 @@ class Optimizer(utils.WithStagedMethods):
   @utils.auto_scope_method
   def compute_exact_quad_model(
       self,
-      vectors: Sequence[utils.Params],
-      grads: utils.Params,
+      vectors: Sequence[Params],
+      grads: Params,
       func_args: Optional[FuncArgsVariants] = None,
-  ) -> Tuple[chex.Array, chex.Array, chex.Array]:
+  ) -> Tuple[Array, Array, Array]:
     """Computes the components of the exact quadratic model."""
     if func_args is None:
       raise ValueError("When you have not provided `c_factor_v` you must "
@@ -1148,9 +1156,9 @@ class Optimizer(utils.WithStagedMethods):
   def compute_approx_quad_model(
       self,
       state: "Optimizer.State",
-      vectors: Sequence[utils.Params],
-      grads: utils.Params,
-  ) -> Tuple[chex.Array, chex.Array, chex.Array]:
+      vectors: Sequence[Params],
+      grads: Params,
+  ) -> Tuple[Array, Array, Array]:
     """Computes the components of the approximate quadratic model."""
 
     # v_i^T C v_j
@@ -1172,11 +1180,11 @@ class Optimizer(utils.WithStagedMethods):
 
   def compute_quadratic_model_value(
       self,
-      a: chex.Array,
-      a_damped: chex.Array,
-      b: chex.Array,
-      w: chex.Array,
-  ) -> chex.Array:
+      a: Array,
+      a_damped: Array,
+      b: Array,
+      w: Array,
+  ) -> Array:
     """Computes the quadratic model value from the inputs provided."""
 
     a_final = a_damped if self._include_damping_in_quad_change else a
@@ -1186,11 +1194,11 @@ class Optimizer(utils.WithStagedMethods):
   @utils.staged
   def _solve_quad_model(
       self,
-      quad_model_parameters: Tuple[chex.Array, chex.Array, chex.Array],
-      damping: chex.Array,
-      vectors: Sequence[utils.Params],
-      fixed_coefficients: Optional[Sequence[Union[chex.Array, None]]] = None,
-  ) -> Tuple[Tuple[chex.Array, ...], chex.Array]:
+      quad_model_parameters: Tuple[Array, Array, Array],
+      damping: Array,
+      vectors: Sequence[Params],
+      fixed_coefficients: Optional[Sequence[Union[Numeric, None]]] = None,
+  ) -> Tuple[Tuple[Optional[Array], ...], Array]:
     """Solves for the optimal learning rate and momentum of the quadratic model.
 
     The quadratic model is represented as:
@@ -1239,7 +1247,8 @@ class Optimizer(utils.WithStagedMethods):
     # since the convention everywhere else is to sync quantities immediately
     # after they are first computed).
     A, A_damped, b = utils.pmean_if_pmap((A, A_damped, b), self.pmap_axis_name)
-    # pylint: enable=invalid-name
+    # This needs explicit annotation
+    A_damped: Array
 
     if all(c is None for c in fixed_coefficients):
       # Adapt all coefficients
@@ -1277,8 +1286,9 @@ class Optimizer(utils.WithStagedMethods):
       w[1 - index] = jnp.asarray([fixed_coefficients[1 - index]])
 
       b_extra = A_damped[1 - index, index: index + 1] * w[1 - index]
-      A_solve = A_damped[index: index + 1, index: index + 1]  # pylint: disable=invalid-name
+      A_solve = A_damped[index: index + 1, index: index + 1]
       b_solve = b[index: index + 1] + b_extra
+      # pylint: enable=invalid-name
 
       w[index] = - b_solve / A_solve[0]
       w = jnp.concatenate(w, axis=0)
@@ -1293,11 +1303,11 @@ class Optimizer(utils.WithStagedMethods):
   @utils.staged
   def _compute_new_damping_and_rho(
       self,
-      old_loss: chex.Array,
-      new_loss: chex.Array,
-      quad_change: chex.Array,
-      current_damping: chex.Array,
-  ) -> Tuple[chex.Array, chex.Array]:
+      old_loss: Array,
+      new_loss: Array,
+      quad_change: Array,
+      current_damping: Array,
+  ) -> Tuple[Array, Array]:
     """Computes the reduction ratio and the updated value of the damping."""
 
     # Reduction ratio
@@ -1321,7 +1331,7 @@ class Optimizer(utils.WithStagedMethods):
   def weighted_sum_of_objects(
       self,
       objects: Sequence[utils.PyTree],
-      coefficients: Sequence[chex.Numeric],
+      coefficients: Sequence[Numeric],
   ) -> utils.PyTree:
     """Returns the weighted sum of the objects in the sequence."""
     return utils.weighted_sum_of_objects(objects, coefficients)
@@ -1342,7 +1352,7 @@ def convert_value_and_grad_to_value_func(
   Returns:
     A function that returns only the loss value.
   """
-  def value_func(*args) -> chex.Array:
+  def value_func(*args) -> Array:
     out, _ = value_and_grad_func(*args)
     return out[0] if has_aux else out
 
@@ -1350,10 +1360,10 @@ def convert_value_and_grad_to_value_func(
 
 
 def make_func_args(
-    params: utils.Params,
-    func_state: Optional[utils.FuncState],
-    rng: Optional[chex.PRNGKey],
-    batch: utils.Batch,
+    params: Params,
+    func_state: Optional[FuncState],
+    rng: Optional[PRNGKey],
+    batch: Batch,
     has_state: bool,
     has_rng: bool,
 ) -> FuncArgsVariants:
@@ -1399,7 +1409,7 @@ def extract_func_outputs(
     raw_outputs: FuncOutputs,
     has_aux: bool,
     has_state: bool,
-) -> Tuple[chex.Array, Optional[utils.FuncState], Optional[utils.FuncAux]]:
+) -> Tuple[Array, Optional[FuncState], Optional[FuncAux]]:
   """Converts the raw output of the model function into loss,func_state and aux.
 
   Args:

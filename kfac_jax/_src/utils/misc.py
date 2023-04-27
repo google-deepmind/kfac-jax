@@ -15,20 +15,21 @@
 import abc
 import dataclasses
 import functools
-from typing import Any, Iterator, Sequence, Type, Union, Tuple
+from typing import Any, Iterator, Sequence, Type, Tuple, Union
 
-import chex
 import jax
 import jax.numpy as jnp
 from kfac_jax._src.utils import types
 
-PyTree = types.PyTree
-TPyTree = types.TPyTree
+Array = types.Array
+Numeric = types.Numeric
+ArrayTree = types.ArrayTree
+TArrayTree = types.TArrayTree
 
 
 def fake_element_from_iterator(
-    iterator: Iterator[TPyTree],
-) -> Tuple[TPyTree, Iterator[TPyTree]]:
+    iterator: Iterator[TArrayTree],
+) -> Tuple[TArrayTree, Iterator[TArrayTree]]:
   """Returns a zeroed-out initial element of the iterator "non-destructively".
 
   This function mutates the input iterator, hence after calling this function
@@ -47,7 +48,7 @@ def fake_element_from_iterator(
   """
   init_element = next(iterator)
   fake_element = jax.tree_util.tree_map(jnp.zeros_like, init_element)
-  def equivalent_iterator() -> Iterator[PyTree]:
+  def equivalent_iterator() -> Iterator[ArrayTree]:
     yield init_element
     # For some reason unknown to us, "yield from" can fail in certain
     # circumstances
@@ -57,9 +58,9 @@ def fake_element_from_iterator(
 
 
 def to_tuple_or_repeat(
-    x: Union[chex.Numeric, Sequence[chex.Numeric]],
+    x: Union[Numeric, Sequence[Numeric]],
     length: int,
-) -> Tuple[chex.Numeric, ...]:
+) -> Tuple[Numeric, ...]:
   """Converts `x` to a tuple of fixed length.
 
   If `x` is an array, it is split along its last axis to a tuple (assumed to
@@ -86,7 +87,7 @@ def to_tuple_or_repeat(
     raise ValueError(f"Unrecognized type for `x` - {type(x)}.")
 
 
-def first_dim_is_size(size: int, *args: chex.Array) -> bool:
+def first_dim_is_size(size: int, *args: Array) -> bool:
   """Checks that each element of `args` has first axis size equal to `size`."""
   return all(arg.shape[0] == size for arg in args)
 
@@ -215,5 +216,5 @@ def auto_scope_function(func):
 
 def default_batch_size_extractor(
     batch: types.Batch,
-) -> chex.Numeric:
+) -> Numeric:
   return jax.tree_util.tree_leaves(batch)[0].shape[0]

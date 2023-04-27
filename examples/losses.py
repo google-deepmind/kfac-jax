@@ -12,9 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Utility functions for computing and automatically registering losses."""
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple, Dict
 
-import chex
 import haiku as hk
 import jax
 from jax import lax
@@ -22,33 +21,36 @@ import jax.numpy as jnp
 from jax.scipy import special
 import kfac_jax
 
-utils = kfac_jax.utils
+Array = kfac_jax.utils.Array
+Numeric = kfac_jax.utils.Numeric
+Params = kfac_jax.utils.Params
 
 
 def l2_regularizer(
-    params: kfac_jax.utils.Params,
+    params: Params,
     haiku_exclude_batch_norm: bool,
     haiku_exclude_biases: bool,
-) -> chex.Array:
+) -> Array:
   """Computes an L2 regularizer."""
 
   if haiku_exclude_batch_norm:
-    params = hk.data_structures.filter(
+    params = hk.data_structures.filter(  # pytype: disable=wrong-arg-types
         lambda m, n, p: "batchnorm" not in m, params)
 
   if haiku_exclude_biases:
-    params = hk.data_structures.filter(
-        lambda m, n, p: n != "b", params)
+    params = hk.data_structures.filter(  # pytype: disable=wrong-arg-types
+        lambda m, n, p: n != "b", params
+    )
 
   return 0.5 * kfac_jax.utils.inner_product(params, params)
 
 
 def sigmoid_cross_entropy(
-    logits: chex.Array,
-    labels: chex.Array,
+    logits: Array,
+    labels: Array,
     weight: float = 1.0,
     register_loss: bool = True,
-) -> chex.Array:
+) -> Array:
   """Sigmoid cross-entropy loss."""
   if register_loss:
     kfac_jax.register_sigmoid_cross_entropy_loss(logits, labels, weight)
@@ -61,12 +63,12 @@ def sigmoid_cross_entropy(
 
 
 def softmax_cross_entropy(
-    logits: chex.Array,
-    labels: chex.Array,
-    weight: chex.Numeric = 1.0,
+    logits: Array,
+    labels: Array,
+    weight: Numeric = 1.0,
     register_loss: bool = True,
-    mask: Optional[chex.Array] = None,
-) -> chex.Array:
+    mask: Optional[Array] = None,
+) -> Array:
   """Softmax cross entropy loss."""
 
   if register_loss:
@@ -122,11 +124,11 @@ def softmax_cross_entropy(
 
 
 def squared_error(
-    prediction: chex.Array,
-    targets: chex.Array,
+    prediction: Array,
+    targets: Array,
     weight: float = 1.0,
     register_loss: bool = True,
-) -> chex.Array:
+) -> Array:
   """Squared error loss."""
 
   if prediction.shape != targets.shape:
@@ -139,10 +141,10 @@ def squared_error(
 
 
 def top_k_accuracy(
-    logits_or_probs: chex.Array,
-    labels: chex.Array,
+    logits_or_probs: Array,
+    labels: Array,
     k: int = 1,
-) -> chex.Array:
+) -> Array:
   """Top-k accuracy."""
 
   if labels.ndim == logits_or_probs.ndim:
@@ -166,11 +168,11 @@ def top_k_accuracy(
 
 
 def add_label_smoothing(
-    labels: chex.Array,
+    labels: Array,
     label_smoothing: float,
     num_classes: int,
     labels_are_one_hot: bool = False,
-) -> chex.Array:
+) -> Array:
   """Adds label smoothing to the labels."""
 
   if label_smoothing < 0. or label_smoothing > 1.:
@@ -192,19 +194,19 @@ def add_label_smoothing(
 
 
 def classifier_loss_and_stats(
-    logits: chex.Array,
-    labels_as_int: chex.Array,
-    params: kfac_jax.utils.Params,
-    l2_reg: chex.Numeric,
+    logits: Array,
+    labels_as_int: Array,
+    params: Params,
+    l2_reg: Numeric,
     haiku_exclude_batch_norm: bool,
     haiku_exclude_biases: bool,
     label_smoothing: float = 0.0,
     top_k_stats: Sequence[int] = (1, 5),
     average_loss: bool = True,
     register_loss: bool = True,
-    mask: Optional[chex.Array] = None,
+    mask: Optional[Array] = None,
     normalization_mode: str = "batch_size_only",
-) -> Tuple[chex.Array, Dict[str, chex.Array]]:
+) -> Tuple[Array, Dict[str, Array]]:
   """Softmax cross-entropy with regularizer and accuracy statistics."""
 
   batch_size = logits.shape[0]
@@ -223,7 +225,7 @@ def classifier_loss_and_stats(
     weight = 1.0
 
   elif normalization_mode == "all_dims":
-    weight = 1.0 / utils.product(logits.shape[1:-1])
+    weight = 1.0 / kfac_jax.utils.product(logits.shape[1:-1])
 
   elif normalization_mode == "all_dims_nonmasked":
     assert mask is not None

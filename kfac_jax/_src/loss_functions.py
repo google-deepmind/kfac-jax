@@ -15,7 +15,6 @@
 import abc
 from typing import Optional, Sequence, Tuple
 
-import chex
 import distrax
 import jax
 import jax.numpy as jnp
@@ -24,7 +23,11 @@ from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import utils
 
 
-Array = chex.Array
+Array = utils.Array
+Numeric = utils.Numeric
+PRNGKey = utils.PRNGKey
+Shape = utils.Shape
+DType = utils.DType
 
 
 class LossFunction(utils.Finalizable):
@@ -36,7 +39,7 @@ class LossFunction(utils.Finalizable):
   needed.
   """
 
-  def __init__(self, weight: chex.Numeric):
+  def __init__(self, weight: Numeric):
     """Initializes the loss instance.
 
     Args:
@@ -50,11 +53,11 @@ class LossFunction(utils.Finalizable):
     self.finalize()
 
   @property
-  def dtype(self) -> chex.ArrayDType:
+  def dtype(self) -> DType:
     return self.parameter_dependants[0].dtype
 
   @property
-  def weight(self) -> chex.Numeric:
+  def weight(self) -> Numeric:
     """The relative weight of the loss."""
     return self._weight
 
@@ -75,7 +78,7 @@ class LossFunction(utils.Finalizable):
 
   @property
   @abc.abstractmethod
-  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+  def parameter_independants(self) -> Tuple[Numeric, ...]:
     """All the parameter independent arrays of the loss."""
 
   @property
@@ -289,7 +292,7 @@ class LossFunction(utils.Finalizable):
 
   @property
   @abc.abstractmethod
-  def ggn_factor_inner_shape(self) -> chex.Shape:
+  def ggn_factor_inner_shape(self) -> Shape:
     """The shape of the array returned by `self.multiply_ggn_factor`."""
 
 
@@ -440,11 +443,11 @@ class NegativeLogProbLoss(LossFunction):
 
   @property
   @abc.abstractmethod
-  def fisher_factor_inner_shape(self) -> chex.Shape:
+  def fisher_factor_inner_shape(self) -> Shape:
     """The shape of the array returned by :func:`~LossFunction.multiply_fisher_factor`."""
 
   @abc.abstractmethod
-  def sample(self, rng: chex.PRNGKey) -> Array:
+  def sample(self, rng: PRNGKey) -> Array:
     """Sample ``targets`` from the underlying distribution."""
 
   def grad_of_evaluate_on_sample(
@@ -501,7 +504,7 @@ class NaturalParamsNegativeLogProbLoss(NegativeLogProbLoss, abc.ABC):
     return self.multiply_fisher_factor_replicated_one_hot_unweighted(index)
 
   @property
-  def ggn_factor_inner_shape(self) -> chex.Shape:
+  def ggn_factor_inner_shape(self) -> Shape:
     return self.fisher_factor_inner_shape
 
 
@@ -514,13 +517,14 @@ class DistributionNegativeLogProbLoss(NegativeLogProbLoss):
     """The underlying Distrax distribution."""
 
   def _evaluate(self, targets: Array) -> Array:
-    return -self.dist.log_prob(targets)  # keeps leading dims intact
+    # keeps leading dims intact
+    return -self.dist.log_prob(targets)  # pytype: disable=bad-return-type
 
-  def sample(self, rng: chex.PRNGKey) -> Array:
-    return self.dist.sample(seed=rng)  # pytype: disable=bad-return-type  # numpy-scalars
+  def sample(self, rng: PRNGKey) -> Array:
+    return self.dist.sample(seed=rng)  # pytype: disable=bad-return-type
 
   @property
-  def fisher_factor_inner_shape(self) -> chex.Shape:
+  def fisher_factor_inner_shape(self) -> Shape:
     return jax.eval_shape(
         lambda: self.sample(rng=jax.random.PRNGKey(0))).shape
 
@@ -542,8 +546,8 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       mean: Array,
       targets: Optional[Array] = None,
-      variance: chex.Numeric = 0.5,
-      weight: chex.Numeric = 1.0,
+      variance: Numeric = 0.5,
+      weight: Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -567,7 +571,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._mean
 
   @property
-  def variance(self) -> chex.Numeric:
+  def variance(self) -> Numeric:
     return self._variance
 
   @property
@@ -575,7 +579,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._targets
 
   @property
-  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+  def parameter_independants(self) -> Tuple[Numeric, ...]:
     arrays = (self.variance, self.weight)
     if self._targets is not None:
       arrays = (self._targets,) + arrays
@@ -666,7 +670,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
       mean: Array,
       variance: Array,
       targets: Optional[Array] = None,
-      weight: chex.Numeric = 1.0,
+      weight: Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -690,7 +694,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
     return self._targets
 
   @property
-  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+  def parameter_independants(self) -> Tuple[Numeric, ...]:
     arrays = (self.weight,)
     if self._targets is not None:
       arrays = (self._targets,) + arrays
@@ -793,7 +797,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
     return mean_output, var_output
 
   @property
-  def fisher_factor_inner_shape(self) -> chex.Shape:
+  def fisher_factor_inner_shape(self) -> Shape:
     return self._mean.shape[:-1] + self._mean.shape[-1:] * 2
 
   def multiply_ggn_unweighted(
@@ -820,7 +824,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
     raise NotImplementedError()
 
   @property
-  def ggn_factor_inner_shape(self) -> chex.Shape:
+  def ggn_factor_inner_shape(self) -> Shape:
     raise NotImplementedError()
 
 
@@ -840,7 +844,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       logits: Array,
       targets: Optional[Array] = None,
-      weight: chex.Numeric = 1.0,
+      weight: Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -858,7 +862,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._targets
 
   @property
-  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+  def parameter_independants(self) -> Tuple[Numeric, ...]:
     arrays = (self.weight,)
     if self._targets is not None:
       arrays = (self._targets,) + arrays
@@ -871,7 +875,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   @property
   def _probs(self) -> Array:
     """The probabilities of the underlying Bernoulli distribution."""
-    return self.dist.probs
+    return self.dist.probs  # pytype: disable=bad-return-type
 
   @property
   def params(self) -> Tuple[Array]:
@@ -933,7 +937,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       logits: Array,
       targets: Optional[Array] = None,
       mask: Optional[Array] = None,
-      weight: chex.Numeric = 1.0,
+      weight: Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -969,7 +973,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._mask
 
   @property
-  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+  def parameter_independants(self) -> Tuple[Numeric, ...]:
     arrays = (self.weight,)
 
     if self.mask is not None:
@@ -1017,7 +1021,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return (self._logits,)
 
   @property
-  def fisher_factor_inner_shape(self) -> chex.Shape:
+  def fisher_factor_inner_shape(self) -> Shape:
     return self._logits.shape
 
   def copy_with_different_inputs(
@@ -1184,7 +1188,7 @@ def register_normal_predictive_distribution(
     mean: Array,
     targets: Optional[Array] = None,
     variance: float = 0.5,
-    weight: chex.Numeric = 1.0,
+    weight: Numeric = 1.0,
 ):
   """Registers a normal predictive distribution.
 
@@ -1224,7 +1228,7 @@ def register_normal_predictive_distribution(
 def register_squared_error_loss(
     prediction: Array,
     targets: Optional[Array] = None,
-    weight: chex.Numeric = 1.0,
+    weight: Numeric = 1.0,
 ) -> Array:
   """Registers a squared error loss function.
 
@@ -1250,7 +1254,7 @@ def register_squared_error_loss(
 def register_multi_bernoulli_predictive_distribution(
     logits: Array,
     targets: Optional[Array] = None,
-    weight: chex.Numeric = 1.0,
+    weight: Numeric = 1.0,
 ):
   """Registers a multi-Bernoulli predictive distribution.
 
@@ -1285,7 +1289,7 @@ def register_multi_bernoulli_predictive_distribution(
 def register_sigmoid_cross_entropy_loss(
     logits: Array,
     targets: Optional[Array] = None,
-    weight: chex.Numeric = 1.0,
+    weight: Numeric = 1.0,
 ):
   """Registers a sigmoid cross-entropy loss function.
 
@@ -1314,7 +1318,7 @@ def register_categorical_predictive_distribution(
     logits: Array,
     targets: Optional[Array] = None,
     mask: Optional[Array] = None,
-    weight: chex.Numeric = 1.0,
+    weight: Numeric = 1.0,
 ):
   """Registers a categorical predictive distribution.
 
@@ -1380,7 +1384,7 @@ def register_softmax_cross_entropy_loss(
     logits: Array,
     targets: Optional[Array] = None,
     mask: Optional[Array] = None,
-    weight: chex.Numeric = 1.0,
+    weight: Numeric = 1.0,
 ) -> Array:
   """Registers a softmax cross-entropy loss function.
 

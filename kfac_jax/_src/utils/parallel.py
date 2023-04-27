@@ -16,15 +16,17 @@ import functools
 import numbers
 from typing import Callable, Optional, Sequence
 
-import chex
 import jax
 from jax import core
 from jax import lax
 import jax.numpy as jnp
 
 from kfac_jax._src.utils import types
-PyTree = types.PyTree
-TPyTree = types.TPyTree
+
+Array = types.Array
+Numeric = types.Numeric
+PRNGKey = types.PRNGKey
+TArrayTree = types.TArrayTree
 
 
 # TODO(jamesmartens,botev): add a test for this function?
@@ -46,12 +48,12 @@ def in_pmap(axis_name: Optional[str]) -> bool:
 
 
 def wrap_if_pmap(
-    p_func: Callable[[TPyTree, str], TPyTree],
-) -> Callable[[TPyTree, Optional[str]], TPyTree]:
+    p_func: Callable[[TArrayTree, str], TArrayTree],
+) -> Callable[[TArrayTree, Optional[str]], TArrayTree]:
   """Wraps `p_func` to be executed only when inside a `jax.pmap` context."""
 
   @functools.wraps(p_func)
-  def p_func_if_pmap(obj: TPyTree, axis_name: Optional[str]) -> TPyTree:
+  def p_func_if_pmap(obj: TArrayTree, axis_name: Optional[str]) -> TArrayTree:
 
     return p_func(obj, axis_name) if in_pmap(axis_name) else obj
 
@@ -65,35 +67,35 @@ compute_mean = jax.pmap(lambda x: lax.pmean(x, "i"), axis_name="i")
 compute_sum = jax.pmap(lambda x: lax.psum(x, "i"), axis_name="i")
 
 
-def index_if_not_scalar(value: chex.Numeric, index: int = 0) -> chex.Numeric:
+def index_if_not_scalar(value: Numeric, index: int = 0) -> Numeric:
   """Index `value` at axis 0 if it is not a scalar, otherwise return it."""
 
-  if types.is_array_instance(value):
+  if isinstance(value, Array):
 
     if value.ndim > 0:  # pytype: disable=attribute-error  # numpy-scalars
       return value[index]
     else:
       return value
 
-  elif isinstance(value, types.CHEX_SCALAR_TYPES):
+  elif isinstance(value, (float, int)):
     return value
 
   else:
-    raise ValueError("The input should be an instance of `chex.Numeric`.")
+    raise ValueError("The input should be an instance of `Numeric`.")
 
 
 @jax.jit
-def get_first(obj: TPyTree) -> TPyTree:
+def get_first(obj: TArrayTree) -> TArrayTree:
   """Index the PyTree leaves `x` of `obj` by `x[0]` if they are not scalars."""
   return jax.tree_util.tree_map(index_if_not_scalar, obj)
 
 
-def get_mean(obj: TPyTree) -> TPyTree:
+def get_mean(obj: TArrayTree) -> TArrayTree:
   """Returns the average of `obj` over different devices."""
   return get_first(compute_mean(obj))
 
 
-def get_sum(obj: TPyTree) -> TPyTree:
+def get_sum(obj: TArrayTree) -> TArrayTree:
   """Returns the sum of `obj` over different devices."""
   return get_first(compute_sum(obj))
 
@@ -103,7 +105,7 @@ pmap_zeros_like = jax.pmap(lambda x: jax.tree_util.tree_map(jnp.zeros_like, x))
 jit_zeros_like = jax.jit(lambda x: jax.tree_util.tree_map(jnp.zeros_like, x))
 
 
-def replicate_all_local_devices(obj: TPyTree) -> TPyTree:
+def replicate_all_local_devices(obj: TArrayTree) -> TArrayTree:
   """Replicates `obj` to all local Jax devices."""
   if types.tree_is_empty(obj):
     return obj
@@ -111,7 +113,7 @@ def replicate_all_local_devices(obj: TPyTree) -> TPyTree:
   return jax.device_put_replicated(obj, devices=jax.local_devices())
 
 
-def make_different_rng_key_on_all_devices(rng: chex.PRNGKey) -> chex.PRNGKey:
+def make_different_rng_key_on_all_devices(rng: PRNGKey) -> PRNGKey:
   """Makes a different PRNG for all Jax devices and processes."""
 
   rng = jax.random.fold_in(rng, jax.process_index())
@@ -125,11 +127,11 @@ p_split_num = jax.pmap(lambda key, num: tuple(jax.random.split(key, num)),
                        static_broadcasted_argnums=1)
 
 
-def check_and_fix_format_for_pmap(obj: TPyTree) -> TPyTree:
+def check_and_fix_format_for_pmap(obj: TArrayTree) -> TArrayTree:
   """Checks shape[0]==device_count and broadcasts scalars to [device_count]."""
   device_count = jax.local_device_count()
 
-  def check_and_fix(x: chex.Numeric) -> chex.Array:
+  def check_and_fix(x: Numeric) -> Array:
 
     # broadcast any 0D scalars
     if isinstance(x, numbers.Number) or not x.shape:  # pytype: disable=attribute-error  # numpy-scalars
@@ -147,9 +149,9 @@ default_device_sync = None
 
 
 def host_sync(
-    obj: TPyTree,
-    sync_op: Callable[[TPyTree, str], TPyTree],
-) -> TPyTree:
+    obj: TArrayTree,
+    sync_op: Callable[[TArrayTree, str], TArrayTree],
+) -> TArrayTree:
   """Syncs `obj` across multiple hosts with the operation `sync_op`."""
 
   # The implementation here is to use the pmap syncing mechanisms but with only
@@ -180,21 +182,21 @@ def host_sync(
   return obj
 
 
-def host_all_gather(x: TPyTree) -> TPyTree:
+def host_all_gather(x: TArrayTree) -> TArrayTree:
   """Gathers on every host the values of the PyTree leaves `x`."""
   return host_sync(x, lax.all_gather)
 
 
-def host_mean(x: TPyTree) -> TPyTree:
+def host_mean(x: TArrayTree) -> TArrayTree:
   """Computes the mean of the PyTree leaves of `x` over multiple hosts."""
   return host_sync(x, lax.pmean)
 
 
 def sync_and_divide_value(
-    value: TPyTree,
-    counter: chex.Numeric,
+    value: TArrayTree,
+    counter: Numeric,
     axis_name: Optional[str] = None,
-) -> TPyTree:
+) -> TArrayTree:
   """Computes the mean of `value` over all hosts and divides it by `counter`."""
   value = jax.tree_util.tree_map(lambda x: x / counter, value)
   return pmean_if_pmap(value, axis_name)
@@ -209,7 +211,7 @@ pmap_sync_and_divide_value = jax.pmap(
 
 
 # We might be able to change this to "return jnp.array(x)" in newer JAX versions
-def copy_array(x: chex.Array) -> chex.Array:
+def copy_array(x: Array) -> Array:
   """Copies a Jax array so that it can be donated freely."""
   return x + jnp.zeros_like(x)
 
@@ -219,9 +221,9 @@ pmap_copy_obj = jax.pmap(copy_obj)
 
 
 def distribute_thunks(
-    thunks: Sequence[Callable[[], PyTree]],
+    thunks: Sequence[Callable[[], TArrayTree]],
     pmap_axis_name: str,
-    ) -> PyTree:
+    ) -> TArrayTree:
   """Distributes the computation of a list of thunks over the pmapped devices.
 
   Given a list of thunks, this function distributes their computation over the

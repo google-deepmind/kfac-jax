@@ -12,45 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC annotation types and general tree operations."""
-import sys
-from typing import Any, Callable, Sequence, TypeVar, Union, Tuple
+from typing import Callable, TypeVar, Sequence, Mapping, Tuple, Union
 
-import chex
 import jax
 import jax.numpy as jnp
 
 # Types for annotation
 T = TypeVar("T")
-Params = chex.ArrayTree
-Batch = chex.ArrayTree
-FuncState = chex.ArrayTree
-FuncAux = chex.ArrayTree
-PyTreeDef = chex.PyTreeDef
-PyTreeType = Any
-PyTree = chex.ArrayTree
-TPyTree = TypeVar("TPyTree", bound=PyTree)
-FuncArgs = Sequence[PyTree]
-Func = Callable[..., Union[chex.Array, Tuple[chex.Array, FuncAux]]]
-ValueFunc = Callable[..., chex.Array]
-ValueAndGradFunc = Callable[..., Tuple[chex.Array, Params]]
+Array = jax.Array
+PRNGKey = Array
+Scalar = Union[float, int]
+Numeric = Union[Array, Scalar]
+Shape = Tuple[int, ...]
+DType = jnp.dtype
+PyTree = Union[T, Sequence["PyTree[T]"], Mapping[str, "PyTree[T]"]]
+ArrayTree = PyTree[Array]
+TArrayTree = TypeVar("TArrayTree", bound=ArrayTree)
+Params = TypeVar("Params", bound=ArrayTree)
+Batch = TypeVar("Batch", bound=ArrayTree)
+FuncState = TypeVar("FuncState", bound=ArrayTree)
+FuncAux = TypeVar("FuncAux", bound=ArrayTree)
+PyTreeDef = jax.tree_util.PyTreeDef
+FuncArgs = Sequence[ArrayTree]
+FuncOuts = Union[Array, Tuple[Array, FuncAux]]
+Func = Callable[..., FuncOuts]
+ValueFunc = Callable[..., Array]
+ValueAndGradFunc = Callable[..., Tuple[Array, Params]]
+AssumedFuncOutput = Union[Array, Tuple[Array, FuncAux],
+                          Tuple[Array, Tuple[FuncState, FuncAux]]]
+SCALAR_TYPES = (float, int)
 
-AssumedFuncOutput = Union[
-    chex.Array,
-    Tuple[chex.Array, FuncAux],
-    Tuple[chex.Array, Tuple[FuncState, FuncAux]],
-]
 
-CHEX_SCALAR_TYPES = (float, int)
-
-
-def tree_is_empty(obj: PyTree) -> bool:
+def tree_is_empty(obj: ArrayTree) -> bool:
   """Returns whether the given PyTree is empty."""
   return not jax.tree_util.tree_leaves(obj)
 
 
 def abstract_objects_equal(
-    obj1: PyTree,
-    obj2: PyTree,
+    obj1: ArrayTree,
+    obj2: ArrayTree,
     check_dtype: bool = True
 ) -> bool:
   """`True` if the objects have the same PyTree structure, shapes and dtypes."""
@@ -61,26 +61,7 @@ def abstract_objects_equal(
                                 jax.tree_util.tree_leaves(obj2))))
 
 
-def is_array_instance(var: chex.Numeric) -> bool:
-  """Return true if var is a instance of a jax or numpy array type."""
-  if sys.version_info >= (3, 10):
-    return isinstance(var, chex.Array)
-  else:
-    # python 3.9 and earlier don't support instance on Generics (e.g. Union).
-    # Instead fallback to comparing to a tuple which (currently) matches
-    # chex.Array.
-    array_types = (
-        chex.ArrayDevice,
-        chex.ArrayNumpy,
-        chex.ArrayBatched,
-        chex.ArraySharded,
-    )
-    return isinstance(var, array_types)
-
-
-def get_float_dtype_and_check_consistency(
-    obj: PyTree
-) -> jnp.dtype:
+def get_float_dtype_and_check_consistency(obj: ArrayTree) -> DType:
   """Checks that all leaves have the same float dtype, and returns this."""
 
   leaves = jax.tree_util.tree_leaves(obj)
@@ -89,7 +70,7 @@ def get_float_dtype_and_check_consistency(
 
   for leaf in leaves:
 
-    if leaf.dtype in {jnp.float32, jnp.float64}:  # include bfloat16 etc?
+    if leaf.dtype in (jnp.float16, jnp.bfloat16, jnp.float32, jnp.float64):
 
       if dtype is not None and leaf.dtype != dtype:
         raise ValueError("Inconsistent dtypes detected.")

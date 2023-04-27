@@ -14,7 +14,7 @@
 """K-FAC utilities for classes with staged methods."""
 import functools
 import operator
-from typing import Any, Callable, Optional, Sequence, Union, Tuple
+from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
 import jax
 import jax.numpy as jnp
@@ -23,7 +23,7 @@ from kfac_jax._src.utils import misc
 from kfac_jax._src.utils import parallel
 from kfac_jax._src.utils import types
 
-PyTree = types.PyTree
+TArrayTree = types.TArrayTree
 
 
 class WithStagedMethods(misc.Finalizable):
@@ -112,18 +112,18 @@ class WithStagedMethods(misc.Finalizable):
     """Returns a staging context manager, linked to this instance."""
     return self.StagingContext(self)
 
-  def get_first(self, obj: PyTree) -> PyTree:
+  def get_first(self, obj: TArrayTree) -> TArrayTree:
     """Indexes the `obj` PyTree leaves over leading axis if `multi_device`."""
     return parallel.get_first(obj) if self.multi_device else obj
 
-  def copy_obj(self, obj: PyTree) -> PyTree:
+  def copy_obj(self, obj: TArrayTree) -> TArrayTree:
     """Copies the object."""
     if self.multi_device:
       return parallel.pmap_copy_obj(obj)
     else:
       return parallel.copy_obj(obj)
 
-  def replicate(self, obj: PyTree) -> PyTree:
+  def replicate(self, obj: TArrayTree) -> TArrayTree:
     """Replicates the object to all local devices if `multi_device`."""
     if self.multi_device:
       return parallel.replicate_all_local_devices(obj)
@@ -132,10 +132,10 @@ class WithStagedMethods(misc.Finalizable):
 
 
 def staged(
-    method: Callable[..., PyTree],
+    method: Callable[..., TArrayTree],
     static_argnums: Optional[Union[int, Sequence[int]]] = None,
     donate_argnums: Optional[Union[int, Sequence[int]]] = None,
-) -> Callable[..., PyTree]:
+) -> Callable[..., TArrayTree]:
   """Makes the instance method staged.
 
   This decorator **should** only be applied to instance methods of classes that
@@ -186,7 +186,7 @@ def staged(
                         donate_argnums=donate_argnums)
 
   @functools.wraps(method)
-  def decorated(instance: "WithStagedMethods", *args: Any) -> PyTree:
+  def decorated(instance: "WithStagedMethods", *args: Any) -> TArrayTree:
 
     if instance.in_staging:
       return method(instance, *args)

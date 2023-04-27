@@ -21,22 +21,28 @@ from kfac_jax._src.utils import staging
 from kfac_jax._src.utils import types
 
 # types
+Array = types.Array
+PRNGKey = types.PRNGKey
+Scalar = types.Scalar
+Numeric = types.Numeric
+Shape = types.Shape
+DType = types.DType
+PyTree = types.PyTree
+ArrayTree = types.ArrayTree
+TArrayTree = types.TArrayTree
 Params = types.Params
 Batch = types.Batch
 FuncState = types.FuncState
 FuncAux = types.FuncAux
 PyTreeDef = types.PyTreeDef
-PyTreeType = types.PyTreeType
-PyTree = types.PyTree
-TPyTree = types.TPyTree
 FuncArgs = types.FuncArgs
+FuncOuts = types.FuncOuts
 Func = types.Func
 ValueFunc = types.ValueFunc
 ValueAndGradFunc = types.ValueAndGradFunc
 AssumedFuncOutput = types.AssumedFuncOutput
 tree_is_empty = types.tree_is_empty
 abstract_objects_equal = types.abstract_objects_equal
-is_array_instance = types.is_array_instance
 get_float_dtype_and_check_consistency = (
     types.get_float_dtype_and_check_consistency)
 del types

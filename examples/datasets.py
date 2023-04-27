@@ -15,9 +15,8 @@
 
 """
 import types
-from typing import Callable, Dict, Iterator, Mapping, Optional, Tuple, TypeVar
+from typing import Callable, Iterator, Optional, Tuple, Dict
 
-import chex
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -26,8 +25,10 @@ import tensorflow_datasets
 tfds = tensorflow_datasets
 
 # Types for annotation
-T = TypeVar("T")
-Batch = Dict[str, chex.Array]
+Array = jax.Array
+Shape = Tuple[int, ...]
+Batch = Dict[str, Array]
+TfBatch = Dict[str, tf.Tensor]
 
 # Special global variables
 _IMAGENET_MEAN_RGB = (0.485, 0.456, 0.406)
@@ -147,18 +148,18 @@ def imagenet_num_examples_and_split(
 def imagenet_dataset(
     split: str,
     is_training: bool,
-    batch_dims: chex.Shape,
+    batch_dims: Shape,
     seed: int = 123,
     shuffle_files: bool = True,
     buffer_size_factor: int = 10,
     shuffle: bool = False,
     cache: bool = False,
     dtype: jnp.dtype = jnp.float32,
-    image_size: chex.Shape = (224, 224),
+    image_size: Shape = (224, 224),
     data_dir: Optional[str] = None,
     extra_preprocessing_func: Optional[
-        Callable[[jax.Array, jax.Array],
-                 Tuple[jax.Array, jax.Array]]] = None,
+        Callable[[Array, Array],
+                 Tuple[Array, Array]]] = None,
 ) -> Iterator[Batch]:
   """Standard ImageNet dataset pipeline.
 
@@ -244,8 +245,8 @@ def imagenet_dataset(
     # When training we generate a stateless pipeline, at test we don't need it
     def scan_fn(
         seed_: tf.Tensor,
-        data: T
-    ) -> Tuple[tf.Tensor, Tuple[T, tf.Tensor]]:
+        data: TfBatch,
+    ) -> Tuple[tf.Tensor, Tuple[TfBatch, tf.Tensor]]:
       new_seeds = tf.random.experimental.stateless_split(seed_, num=2)
       return new_seeds[0], (data, new_seeds[1])
 
@@ -253,7 +254,7 @@ def imagenet_dataset(
     ds = ds.scan(tf_seed, scan_fn)
 
   def preprocess(
-      example: Mapping[str, tf.Tensor],
+      example: Dict[str, tf.Tensor],
       seed_: Optional[tf.Tensor] = None
   ) -> Dict[str, tf.Tensor]:
 
@@ -302,7 +303,7 @@ def _imagenet_preprocess_image(
     image_bytes: tf.Tensor,
     seed: tf.Tensor,
     is_training: bool,
-    image_size: chex.Shape,
+    image_size: Shape,
 ) -> tf.Tensor:
   """Returns processed and resized images for Imagenet."""
 
@@ -367,7 +368,7 @@ def _distorted_bounding_box_crop(
 def _decode_and_random_crop(
     image_bytes: tf.Tensor,
     seed: tf.Tensor,
-    image_size: chex.Shape = (224, 224),
+    image_size: Shape = (224, 224),
 ) -> tf.Tensor:
   """Make a random crop of 224 for Imagenet."""
   jpeg_shape = tf.image.extract_jpeg_shape(image_bytes)
@@ -390,7 +391,7 @@ def _decode_and_random_crop(
 def _decode_and_center_crop(
     image_bytes: tf.Tensor,
     jpeg_shape: Optional[tf.Tensor] = None,
-    image_size: chex.Shape = (224, 224),
+    image_size: Shape = (224, 224),
 ) -> tf.Tensor:
   """Crops to center of image with padding then scales for Imagenet."""
 

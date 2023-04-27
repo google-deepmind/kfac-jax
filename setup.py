@@ -51,22 +51,27 @@ setuptools.setup(
     url="https://github.com/deepmind/kfac-jax",
     license="Apache 2.0",
     author="DeepMind",
-    description="A Jax package for approximate curvature estimation and "
-                "optimization using KFAC.",
+    description=(
+        "A Jax package for approximate curvature estimation and "
+        "optimization using KFAC."
+    ),
     long_description=open(os.path.join(_CURRENT_DIR, "README.md")).read(),
     long_description_content_type="text/markdown",
     author_email="kfac-jax-dev@google.com",
     # Contained modules and scripts.
     packages=setuptools.find_namespace_packages(exclude=["tests", "examples"]),
     install_requires=_parse_requirements(
-        os.path.join(_CURRENT_DIR, "requirements.txt")),
+        os.path.join(_CURRENT_DIR, "requirements.txt")
+    ),
     tests_require=_parse_requirements(
-        os.path.join(_CURRENT_DIR, "requirements_tests.txt")),
+        os.path.join(_CURRENT_DIR, "requirements_tests.txt")
+    ),
     extras_require={
         "tests": _parse_requirements(
-            os.path.join(_CURRENT_DIR, "requirements_tests.txt")),
+            os.path.join(_CURRENT_DIR, "requirements_tests.txt")
+        ),
     },
-    requires_python=">=3.7",
+    requires_python=">=3.8",
     include_package_data=True,
     zip_safe=False,
     # PyPI package information.
@@ -77,7 +82,6 @@ setuptools.setup(
         "Intended Audience :: Science/Research",
         "License :: OSI Approved :: Apache Software License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",

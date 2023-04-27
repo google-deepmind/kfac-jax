@@ -17,10 +17,9 @@ import copy
 import functools
 import os
 import time
-from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Union
+from typing import Any, Callable, Iterator, Optional, Tuple, Union, Dict
 
 from absl import logging
-import chex
 import jax
 import jax.numpy as jnp
 from jaxline import experiment
@@ -28,12 +27,18 @@ from jaxline import utils as pipe_utils
 import kfac_jax
 from examples import datasets
 from examples import optimizers
-from ml_collections import config_dict
-import numpy as np
+import ml_collections
 
 
 # Types for annotation
-InitFunc = Callable[[chex.PRNGKey, kfac_jax.utils.Batch], kfac_jax.utils.Params]
+Array = kfac_jax.utils.Array
+Numeric = kfac_jax.utils.Numeric
+PRNGKey = kfac_jax.utils.PRNGKey
+Params = kfac_jax.utils.Params
+Batch = kfac_jax.utils.Batch
+FuncState = kfac_jax.utils.FuncState
+
+InitFunc = Callable[[PRNGKey, Batch], Params]
 
 
 class SupervisedExperiment(experiment.AbstractExperiment):
@@ -70,8 +75,8 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   def __init__(
       self,
       mode: str,
-      init_rng: chex.PRNGKey,
-      config: config_dict.ConfigDict,
+      init_rng: PRNGKey,
+      config: ml_collections.ConfigDict,
       init_parameters_func: InitFunc,
       model_loss_func: kfac_jax.optimizer.ValueFunc,
       has_aux: bool,
@@ -244,17 +249,15 @@ class SupervisedExperiment(experiment.AbstractExperiment):
 
   @property
   @functools.lru_cache(maxsize=1)
-  def train_inputs(self) -> Union[
-      Iterator[kfac_jax.utils.Batch],
-      Tuple[Iterator[kfac_jax.utils.Batch], Iterator[kfac_jax.utils.Batch]],
-  ]:
+  def train_inputs(self) -> Union[Iterator[Batch],
+                                  Tuple[Iterator[Batch], Iterator[Batch]]]:
     """The training data iterator."""
     return self._train_input
 
   def progress(
       self,
-      global_step: chex.Numeric,
-  ) -> chex.Numeric:
+      global_step: Numeric,
+  ) -> Numeric:
     """Computes the current progress of the training as a number in [0,1]."""
 
     if self.config.training.steps is not None:
@@ -269,17 +272,15 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   def should_run_step(
       self,
       global_step: int,
-      config: config_dict.ConfigDict,
+      config: ml_collections.ConfigDict,
   ) -> bool:
 
     del config  # not used
 
     return int(self.progress(global_step)) < 1
 
-  def create_optimizer(self) -> Union[
-      optimizers.OptaxWrapper,
-      kfac_jax.Optimizer,
-  ]:
+  def create_optimizer(self) -> Union[optimizers.OptaxWrapper,
+                                      kfac_jax.Optimizer]:
     """Creates the optimizer specified in the experiment's config."""
     optimizer_config = copy.deepcopy(self.config.optimizer)
     return optimizers.create_optimizer(
@@ -375,13 +376,13 @@ class SupervisedExperiment(experiment.AbstractExperiment):
   ) -> datasets.tf.data.Dataset:
     """Constructs the training dataset."""
 
-  def step(  # pytype: disable=signature-mismatch  # jax-ndarray
+  def step(  # pytype: disable=signature-mismatch
       self,
-      global_step: jnp.ndarray,
-      rng: jnp.ndarray,
-      **unused_args: Any
-  ) -> Dict[str, jnp.ndarray]:
-    del global_step  # Instead, we use the self._python_step
+      global_step: Array,
+      rng: PRNGKey,
+      **unused_args: Any,
+  ) -> Dict[str, Numeric]:
+    del global_step
 
     # Perform optimizer step
     result = self.optimizer.step(
@@ -415,7 +416,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       for i in range(gathered_stat.shape[0]):
         stats[f"{name}_{i}"] = jnp.array([gathered_stat[i]])
 
-    return kfac_jax.utils.get_first(stats)  # questionable?
+    return kfac_jax.utils.get_first(stats)
 
   #                  _
   #   _____   ____ _| |
@@ -435,13 +436,13 @@ class SupervisedExperiment(experiment.AbstractExperiment):
 
   def _evaluate_single_batch(
       self,
-      global_step: jnp.ndarray,
-      params: kfac_jax.utils.Params,
-      func_state: kfac_jax.utils.FuncState,
+      global_step: Array,
+      params: Params,
+      func_state: FuncState,
       opt_state: Union[kfac_jax.Optimizer.State, optimizers.OptaxState],
-      rng: chex.PRNGKey,
-      batch: kfac_jax.utils.Batch,
-  ) -> Dict[str, chex.Array]:
+      rng: PRNGKey,
+      batch: Batch,
+  ) -> Dict[str, Array]:
     """Evaluates a single batch."""
 
     del global_step  # This might be used in subclasses
@@ -462,16 +463,14 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     if hasattr(opt_state, "data_seen"):
       stats["data_seen"] = opt_state.data_seen
 
-    return kfac_jax.utils.pmean_if_pmap(stats, "eval_axis")  # pytype: disable=bad-return-type  # numpy-scalars
+    return kfac_jax.utils.pmean_if_pmap(stats, "eval_axis")  # pytype: disable=bad-return-type
 
-  def evaluate(  # pytype: disable=signature-mismatch  # numpy-scalars
+  def evaluate(  # pytype: disable=signature-mismatch
       self,
-      global_step: chex.Array,
-      rng: chex.PRNGKey,
-      writer: Optional[pipe_utils.Writer],
-  ) -> Dict[str, chex.Array]:
-    del writer  # not used
-
+      global_step: Array,
+      rng: PRNGKey,
+      **unused_args: Any,
+  ) -> Dict[str, Numeric]:
     all_stats = dict()
 
     # Evaluates both the train and eval split metrics
@@ -491,7 +490,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
         averaged_stats.add(stats, 1)
 
       # Extract all stats
-      for k, v in averaged_stats.value.items():  # pytype: disable=attribute-error  # numpy-scalars
+      for k, v in averaged_stats.value.items():  # pytype: disable=attribute-error
         all_stats[f"{name}_{k}"] = kfac_jax.utils.get_first(v)
 
       logging.info("Evaluation for %s is completed with %d number of batches.",
@@ -499,16 +498,16 @@ class SupervisedExperiment(experiment.AbstractExperiment):
 
     all_stats["progress"] = self.progress(self._python_step)
 
-    return jax.tree_util.tree_map(np.array, all_stats)
+    return all_stats
 
 
 def train_standalone_supervised(
     random_seed: int,
-    full_config: config_dict.ConfigDict,
+    full_config: ml_collections.ConfigDict,
     experiment_ctor:
-    Callable[[str, chex.PRNGKey, config_dict.ConfigDict], SupervisedExperiment],
+    Callable[[str, PRNGKey, ml_collections.ConfigDict], SupervisedExperiment],
     storage_folder: Optional[str],
-) -> Dict[str, chex.Array]:
+) -> Dict[str, Array]:
   """Run an experiment without the Jaxline runtime."""
 
   rng = jax.random.PRNGKey(random_seed)
@@ -552,7 +551,7 @@ def train_standalone_supervised(
     stats["time"] = stats.get("time", []) + [elapsed_time]
 
     for k in sorted(scalars):
-      stats.setdefault(k, []).append(scalars[k])
+      stats.setdefault(k, []).append(jnp.asarray(scalars[k]))
 
     # Logging
     if i % full_config.log_tensors_interval == 0:
@@ -564,11 +563,12 @@ def train_standalone_supervised(
       logging.info("-" * 20)
     i += 1
 
+  stats = {k: jnp.stack(v) for k, v in stats.items()}
   if storage_folder is not None:
     jnp.savez(f"{storage_folder}/snapshot_final.npz",
               *jax.tree_util.tree_leaves(experiment_instance.snapshot_state()))
     jnp.savez(f"{storage_folder}/stats.npz", **stats)
-  return stats  # pytype: disable=bad-return-type  # numpy-scalars
+  return stats
 
 
 class MnistExperiment(SupervisedExperiment):
@@ -579,8 +579,8 @@ class MnistExperiment(SupervisedExperiment):
       supervised: bool,
       flatten_images: bool,
       mode: str,
-      init_rng: jnp.ndarray,
-      config: config_dict.ConfigDict,
+      init_rng: PRNGKey,
+      config: ml_collections.ConfigDict,
       init_parameters_func: InitFunc,
       model_loss_func: kfac_jax.optimizer.ValueFunc,
       has_aux: bool,
@@ -654,8 +654,8 @@ class ImageNetExperiment(SupervisedExperiment):
   def __init__(
       self,
       mode: str,
-      init_rng: chex.PRNGKey,
-      config: config_dict.ConfigDict,
+      init_rng: PRNGKey,
+      config: ml_collections.ConfigDict,
       init_parameters_func: InitFunc,
       model_loss_func: kfac_jax.optimizer.ValueFunc,
       has_aux: bool,

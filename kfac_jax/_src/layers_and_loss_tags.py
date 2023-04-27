@@ -13,18 +13,17 @@
 # limitations under the License.
 """K-FAC losses and layers tagging Jax primitives."""
 import types
-from typing import Any, Generic, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Any, Generic, Optional, Sequence, Type, TypeVar, Tuple, Union
 
-import chex
 import jax
 from jax import core
 from jax.interpreters import batching as jax_batching
 
 # Types for annotation
 T = TypeVar("T")
-ArrayOrXla = TypeVar("ArrayOrXla", chex.Array, jax.interpreters.xla.XlaOp)
-Array = chex.Array
+Array = jax.Array
 Arrays = Tuple[Array, ...]
+ArrayOrXla = TypeVar("ArrayOrXla", Array, jax.interpreters.xla.XlaOp)
 
 
 class LossTag(core.Primitive, Generic[T]):
@@ -133,7 +132,7 @@ class LossTag(core.Primitive, Generic[T]):
       *args: jax.interpreters.xla.XlaOp,
       args_names: Sequence[str],
   ) -> Tuple[jax.interpreters.xla.XlaOp, ...]:
-    """The XLA translation rule for this primitive (creates a no-op Tuple)."""
+    """The XLA translation rule for this primitive (creates a no-op tuple)."""
     del avals_in, avals_out  # not used
     return self.get_outputs(*args, args_names=args_names)
 

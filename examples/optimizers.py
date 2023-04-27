@@ -13,10 +13,9 @@
 # limitations under the License.
 """Utilities for setting up different optimizers."""
 import functools
-from typing import Any, Callable, Iterator, Mapping, Optional, Sequence, Tuple, Type, Union
+from typing import Any, Callable, Iterator, Mapping, Optional, Sequence, Type, Tuple, Union
 
 from absl import logging
-import chex
 import jax
 import jax.numpy as jnp
 import kfac_jax
@@ -24,6 +23,13 @@ from ml_collections import config_dict
 import optax
 
 
+Array = kfac_jax.utils.Array
+Numeric = kfac_jax.utils.Numeric
+PRNGKey = kfac_jax.utils.PRNGKey
+Params = kfac_jax.utils.Params
+Batch = kfac_jax.utils.Batch
+# FuncState = kfac_jax.utils.FuncState
+FuncState = Any
 OptaxState = Any
 
 
@@ -81,21 +87,21 @@ class OptaxWrapper:
 
   def init(
       self,
-      params: kfac_jax.utils.Params,
-      rng: jnp.ndarray,
-      batch: kfac_jax.utils.Batch,
-      func_state: Optional[kfac_jax.utils.FuncState] = None
+      params: Params,
+      rng: PRNGKey,
+      batch: Batch,
+      func_state: Optional[FuncState] = None,
   ) -> OptaxState:
     """Initializes the optimizer and returns the appropriate optimizer state."""
     return self._jit_init(params, rng, batch, func_state)
 
   def _step(
       self,
-      params: kfac_jax.utils.Params,
+      params: Params,
       state: OptaxState,
-      rng: chex.PRNGKey,
-      batch: kfac_jax.utils.Batch,
-      func_state: Optional[kfac_jax.utils.FuncState] = None,
+      rng: PRNGKey,
+      batch: Batch,
+      func_state: Optional[FuncState] = None,
   ) -> kfac_jax.optimizer.ReturnEither:
     """A single step of optax."""
     batch = self._batch_process_func(batch)
@@ -110,7 +116,8 @@ class OptaxWrapper:
         has_aux=self._value_func_has_aux,
         has_state=self._value_func_has_state,
     )
-    stats["loss"] = loss  # pytype: disable=unsupported-operands  # numpy-scalars
+    stats = stats or {}
+    stats["loss"] = loss
     stats, grads = jax.lax.pmean((stats, grads), axis_name="optax_axis")
 
     # Compute and apply updates via our optimizer.
@@ -128,16 +135,16 @@ class OptaxWrapper:
 
   def step(
       self,
-      params: kfac_jax.utils.Params,
+      params: Params,
       state: OptaxState,
-      rng: jnp.ndarray,
-      data_iterator: Iterator[kfac_jax.utils.Batch],
-      func_state: Optional[kfac_jax.utils.FuncState] = None,
+      rng: PRNGKey,
+      data_iterator: Iterator[Batch],
+      func_state: Optional[FuncState] = None,
       global_step_int: Optional[int] = None
-  ) -> Union[Tuple[kfac_jax.utils.Params, Any, kfac_jax.utils.FuncState,
-                   Mapping[str, jnp.ndarray]],
-             Tuple[kfac_jax.utils.Params, Any,
-                   Mapping[str, jnp.ndarray]]]:
+  ) -> Union[
+      Tuple[Params, Any, FuncState, Mapping[str, Array]],
+      Tuple[Params, Any, Mapping[str, Array]],
+  ]:
     """A step with similar interface to KFAC."""
     result = self._jit_step(
         params=params,
@@ -155,7 +162,7 @@ class OptaxWrapper:
 
 
 def tf1_rmsprop(
-    learning_rate_fn: Callable[[chex.Numeric], chex.Numeric],
+    learning_rate_fn: Callable[[Numeric], Numeric],
     decay: float = .9,
     momentum: float = 0.,
     epsilon: float = 1e-8
@@ -186,9 +193,9 @@ def tf1_rmsprop(
 
 
 def linear_interpolation(
-    x: chex.Numeric,
+    x: Numeric,
     interpolation_points: Tuple[Tuple[float, float], ...]
-) -> chex.Array:
+) -> Array:
   """Performs linear interpolation between the interpolation points."""
   xs, ys = zip(*interpolation_points)
   masks = [x < ci for ci in xs[1:]]
@@ -214,11 +221,11 @@ def linear_interpolation(
 
 
 def imagenet_sgd_schedule(
-    global_step: chex.Numeric,
+    global_step: Numeric,
     dataset_size: int,
     train_total_batch_size: int,
     **_: Any,
-) -> chex.Array:
+) -> Array:
   """Standard linear scaling schedule for ImageNet."""
   # Can be found in Section 5.1 of https://arxiv.org/pdf/1706.02677.pdf
   steps_per_epoch = dataset_size / train_total_batch_size
@@ -233,18 +240,18 @@ def imagenet_sgd_schedule(
 
 
 def fixed_schedule(
-    global_step: chex.Numeric,
-    value: chex.Numeric,
+    global_step: Numeric,
+    value: Numeric,
     **_: Any,
-) -> chex.Array:
+) -> Array:
   """Fixed/constant schedule."""
   return jnp.ones_like(global_step) * value
 
 
 def kfac_resnet50_schedule(
-    global_step: chex.Numeric,
+    global_step: Numeric,
     **_: Any,
-) -> chex.Array:
+) -> Array:
   """Custom schedule for KFAC."""
   return jnp.power(10.0, linear_interpolation(
       x=global_step,
@@ -255,7 +262,7 @@ def kfac_resnet50_schedule(
 
 
 def cosine_schedule(
-    global_step: chex.Numeric,
+    global_step: Numeric,
     dataset_size: int,
     train_total_batch_size: int,
     epochs: Optional[float],
@@ -264,7 +271,7 @@ def cosine_schedule(
     warmup_epochs: Optional[float] = None,
     warmup_steps: Optional[int] = None,
     **_: Any,
-) -> chex.Array:
+) -> Array:
   """A cosine schedule described in the TAT paper."""
 
   if (steps is None) == (epochs is None):
@@ -292,7 +299,7 @@ def cosine_schedule(
 
 
 def stepwise_schedule(
-    global_step: chex.Numeric,
+    global_step: Numeric,
     dataset_size: int,
     train_total_batch_size: int,
     lr_decay_factors: Sequence[float],
@@ -302,7 +309,7 @@ def stepwise_schedule(
     step_boundaries: Optional[Sequence[float]] = None,
     warmup_steps: Optional[int] = None,
     **_: Any,
-) -> chex.Array:
+) -> Array:
   """A basic stepwise schedule."""
 
   if (epoch_boundaries is None) == (step_boundaries is None):
@@ -334,7 +341,7 @@ def stepwise_schedule(
 def construct_schedule(
     name: str,
     **kwargs,
-) -> Callable[[chex.Numeric], chex.Array]:
+) -> Callable[[Numeric], Array]:
   """Constructs the actual schedule from its name and extra kwargs."""
   if name == "fixed":
     return functools.partial(fixed_schedule, **kwargs)
@@ -350,9 +357,9 @@ def construct_schedule(
     raise NotImplementedError(name)
 
 
-def kfac_bn_registration_kwargs(bn_registration: str) -> Mapping[str, Union[
-    Tuple[str, ...],
-    Mapping[str, Type[kfac_jax.CurvatureBlock]]]]:
+def kfac_bn_registration_kwargs(bn_registration: str) -> Mapping[
+    str, Union[Tuple[str, ...], Mapping[str, Type[kfac_jax.CurvatureBlock]]]
+]:
   """Constructs KFAC kwargs for the given batch-norm registration strategy."""
   if bn_registration == "generic":
     return dict(patterns_to_skip=("scale_and_shift", "scale_only"))
@@ -371,7 +378,7 @@ def create_optimizer(
     name: str,
     config: config_dict.ConfigDict,
     train_model_func: kfac_jax.optimizer.ValueFunc,
-    l2_reg: chex.Numeric,
+    l2_reg: Numeric,
     has_aux: bool,
     has_func_state: bool,
     has_rng: bool,

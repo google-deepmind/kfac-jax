@@ -14,9 +14,8 @@
 """K-FAC utilities for various mathematical operations."""
 import functools
 import string
-from typing import Callable, Optional, Sequence, Union, Iterable, Tuple
+from typing import Callable, Optional, Sequence, Iterable, TypeVar, Tuple, Union
 
-import chex
 import jax
 from jax import lax
 from jax.experimental.sparse import linalg as experimental_splinalg
@@ -30,8 +29,12 @@ import optax
 import tree
 
 
-PyTree = types.PyTree
-TPyTree = types.TPyTree
+Array = types.Array
+Numeric = types.Numeric
+PRNGKey = types.PRNGKey
+ArrayTree = types.ArrayTree
+TArrayTree = types.TArrayTree
+TNumeric = TypeVar("TNumeric", bound=Numeric)
 
 _ALPHABET = string.ascii_lowercase
 
@@ -51,7 +54,7 @@ def get_special_case_zero_inv() -> bool:
   return _SPECIAL_CASE_ZERO_INV
 
 
-def product(iterable_object: Iterable[chex.Numeric]) -> chex.Numeric:
+def product(iterable_object: Iterable[TNumeric]) -> TNumeric:
   """Computes the product of all elements in the iterable."""
   x = 1
 
@@ -61,7 +64,7 @@ def product(iterable_object: Iterable[chex.Numeric]) -> chex.Numeric:
   return x
 
 
-def outer_product(*arrays: chex.Array) -> chex.Array:
+def outer_product(*arrays: Array) -> Array:
   """Computes the outer product of an arbitrary number of vectors."""
   if not all(a.ndim == 1 for a in arrays):
     raise ValueError("All arrays must be vectors.")
@@ -70,36 +73,36 @@ def outer_product(*arrays: chex.Array) -> chex.Array:
   return jnp.einsum(f"{in_str}->{out_str}", *arrays)
 
 
-def scalar_mul(obj: TPyTree, scalar: chex.Numeric) -> TPyTree:
+def scalar_mul(obj: TArrayTree, scalar: Numeric) -> TArrayTree:
   """Multiplies all PyTree leaves of the object by the provided scalar."""
   # The check below is in its current form because of how `jax.jit` tracing
   # mechanism work. If we use `scalar == 1` and `scalar` is an array,  inside a
   # `jit` context, jax will raise an error, since you are not allowed to use
   # abstract values in concrete boolean statements, like native python
   # if/while/for constructs.
-  if isinstance(scalar, types.CHEX_SCALAR_TYPES) and scalar == 1.0:
+  if isinstance(scalar, types.SCALAR_TYPES) and scalar == 1.0:
     return obj
 
   return jax.tree_util.tree_map(lambda x: x * scalar, obj)
 
 
-def scalar_div(obj: TPyTree, scalar: chex.Numeric) -> TPyTree:
+def scalar_div(obj: TArrayTree, scalar: Numeric) -> TArrayTree:
   """Divides all PyTree leaves of the object by the provided scalar."""
   # The check below is in its current form because of how `jax.jit` tracing
   # mechanism work. If we use `scalar == 1` and `scalar` is an array,  inside a
   # `jit` context, jax will raise an error, since you are not allowed to use
   # abstract values in concrete boolean statements, like native python
   # if/while/for constructs.
-  if isinstance(scalar, types.CHEX_SCALAR_TYPES) and scalar == 1.0:
+  if isinstance(scalar, types.SCALAR_TYPES) and scalar == 1.0:
     return obj
 
   return jax.tree_util.tree_map(lambda x: x / scalar, obj)
 
 
 def weighted_sum_of_objects(
-    objects: Sequence[TPyTree],
-    coefficients: Sequence[chex.Numeric],
-) -> TPyTree:
+    objects: Sequence[TArrayTree],
+    coefficients: Sequence[Numeric],
+) -> TArrayTree:
   """Computes a weighted sum of the objects'.
 
   The function computes `sum_i coefficients[i] * objects[i]`. All objects must
@@ -131,7 +134,7 @@ def weighted_sum_of_objects(
   return accumulator
 
 
-def _inner_product_float64(obj1: PyTree, obj2: PyTree) -> chex.Array:
+def _inner_product_float64(obj1: ArrayTree, obj2: ArrayTree) -> Array:
   """Computes inner product explicitly in float64 precision."""
 
   raise NotImplementedError()
@@ -151,19 +154,19 @@ def _inner_product_float64(obj1: PyTree, obj2: PyTree) -> chex.Array:
   #   elements_inner_products = jax.tree_util.tree_map(array_ip, obj1, obj2)
 
   #   flat_list = jax.tree_util.tree_leaves(elements_inner_products)
-  #   result = flat_list[0]
+  #   result = flat_List[0]
 
-  #   for element_ip in flat_list[1:]:
+  #   for element_ip in flat_List[1:]:
   #     result = result + element_ip
 
   # return jnp.array(result, dtype=original_dtype)
 
 
 def inner_product(
-    obj1: PyTree,
-    obj2: PyTree,
+    obj1: ArrayTree,
+    obj2: ArrayTree,
     in_float64: bool = False
-) -> chex.Array:
+) -> Array:
   """Computes the inner product `<vec(obj1), vec(obj2)>`.
 
   To compute the inner product, each of the two input objects is assumed to
@@ -194,10 +197,10 @@ def inner_product(
 
 
 def symmetric_matrix_inner_products(
-    vectors1: Sequence[PyTree],
-    vectors2: Sequence[PyTree],
-    ip_function: Callable[[PyTree, PyTree], chex.Array] = inner_product,
-) -> chex.Array:
+    vectors1: Sequence[ArrayTree],
+    vectors2: Sequence[ArrayTree],
+    ip_function: Callable[[ArrayTree, ArrayTree], Array] = inner_product,
+) -> Array:
   """Computes a matrix of the inner products between the two sequences.
 
   Args:
@@ -227,9 +230,9 @@ def symmetric_matrix_inner_products(
 
 
 def matrix_of_inner_products(
-    vectors: Sequence[PyTree],
-    ip_function: Callable[[PyTree, PyTree], chex.Array] = inner_product,
-) -> chex.Array:
+    vectors: Sequence[ArrayTree],
+    ip_function: Callable[[ArrayTree, ArrayTree], Array] = inner_product,
+) -> Array:
   """Computes the matrix of inner products of the sequence of vectors.
 
   Args:
@@ -246,10 +249,10 @@ def matrix_of_inner_products(
 
 
 def vector_of_inner_products(
-    base: PyTree,
-    vectors: Sequence[PyTree],
-    ip_function: Callable[[PyTree, PyTree], chex.Array] = inner_product,
-) -> chex.Array:
+    base: ArrayTree,
+    vectors: Sequence[ArrayTree],
+    ip_function: Callable[[ArrayTree, ArrayTree], Array] = inner_product,
+) -> Array:
   """Computes a vector of inner products with base.
 
   Args:
@@ -270,10 +273,10 @@ def vector_of_inner_products(
 
 
 def block_permuted(
-    matrix: chex.Array,
+    matrix: Array,
     block_sizes: Sequence[int],
     block_order: Sequence[int],
-) -> chex.Array:
+) -> Array:
   """Permutes whole blocks of the input matrix.
 
   Given a square matrix, this function splits it into blocks, each one having
@@ -308,7 +311,7 @@ def block_permuted(
   return jnp.block(reordered_blocks)
 
 
-def norm(obj: PyTree) -> chex.Array:
+def norm(obj: ArrayTree) -> Array:
   """Computes the Euclidean norm of the provided PyTree object."""
   elements_squared_norm = jax.tree_util.tree_map(
       lambda x: jnp.sum(jnp.square(x)), obj)
@@ -316,7 +319,7 @@ def norm(obj: PyTree) -> chex.Array:
   return jnp.sqrt(sum(jax.tree_util.tree_leaves(elements_squared_norm)))
 
 
-def per_parameter_norm(obj: PyTree, key_prefix: str) -> PyTree:
+def per_parameter_norm(obj: ArrayTree, key_prefix: str) -> ArrayTree:
 
   per_param_norm = jax.tree_util.tree_map(jnp.linalg.norm, obj)
   per_param_norm = tree.flatten_with_path(per_param_norm)
@@ -326,7 +329,7 @@ def per_parameter_norm(obj: PyTree, key_prefix: str) -> PyTree:
   }
 
 
-def psd_inv_cholesky(matrix: chex.Array, damping: chex.Array) -> chex.Array:
+def psd_inv_cholesky(matrix: Array, damping: Array) -> Array:
   """Computes the inverse of `matrix + damping*I`, with matrix assumed PSD."""
 
   if matrix.shape[:1] != matrix.shape[1:]:
@@ -338,11 +341,11 @@ def psd_inv_cholesky(matrix: chex.Array, damping: chex.Array) -> chex.Array:
 
 
 def psd_matrix_norm(
-    matrix: chex.Array,
+    matrix: Array,
     norm_type: str = "avg_trace",
     method_2norm: str = "lobpcg",
-    rng_key: Optional[chex.PRNGKey] = None
-) -> chex.Array:
+    rng_key: Optional[PRNGKey] = None
+) -> Array:
   """Computes one of several different matrix norms for PSD matrices.
 
   Args:
@@ -439,9 +442,9 @@ def psd_matrix_norm(
 
 
 def pi_adjusted_kronecker_inverse(
-    *arrays: chex.Array,
-    damping: chex.Numeric,
-) -> Tuple[chex.Array, ...]:
+    *arrays: Array,
+    damping: Numeric,
+) -> Tuple[Array, ...]:
   """Computes pi-adjusted factored damping inverses.
 
   The inverse of `a_1 kron a_2 kron ... kron a_n + damping * I` is not Kronecker
@@ -484,7 +487,7 @@ def pi_adjusted_kronecker_inverse(
 
   damping = damping.astype(c.dtype)  # pytype: disable=attribute-error  # numpy-scalars
 
-  def regular_inverse() -> Tuple[chex.Array, ...]:
+  def regular_inverse() -> Tuple[Array, ...]:
 
     non_scalars = sum(1 if a.size != 1 else 0 for a in arrays)
 
@@ -516,7 +519,7 @@ def pi_adjusted_kronecker_inverse(
 
     return tuple(u_hats_inv)
 
-  def zero_inverse() -> Tuple[chex.Array, ...]:
+  def zero_inverse() -> Tuple[Array, ...]:
 
     # In the special case where for some reason one of the factors is zero, then
     # the inverse is just `damping^-1 * I`, hence we write each factor as
@@ -550,8 +553,8 @@ def pi_adjusted_kronecker_inverse(
 
 
 def kronecker_product_axis_mul_v(
-    factors: Sequence[chex.Array],
-    v: chex.Array,
+    factors: Sequence[Array],
+    v: Array,
     axis_groups: Optional[Sequence[Sequence[int]]] = None,
     transpose: Union[bool, Sequence[bool]] = False,
 ):
@@ -617,9 +620,9 @@ def kronecker_product_axis_mul_v(
 
 
 def kronecker_eigen_basis_axis_mul_v(
-    q_factors: Sequence[chex.Array],
-    eigenvalues: chex.Array,
-    v: chex.Array,
+    q_factors: Sequence[Array],
+    eigenvalues: Array,
+    v: Array,
     axis_groups: Optional[Sequence[Sequence[int]]] = None,
 ):
   """Computes a matrix-vector product in a Kronecker product eigen-basis.
@@ -661,22 +664,22 @@ def kronecker_eigen_basis_axis_mul_v(
 
 
 def kronecker_product_mul_v(
-    a: chex.Array,
-    b: chex.Array,
-    v: chex.Array,
+    a: Array,
+    b: Array,
+    v: Array,
     a_is_symmetric: bool,
-) -> chex.Array:
+) -> Array:
   """Computes `unvec[(a kron b) vec(v)]` for correctly sized input matrices."""
   del a_is_symmetric  # not used
   return kronecker_product_axis_mul_v([b, a], v)
 
 
 def kronecker_eigen_basis_mul_v(
-    q_a: chex.Array,
-    q_b: chex.Array,
-    eigenvalues: chex.Array,
-    v: chex.Array,
-) -> chex.Array:
+    q_a: Array,
+    q_b: Array,
+    eigenvalues: Array,
+    v: Array,
+) -> Array:
   """Computes a matrix-vector product in a Kronecker product eigen-basis.
 
   The function computes:
@@ -702,7 +705,7 @@ def kronecker_eigen_basis_mul_v(
   return kronecker_eigen_basis_axis_mul_v([q_b, q_a], eigenvalues, v)
 
 
-def _host_eigh(x: chex.Array, *_) -> Tuple[chex.Array, chex.Array]:
+def _host_eigh(x: Array, *_) -> Tuple[Array, Array]:
   """This calls the CPU numpy function for eigh."""
 
   shape_s = jax.ShapeDtypeStruct(x.shape[:-1], x.dtype)
@@ -712,9 +715,9 @@ def _host_eigh(x: chex.Array, *_) -> Tuple[chex.Array, chex.Array]:
 
 
 def _eigh(
-    x: chex.Array,
+    x: Array,
     force_on_host: bool = False,
-) -> Tuple[chex.Array, chex.Array]:
+) -> Tuple[Array, Array]:
   """Computes eigenvectors and eigenvalues, with optionally offloading to cpu."""
 
   if force_on_host:
@@ -733,9 +736,9 @@ def _eigh(
 
 
 def safe_psd_eigh(
-    x: chex.Array,
+    x: Array,
     force_on_host: bool = False,
-) -> Tuple[chex.Array, chex.Array]:
+) -> Tuple[Array, Array]:
   """Computes the eigenvalue decomposition for a PSD matrix.
 
   The function is similar to `jax.numpy.linalg.eigh`, but it clips the returned
@@ -769,9 +772,9 @@ def safe_psd_eigh(
 
 
 def loop_and_parallelize_average(
-    func: Callable[..., PyTree],
+    func: Callable[..., ArrayTree],
     max_parallel_size: int,
-) -> Callable[..., PyTree]:
+) -> Callable[..., ArrayTree]:
   """Returns a function that computes the average of `func` over any arguments.
 
   The returned function is mathematically equivalent to
@@ -795,7 +798,7 @@ def loop_and_parallelize_average(
   vmap_fn = jax.vmap(func)
 
   @functools.wraps(func)
-  def average_func(*args) -> PyTree:
+  def average_func(*args) -> ArrayTree:
 
     lead_axis_sizes = set(x.shape[0] for x in jax.tree_util.tree_leaves(args))
 

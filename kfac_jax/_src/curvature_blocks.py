@@ -15,9 +15,8 @@
 import abc
 import collections
 import functools
-from typing import Any, Dict, Mapping, Optional, Sequence, Set, Tuple, Union
+from typing import Optional, Sequence, Any, Set, Tuple, Union, Dict
 
-import chex
 import jax
 import jax.numpy as jnp
 from kfac_jax._src import layers_and_loss_tags as tags
@@ -27,11 +26,12 @@ from kfac_jax._src import utils
 import numpy as np
 
 # Types for annotation
-Numeric = chex.Numeric
-Scalar = chex.Scalar
-PRNGKey = chex.PRNGKey
-Shape = chex.Shape
-Array = chex.Array
+Array = utils.Array
+Scalar = utils.Scalar
+Numeric = utils.Numeric
+PRNGKey = utils.PRNGKey
+Shape = utils.Shape
+DType = utils.DType
 ScalarOrSequence = Union[Scalar, Sequence[Scalar]]
 
 # Special global variables
@@ -205,7 +205,7 @@ class CurvatureBlock(utils.Finalizable):
         lambda x: tuple(x.aval.shape), self.parameter_variables))
 
   @property
-  def dtype(self) -> chex.ArrayDType:
+  def dtype(self) -> DType:
     dtypes = set(p.aval.dtype for p in self.parameter_variables)  # pytype: disable=attribute-error
     if len(dtypes) > 1:
       raise ValueError("Not all parameters are the same dtype.")
@@ -233,7 +233,7 @@ class CurvatureBlock(utils.Finalizable):
   def dim(self) -> int:
     """The number of elements of all parameter variables together."""
 
-    return sum(utils.product(shape) for shape in self.parameters_shapes)  # pytype: disable=bad-return-type  # numpy-scalars
+    return sum(utils.product(shape) for shape in self.parameters_shapes)
 
   def scale(self, state: "CurvatureBlock.State", use_cache: bool) -> Numeric:
     """A scalar pre-factor of the curvature approximation.
@@ -451,7 +451,7 @@ class CurvatureBlock(utils.Finalizable):
   def update_curvature_matrix_estimate(
       self,
       state: "CurvatureBlock.State",
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -605,7 +605,7 @@ class ScaledIdentity(CurvatureBlock):
   def update_curvature_matrix_estimate(
       self,
       state: CurvatureBlock.State,
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -656,7 +656,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
     return Diagonal.State(
         cache=None,
-        diagonal_factors=tuple(utils.WeightedMovingAverage.zero(
+        diagonal_factors=tuple(utils.WeightedMovingAverage.zeros_array(
             shape, self.dtype) for shape in self.parameters_shapes),
     )
 
@@ -693,7 +693,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
   def update_curvature_matrix_estimate(
       self,
       state: "Diagonal.State",
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -713,22 +713,21 @@ class Diagonal(CurvatureBlock, abc.ABC):
   def _update_curvature_matrix_estimate(
       self,
       state: "Diagonal.State",
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
   ) -> "Diagonal.State":
     pass
 
-  def _update_cache(  # pytype: disable=signature-mismatch  # numpy-scalars
+  def _update_cache(
       self,
       state: "Diagonal.State",
       identity_weight: Numeric,
-      exact_powers: Numeric,
-      approx_powers: Numeric,
+      exact_powers: Set[Scalar],
+      approx_powers: Set[Scalar],
       eigenvalues: bool,
   ) -> "Diagonal.State":
-
     return state.copy()
 
   def _to_dense_unscaled(self, state: "Diagonal.State") -> Array:
@@ -851,7 +850,7 @@ class Full(CurvatureBlock, abc.ABC):
 
     return Full.State(
         cache=cache,
-        matrix=utils.WeightedMovingAverage.zero(
+        matrix=utils.WeightedMovingAverage.zeros_array(
             [self.dim, self.dim], self.dtype),
     )
 
@@ -909,7 +908,7 @@ class Full(CurvatureBlock, abc.ABC):
   def update_curvature_matrix_estimate(
       self,
       state: "Full.State",
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -928,7 +927,7 @@ class Full(CurvatureBlock, abc.ABC):
   def _update_curvature_matrix_estimate(
       self,
       state: "Full.State",
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1079,9 +1078,9 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
 
     return TwoKroneckerFactored.State(
         cache=cache,
-        inputs_factor=utils.WeightedMovingAverage.zero(
+        inputs_factor=utils.WeightedMovingAverage.zeros_array(
             [d_in, d_in], self.dtype),
-        outputs_factor=utils.WeightedMovingAverage.zero(
+        outputs_factor=utils.WeightedMovingAverage.zeros_array(
             [d_out, d_out], self.dtype),
     )
 
@@ -1166,7 +1165,7 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
   def update_curvature_matrix_estimate(
       self,
       state: "TwoKroneckerFactored.State",
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1186,22 +1185,21 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
   def _update_curvature_matrix_estimate(
       self,
       state: "TwoKroneckerFactored.State",
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
   ) -> "TwoKroneckerFactored.State":
     pass
 
-  def _update_cache(  # pytype: disable=signature-mismatch  # numpy-scalars
+  def _update_cache(
       self,
       state: "TwoKroneckerFactored.State",
       identity_weight: Numeric,
-      exact_powers: Numeric,
-      approx_powers: Numeric,
+      exact_powers: Set[Scalar],
+      approx_powers: Set[Scalar],
       eigenvalues: bool,
   ) -> "TwoKroneckerFactored.State":
-
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
@@ -1275,7 +1273,7 @@ class NaiveDiagonal(Diagonal):
   def _update_curvature_matrix_estimate(
       self,
       state: "NaiveDiagonal.State",
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1302,7 +1300,7 @@ class NaiveFull(Full):
   def _update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1340,7 +1338,7 @@ class DenseDiagonal(Diagonal):
   def _update_curvature_matrix_estimate(
       self,
       state: "Diagonal.State",
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1372,7 +1370,7 @@ class DenseFull(Full):
   def _update_curvature_matrix_estimate(
       self,
       state: "Full.State",
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1414,7 +1412,7 @@ class DenseTwoKroneckerFactored(TwoKroneckerFactored):
   def _update_curvature_matrix_estimate(
       self,
       state: TwoKroneckerFactored.State,
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1518,7 +1516,7 @@ class Conv2DDiagonal(Diagonal):
   def _update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1620,7 +1618,7 @@ class Conv2DFull(Full):
   def _update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1660,10 +1658,10 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   @property
   def weights_spatial_size(self) -> int:
     """The spatial filter size of the weights."""
-    return utils.product(self.weights_spatial_shape)  # pytype: disable=bad-return-type  # numpy-scalars
+    return utils.product(self.weights_spatial_shape)
 
   @property
-  def weights_spatial_shape(self) -> chex.Shape:
+  def weights_spatial_shape(self) -> Shape:
     spatial_index = self._layer_tag_eq.params["dimension_numbers"].rhs_spec[2:]
     return tuple(self.parameters_shapes[0][i] for i in spatial_index)
 
@@ -1705,7 +1703,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   def compute_inputs_stats(
       self,
       inputs: Array,
-  ) -> chex.Array:
+  ) -> Array:
     """Computes the statistics for the inputs factor."""
 
     # Note that the input statistics are computed and stored with an extra
@@ -1774,7 +1772,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   def _update_curvature_matrix_estimate(
       self,
       state: TwoKroneckerFactored.State,
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1850,7 +1848,7 @@ class ScaleAndShiftDiagonal(Diagonal):
   def _update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1911,7 +1909,7 @@ class ScaleAndShiftFull(Full):
   def _update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: Dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
