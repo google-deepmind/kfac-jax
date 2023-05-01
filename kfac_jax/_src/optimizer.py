@@ -98,6 +98,9 @@ class Optimizer(utils.WithStagedMethods):
       always_use_exact_qmodel_for_damping_adjustment: bool = False,
       norm_constraint_mode = 'fisher_scaled',
       norm_constraint: Optional[chex.Numeric] = None,
+      scale_nc_by_std_dev: bool = False,
+      min_clip_nc: Optional[chex.Numeric] = 3.0,
+      max_clip_nc: Optional[chex.Numeric] = 8.0,
       scale_by_std_deviation: bool = False,
       num_burnin_steps: int = 10,
       estimation_mode: str = "fisher_gradients",
@@ -364,6 +367,9 @@ class Optimizer(utils.WithStagedMethods):
         always_use_exact_qmodel_for_damping_adjustment)
     self._norm_constraint_mode = norm_constraint_mode
     self._norm_constraint = norm_constraint
+    self._scale_nc_by_std_dev = scale_nc_by_std_dev
+    self._min_clip_nc = min_clip_nc
+    self._max_clip_nc = max_clip_nc
     self._scale_by_std_deviation = scale_by_std_deviation
     self._num_burnin_steps = num_burnin_steps
     self._estimation_mode = estimation_mode
@@ -636,6 +642,7 @@ class Optimizer(utils.WithStagedMethods):
       state: "Optimizer.State",
       grads: utils.Params,
       coefficient: Optional[chex.Array],
+      norm_constraint,
   ) -> utils.Params:
     """Computes the preconditioned gradient, maybe applying norm-constraint."""
 
@@ -650,7 +657,7 @@ class Optimizer(utils.WithStagedMethods):
 
 
     norm_constraint_factor = None
-    if self._norm_constraint is not None:
+    if norm_constraint is not None:
       assert not self._use_adaptive_learning_rate
       assert coefficient is not None
 
@@ -673,7 +680,7 @@ class Optimizer(utils.WithStagedMethods):
       # the inner_product operation can still produce different answers on
       # different devices.
       sq_norm_grads = utils.pmean_if_pmap(sq_norm_grads, self.pmap_axis_name)
-      norm_constraint_factor = jnp.sqrt(self._norm_constraint / sq_norm_grads)
+      norm_constraint_factor = jnp.sqrt(norm_constraint / sq_norm_grads)
       preconditioned_grads = utils.scalar_mul(preconditioned_grads, jnp.minimum(norm_constraint_factor, 1))
 
     return preconditioned_grads, norm_constraint_factor
@@ -918,9 +925,14 @@ class Optimizer(utils.WithStagedMethods):
     # Update the inverse curvature
     state = self._maybe_update_inverse_cache(state)
 
+    if self._scale_nc_by_std_dev:
+        norm_constraint = jnp.clip(self._norm_constraint / jnp.sqrt(aux['E_var']), self._min_clip_nc, self._max_clip_nc)
+    else:
+        norm_constraint = self._norm_constraint
+
     # Compute proposed directions
     preconditioned_gradient, norm_constraint_factor = self._compute_preconditioned_gradient(
-        state, grads, learning_rate)
+        state, grads, learning_rate, norm_constraint)
 
     if self._include_norms_in_stats:
       precon_grad_norm = utils.norm(preconditioned_gradient)
@@ -1002,6 +1014,7 @@ class Optimizer(utils.WithStagedMethods):
       stats["precon_grad_norm"] = precon_grad_norm
       stats["update_norm"] = update_norm
       stats["norm_constraint_factor"] = norm_constraint_factor
+      stats["norm_constraint"] = norm_constraint
 
     if self._include_per_param_norms_in_stats:
       stats.update(param_norm_per_param)
