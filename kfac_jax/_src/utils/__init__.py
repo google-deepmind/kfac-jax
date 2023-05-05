@@ -29,6 +29,7 @@ Shape = types.Shape
 DType = types.DType
 PyTree = types.PyTree
 ArrayTree = types.ArrayTree
+ShardingTree = types.ShardingTree
 TArrayTree = types.TArrayTree
 Params = types.Params
 Batch = types.Batch
@@ -48,6 +49,7 @@ get_float_dtype_and_check_consistency = (
 del types
 
 # misc
+get_sharding = misc.get_sharding
 to_tuple_or_repeat = misc.to_tuple_or_repeat
 first_dim_is_size = misc.first_dim_is_size
 fake_element_from_iterator = misc.fake_element_from_iterator

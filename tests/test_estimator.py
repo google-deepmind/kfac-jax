@@ -71,7 +71,6 @@ def compute_exact_approx_curvature(
       batch_size=batch_size,
       rng=rng,
       func_args=func_args,
-      pmap_axis_name="i",
       estimation_mode=f"{curvature_type}_exact",
   )
 
@@ -497,7 +496,6 @@ class TestEstimator(parameterized.TestCase):
         exact_powers=-1,
         approx_powers=None,
         eigenvalues=True,
-        pmap_axis_name=None,
     )
 
     block_eigenvalues = estimator.block_eigenvalues(cached_state, True)
@@ -591,15 +589,14 @@ class TestEstimator(parameterized.TestCase):
         exact_powers=-1,
         approx_powers=None,
         eigenvalues=True,
-        pmap_axis_name=None,
     )
 
     v = init_func(init_key2, data)
-    m_v = estimator.multiply(state, v, e, True, True, None)
-    m_inv_v = estimator.multiply_inverse(cached_state, v, e, True, True, None)
+    m_v = estimator.multiply(state, v, e, True, True)
+    m_inv_v = estimator.multiply_inverse(cached_state, v, e, True, True)
 
     # Check cached and non-cached are the same
-    m_inv_v2 = estimator.multiply_inverse(state, v, e, True, False, None)
+    m_inv_v2 = estimator.multiply_inverse(state, v, e, True, False)
     self.assertAllClose(m_inv_v, m_inv_v2, atol=1e-5, rtol=1e-4)
 
     block_vectors = estimator.params_vector_to_blocks_vectors(v)

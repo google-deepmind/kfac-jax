@@ -634,7 +634,6 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> utils.Params:
     """Computes ``(CurvatureMatrix + identity_weight I)**power`` times ``vector``.
 
@@ -654,9 +653,6 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
           vary across different blocks.
       use_cached: Whether to use a cached (and possibly stale) version of the
           curvature matrix estimate.
-      pmap_axis_name: The name of any pmap axis, which will be used for
-          aggregating any computed values over multiple devices, as well as
-          parallelizing the computation over devices in a block-wise fashion.
 
     Returns:
       A parameter structured vector containing the product.
@@ -669,7 +665,6 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       identity_weight: Numeric,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> utils.Params:
     """Computes ``(CurvatureMatrix + identity_weight I)`` times ``vector``."""
 
@@ -680,7 +675,6 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         power=1,
         exact_power=exact_power,
         use_cached=use_cached,
-        pmap_axis_name=pmap_axis_name
     )
 
   def multiply_inverse(
@@ -690,7 +684,6 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       identity_weight: Numeric,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> utils.Params:
     """Computes ``(CurvatureMatrix + identity_weight I)^-1`` times ``vector``."""
 
@@ -701,7 +694,6 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         power=-1,
         exact_power=exact_power,
         use_cached=use_cached,
-        pmap_axis_name=pmap_axis_name
     )
 
   @abc.abstractmethod
@@ -732,7 +724,6 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
-      pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
   ) -> StateType:
     """Updates the estimator's curvature estimates.
@@ -750,9 +741,6 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         function (the ``tagged_func`` passed into the constructor) which to be
         used for the estimation process. Should have the same structure as the
         argument ``func_args`` passed in the constructor.
-      pmap_axis_name: When calling this method within a pmap context this
-        argument specifies the axis name over which to aggregate across
-        multiple devices/hosts.
       estimation_mode: The type of curvature estimator to use. By default
         (e.g. if ``None``) will use ``self.default_estimation_mode``. One of:
 
@@ -793,7 +781,6 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       exact_powers: Optional[curvature_blocks.ScalarOrSequence],
       approx_powers: Optional[curvature_blocks.ScalarOrSequence],
       eigenvalues: bool,
-      pmap_axis_name: Optional[str],
   ) -> StateType:
     """Updates the estimator cached values.
 
@@ -810,9 +797,6 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       eigenvalues: Specifies whether to update the cached eigenvalues
           of each block. If they have not been cached before, this will create
           an entry with them in the block's cache.
-      pmap_axis_name: The name of any pmap axis, which will be used for
-          aggregating any computed values over multiple devices, as well as
-          parallelizing the computation over devices in a block-wise fashion.
 
     Returns:
       The updated state.
@@ -836,6 +820,19 @@ class BlockDiagonalCurvature(
         block.
     """
     blocks_states: Tuple[curvature_blocks.CurvatureBlock.State, ...]
+
+    def as_dict(self) -> Dict[str, Any]:
+      dict_reps = tuple(block.as_dict() for block in self.blocks_states)
+      return {"blocks_states": dict_reps}
+
+    @classmethod
+    def from_dict(
+        cls,
+        dict_rep: Dict[str, Any],
+    ) -> "BlockDiagonalCurvature.State":
+      return cls(blocks_states=tuple(
+          curvature_blocks.block_from_dict(block_rep)
+          for block_rep in dict_rep["blocks_states"]))
 
   def __init__(
       self,
@@ -1016,6 +1013,30 @@ class BlockDiagonalCurvature(
     """Computes all model statistics needed for estimating the curvature."""
     return self._vjp(func_args)
 
+  def state_sharding(
+      self,
+      params_sharding: utils.ShardingTree,
+      exact_powers_to_cache: Optional[curvature_blocks.ScalarOrSequence],
+      approx_powers_to_cache: Optional[curvature_blocks.ScalarOrSequence],
+      cache_eigenvalues: bool = False,
+      **kwargs: Any,
+  ) -> "BlockDiagonalCurvature.State":
+    blocks_vectors_sharding: list[utils.ShardingTree] = (  # pytype: disable=annotation-type-mismatch
+        self.params_vector_to_blocks_vectors(params_sharding))
+
+    shardings = []
+    for block, vector_sharding in zip(self.blocks, blocks_vectors_sharding):
+      block_sharding = block.state_sharding(
+          vector_sharding,
+          exact_powers_to_cache=exact_powers_to_cache,
+          approx_powers_to_cache=approx_powers_to_cache,
+          cache_eigenvalues=cache_eigenvalues,
+          **kwargs,
+      )
+      shardings.append(block_sharding)
+
+    return BlockDiagonalCurvature.State(blocks_states=tuple(shardings))
+
   def params_vector_to_blocks_vectors(
       self,
       parameter_structured_vector: utils.Params,
@@ -1097,7 +1118,6 @@ class BlockDiagonalCurvature(
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-      pmap_axis_name: Optional[str],
   ) -> utils.Params:
 
     blocks_vectors = self.params_vector_to_blocks_vectors(
@@ -1121,13 +1141,7 @@ class BlockDiagonalCurvature(
               )
           )
 
-    if self._distributed_multiplies and pmap_axis_name is not None:
-
-      result = utils.distribute_thunks(thunks, pmap_axis_name)
-
-    else:
-      result = tuple(thunk() for thunk in thunks)
-
+    result = tuple(thunk() for thunk in thunks)
     parameter_structured_result = self.blocks_vectors_to_params_vector(result)
 
     assert utils.abstract_objects_equal(
@@ -1178,7 +1192,6 @@ class BlockDiagonalCurvature(
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
-      pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
   ) -> "BlockDiagonalCurvature.State":
 
@@ -1210,7 +1223,7 @@ class BlockDiagonalCurvature(
 
         new_state.append(block_.update_curvature_matrix_estimate(
             block_state_, block_info_, ema_old_, ema_new_,
-            batch_size, pmap_axis_name))
+            batch_size))
 
       return BlockDiagonalCurvature.State(blocks_states=tuple(new_state))
 
@@ -1313,7 +1326,6 @@ class BlockDiagonalCurvature(
       exact_powers: Optional[curvature_blocks.ScalarOrSequence],
       approx_powers: Optional[curvature_blocks.ScalarOrSequence],
       eigenvalues: bool,
-      pmap_axis_name: Optional[str],
   ) -> "BlockDiagonalCurvature.State":
     identity_weight = utils.to_tuple_or_repeat(identity_weight, self.num_blocks)
 
@@ -1332,39 +1344,7 @@ class BlockDiagonalCurvature(
               )
           )
 
-    if self._distributed_cache_updates and pmap_axis_name is not None:
-
-      assert utils.in_pmap(pmap_axis_name)
-
-      def filter_outputs(thunk, vals):
-
-        # We must precompute the matches outside of the thunk itself, as the
-        # thunk will be traced separately from the current compiled context
-        # (since it's called within a lax.switch statement).
-        matches = jax.tree_util.tree_map(lambda o, v: o is v, thunk(), vals)
-
-        def new_thunk():
-          return jax.tree_util.tree_map(
-              lambda o, m: None if m else o, thunk(), matches
-          )
-        return new_thunk
-
-      # Create new thunks that only return the state arrays that they actually
-      # modify. This should reduce the communication costs associated with the
-      # syncs performed by utils.distribute_thunks.
-      filtered_thunks = tuple(
-          filter_outputs(thunk, block_state)
-          for thunk, block_state in zip(thunks, state.blocks_states))
-
-      new_states = utils.distribute_thunks(filtered_thunks, pmap_axis_name)
-
-      # Restore all of the unmodified state arrays.
-      new_states = jax.tree_util.tree_map(lambda s, n: s if n is None else n,
-                                          state.blocks_states, new_states)
-
-    else:
-      new_states = tuple(thunk() for thunk in thunks)
-
+    new_states = tuple(thunk() for thunk in thunks)
     return BlockDiagonalCurvature.State(blocks_states=new_states)
 
   @utils.auto_scope_method
@@ -1535,7 +1515,6 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
-      pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
   ) -> curvature_blocks.Full.State:
 
@@ -1561,7 +1540,6 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
           batch_size=1,
           rng=rng[index],
           func_args=args,
-          pmap_axis_name=pmap_axis_name,
           estimation_mode=estimation_mode,
       )
 
@@ -1574,7 +1552,6 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       exact_powers: Optional[curvature_blocks.ScalarOrSequence],
       approx_powers: Optional[curvature_blocks.ScalarOrSequence],
       eigenvalues: bool,
-      pmap_axis_name: Optional[str],
   ) -> curvature_blocks.Full.State:
 
     block_state = self.blocks[0].update_cache(

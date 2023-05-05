@@ -15,7 +15,7 @@
 import abc
 import dataclasses
 import functools
-from typing import Any, Iterator, Sequence, Type, Tuple, Union
+from typing import Any, Iterator, Sequence, Type, Tuple, Union, Dict
 
 import jax
 import jax.numpy as jnp
@@ -25,6 +25,18 @@ Array = types.Array
 Numeric = types.Numeric
 ArrayTree = types.ArrayTree
 TArrayTree = types.TArrayTree
+ShardingTree = types.ShardingTree
+
+
+def get_sharding(x: ArrayTree) -> types.ShardingTree:
+  return jax.tree_util.tree_map(lambda x: x.sharding, x)
+
+
+def zeros_like_with_sharding(x: TArrayTree) -> TArrayTree:
+  def zero_like_array(x: Array) -> Array:
+    return jax.device_put(jnp.zeros_like(x), x.sharding)
+
+  return jax.tree_util.tree_map(zero_like_array, x)
 
 
 def fake_element_from_iterator(
@@ -47,7 +59,8 @@ def fake_element_from_iterator(
     equivalent iterator to the input one.
   """
   init_element = next(iterator)
-  fake_element = jax.tree_util.tree_map(jnp.zeros_like, init_element)
+  fake_element = zeros_like_with_sharding(init_element)
+
   def equivalent_iterator() -> Iterator[ArrayTree]:
     yield init_element
     # For some reason unknown to us, "yield from" can fail in certain
@@ -121,12 +134,22 @@ def pytree_dataclass(class_type: Type[Any]) -> Type[Any]:
 
 
 @pytree_dataclass
-class State(object):
+class State(abc.ABC):
+  """Abstract class for optimizer state."""
 
   def copy(self):
     """Returns a copy of the PyTree structure (but not the JAX arrays)."""
     (flattened, structure) = jax.tree_util.tree_flatten(self)
     return jax.tree_util.tree_unflatten(structure, flattened)
+
+  @abc.abstractmethod
+  def as_dict(self) -> Dict[str, Any]:
+    """Returns a recursively constructed dictionary of the state."""
+
+  @classmethod
+  def from_dict(cls, dict_rep: Dict[str, Any]) -> "State":
+    """Returns a recursively reconstructed dictionary of the state."""
+    return cls(**dict_rep)
 
 
 class Finalizable(abc.ABC):

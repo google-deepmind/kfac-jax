@@ -27,6 +27,7 @@ Shape = Tuple[int, ...]
 DType = jnp.dtype
 PyTree = Union[T, Sequence["PyTree[T]"], Mapping[str, "PyTree[T]"]]
 ArrayTree = PyTree[Array]
+ShardingTree = PyTree[jax.sharding.NamedSharding]
 TArrayTree = TypeVar("TArrayTree", bound=ArrayTree)
 Params = TypeVar("Params", bound=ArrayTree)
 Batch = TypeVar("Batch", bound=ArrayTree)

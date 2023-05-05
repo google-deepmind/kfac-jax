@@ -15,7 +15,7 @@
 import abc
 import collections
 import functools
-from typing import Optional, Sequence, Any, Set, Tuple, Union, Dict
+from typing import Optional, Sequence, Any, Set, Tuple, Union, Dict, Type
 
 import jax
 import jax.numpy as jnp
@@ -33,6 +33,7 @@ PRNGKey = utils.PRNGKey
 Shape = utils.Shape
 DType = utils.DType
 ScalarOrSequence = Union[Scalar, Sequence[Scalar]]
+Cache = Dict[str, Union[Array, Dict[str, Array]]]
 
 # Special global variables
 # The default value that would be used for the argument
@@ -43,6 +44,21 @@ _MAX_PARALLEL_ELEMENTS: int = 2 ** 23
 # ``eigen_decomposition_threshold``, when it is set to ``None`` in any of the
 # curvature blocks that inherit from ``Full`.
 _DEFAULT_EIGEN_DECOMPOSITION_THRESHOLD = 5
+
+_CLASSES_FROM_DICT = {}
+
+
+def add_block_class_from_dict(class_type: Type[Any]) -> Type[Any]:
+  _CLASSES_FROM_DICT[class_type.__name__] = class_type
+  return class_type
+
+
+def block_from_dict(dict_rep: Dict[str, Any]) -> "CurvatureBlock":
+  class_name = dict_rep.pop("__class__")
+  if class_name not in _CLASSES_FROM_DICT:
+    raise ValueError(f"Did not find how to reconstruct class {class_name}.")
+  cls = _CLASSES_FROM_DICT[class_name]
+  return cls.from_dict(dict_rep)
 
 
 def set_max_parallel_elements(value: int):
@@ -140,7 +156,10 @@ class CurvatureBlock(utils.Finalizable):
         this are updated via calls to :func:`~CurvatureBlock.update_cache`, and
         do not necessarily correspond to the most up-to-date curvature estimate.
     """
-    cache: Optional[Dict[str, Union[Array, Dict[str, Array]]]]
+    cache: Optional[Cache]
+
+    def as_dict(self) -> Dict[str, Any]:
+      return {"__class__": self.__class__.__name__, "cache": self.cache}
 
   def __init__(self, layer_tag_eq: tags.LayerTagEqn, name: str):
     """Initializes the block.
@@ -266,6 +285,17 @@ class CurvatureBlock(utils.Finalizable):
   def __str__(self):
 
     return f"{self._name!r}[{self.parameters_shapes!r}]"
+
+  @abc.abstractmethod
+  def state_sharding(
+      self,
+      vector_sharding: Sequence[jax.sharding.NamedSharding],
+      exact_powers_to_cache: Optional[ScalarOrSequence],
+      approx_powers_to_cache: Optional[ScalarOrSequence],
+      cache_eigenvalues: bool,
+      **kwargs,
+  ) -> "CurvatureBlock.State":
+    """Constructs the block sharding from the corresponding prameter sharding."""
 
   @utils.auto_scope_method
   def init(
@@ -455,7 +485,6 @@ class CurvatureBlock(utils.Finalizable):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> "CurvatureBlock.State":
     """Updates the block's curvature estimates using the ``info`` provided.
 
@@ -475,8 +504,6 @@ class CurvatureBlock(utils.Finalizable):
       ema_new: Specifies the weight of the new value when computing the updated
           estimate in the moving average.
       batch_size: The batch size used in computing the values in ``info``.
-      pmap_axis_name: The name of any pmap axis, which might be needed for
-          computing the updates.
     """
 
   @utils.auto_scope_method
@@ -533,6 +560,7 @@ class CurvatureBlock(utils.Finalizable):
     """A dense representation of the curvature, ignoring ``self.scale``."""
 
 
+@add_block_class_from_dict
 class ScaledIdentity(CurvatureBlock):
   """A block that assumes that the curvature is a scaled identity matrix."""
 
@@ -566,9 +594,18 @@ class ScaledIdentity(CurvatureBlock):
 
     del rng, exact_powers_to_cache, approx_powers_to_cache  # Unused
 
-    return CurvatureBlock.State(
-        cache=None,
-    )
+    return CurvatureBlock.State(cache=None)
+
+  def state_sharding(
+      self,
+      vector_sharding: Sequence[jax.sharding.NamedSharding],
+      exact_powers_to_cache: Optional[ScalarOrSequence],
+      approx_powers_to_cache: Optional[ScalarOrSequence],
+      cache_eigenvalues: bool,
+      **kwargs: Any,
+  ) -> CurvatureBlock.State:
+    del vector_sharding, kwargs  # Unused
+    return CurvatureBlock.State(cache=None)
 
   def _multiply_matpower_unscaled(
       self,
@@ -609,7 +646,6 @@ class ScaledIdentity(CurvatureBlock):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> CurvatureBlock.State:
 
     return state.copy()
@@ -660,6 +696,22 @@ class Diagonal(CurvatureBlock, abc.ABC):
             shape, self.dtype) for shape in self.parameters_shapes),
     )
 
+  def state_sharding(
+      self,
+      vector_sharding: Sequence[jax.sharding.NamedSharding],
+      exact_powers_to_cache: Optional[ScalarOrSequence],
+      approx_powers_to_cache: Optional[ScalarOrSequence],
+      cache_eigenvalues: bool,
+      **kwargs: Any,
+  ) -> "Diagonal.State":
+    return Diagonal.State(
+        cache=None,
+        diagonal_factors=tuple(
+            utils.WeightedMovingAverage.state_sharding(sharding)
+            for sharding in vector_sharding
+        ),
+    )
+
   def _multiply_matpower_unscaled(
       self,
       state: "Diagonal.State",
@@ -697,15 +749,11 @@ class Diagonal(CurvatureBlock, abc.ABC):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> "Diagonal.State":
 
     # This function call will return a copy of state:
     state = self._update_curvature_matrix_estimate(
         state, estimation_data, ema_old, ema_new, batch_size)
-
-    for factor in state.diagonal_factors:
-      factor.sync(pmap_axis_name)
 
     return state
 
@@ -854,6 +902,38 @@ class Full(CurvatureBlock, abc.ABC):
             [self.dim, self.dim], self.dtype),
     )
 
+  def state_sharding(
+      self,
+      vector_sharding: Sequence[jax.sharding.NamedSharding],
+      exact_powers_to_cache: Optional[ScalarOrSequence],
+      approx_powers_to_cache: Optional[ScalarOrSequence],
+      cache_eigenvalues: bool,
+      **kwargs: Any,
+  ) -> "Full.State":
+    # This block does not have any notion of "approximate" powers
+    exact_powers_to_cache = (_to_real_set(exact_powers_to_cache) |
+                             _to_real_set(approx_powers_to_cache))
+    cache = {}
+
+    # TODO(botev, jamesmartens): Figure out a better way of getting sharding
+    sharding = vector_sharding[0]
+
+    if len(exact_powers_to_cache) > self._eigen_decomposition_threshold:
+      cache["eigenvalues"] = sharding
+      cache["eigen_vectors"] = sharding
+
+    elif cache_eigenvalues:
+      cache["eigenvalues"] = sharding
+
+    if len(exact_powers_to_cache) <= self._eigen_decomposition_threshold:
+      for power in exact_powers_to_cache:
+        cache[str(power)] = sharding
+
+    return Full.State(
+        cache=cache,
+        matrix=utils.WeightedMovingAverage.state_sharding(sharding, **kwargs),
+    )
+
   def _multiply_matpower_unscaled(
       self,
       state: "Full.State",
@@ -912,14 +992,11 @@ class Full(CurvatureBlock, abc.ABC):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> "Full.State":
 
     # This function call will return a copy of state:
     state = self._update_curvature_matrix_estimate(
         state, estimation_data, ema_old, ema_new, batch_size)
-
-    state.matrix.sync(pmap_axis_name)
 
     return state
 
@@ -1003,6 +1080,20 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
     inputs_factor: utils.WeightedMovingAverage
     outputs_factor: utils.WeightedMovingAverage
 
+    def as_dict(self) -> Dict[str, Any]:
+      dict_rep = super().as_dict()
+      dict_rep["inputs_factor"] = self.inputs_factor.as_dict()
+      dict_rep["outputs_factor"] = self.outputs_factor.as_dict()
+      return dict_rep
+
+    @classmethod
+    def from_dict(cls, dict_rep) -> "TwoKroneckerFactored.State":
+      dict_rep["inputs_factor"] = utils.WeightedMovingAverage.from_dict(
+          dict_rep["inputs_factor"])
+      dict_rep["outputs_factor"] = utils.WeightedMovingAverage.from_dict(
+          dict_rep["outputs_factor"])
+      return cls(**dict_rep)
+
   @property
   def has_bias(self) -> bool:
     """Whether this layer's equation has a bias."""
@@ -1082,6 +1173,48 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
             [d_in, d_in], self.dtype),
         outputs_factor=utils.WeightedMovingAverage.zeros_array(
             [d_out, d_out], self.dtype),
+    )
+
+  def state_sharding(
+      self,
+      vector_sharding: Sequence[jax.sharding.NamedSharding],
+      exact_powers_to_cache: Optional[ScalarOrSequence],
+      approx_powers_to_cache: Optional[ScalarOrSequence],
+      cache_eigenvalues: bool,
+      **kwargs: Any,
+  ) -> "TwoKroneckerFactored.State":
+    # TODO(jamesmartens,botev): Figure out better way of doing this
+    input_sharding = vector_sharding[0]
+    output_sharding = vector_sharding[0]
+
+    exact_powers_to_cache = _to_real_set(exact_powers_to_cache)
+    approx_powers_to_cache = _to_real_set(approx_powers_to_cache)
+    cache = {}
+
+    if cache_eigenvalues or exact_powers_to_cache:
+      cache["inputs_factor_eigenvalues"] = input_sharding
+      cache["outputs_factor_eigenvalues"] = output_sharding
+
+    if exact_powers_to_cache:
+      cache["inputs_factor_eigen_vectors"] = input_sharding
+      cache["outputs_factor_eigen_vectors"] = output_sharding
+
+    for power in approx_powers_to_cache:
+      if power != -1:
+        raise NotImplementedError(
+            f"Approximations for power {power} is not yet implemented."
+        )
+      cache[str(power)] = dict(
+          inputs_factor=input_sharding,
+          outputs_factor=output_sharding,
+      )
+
+    return TwoKroneckerFactored.State(
+        cache=cache,
+        inputs_factor=utils.WeightedMovingAverage.state_sharding(
+            input_sharding),
+        outputs_factor=utils.WeightedMovingAverage.state_sharding(
+            output_sharding)
     )
 
   def _multiply_matpower_unscaled(
@@ -1169,15 +1302,11 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
   ) -> "TwoKroneckerFactored.State":
 
     # This function call will return a copy of state:
     state = self._update_curvature_matrix_estimate(
         state, estimation_data, ema_old, ema_new, batch_size)
-
-    state.inputs_factor.sync(pmap_axis_name)
-    state.outputs_factor.sync(pmap_axis_name)
 
     return state
 
@@ -1262,6 +1391,7 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
     return jnp.kron(inputs_factor, state.outputs_factor.value)
 
 
+@add_block_class_from_dict
 class NaiveDiagonal(Diagonal):
   """Approximates the diagonal of the curvature with in the most obvious way.
 
@@ -1289,6 +1419,7 @@ class NaiveDiagonal(Diagonal):
     return state
 
 
+@add_block_class_from_dict
 class NaiveFull(Full):
   """Approximates the full curvature with in the most obvious way.
 
@@ -1327,6 +1458,7 @@ class NaiveFull(Full):
 #
 
 
+@add_block_class_from_dict
 class DenseDiagonal(Diagonal):
   """A `Diagonal` block specifically for dense layers."""
 
@@ -1364,6 +1496,7 @@ class DenseDiagonal(Diagonal):
     return state
 
 
+@add_block_class_from_dict
 class DenseFull(Full):
   """A `Full` block specifically for dense layers."""
 
@@ -1395,6 +1528,7 @@ class DenseFull(Full):
     return state
 
 
+@add_block_class_from_dict
 class DenseTwoKroneckerFactored(TwoKroneckerFactored):
   """A :class:`~TwoKroneckerFactored` block specifically for dense layers."""
 
@@ -1451,6 +1585,7 @@ class DenseTwoKroneckerFactored(TwoKroneckerFactored):
 #
 
 
+@add_block_class_from_dict
 class Conv2DDiagonal(Diagonal):
   """A :class:`~Diagonal` block specifically for 2D convolution layers."""
 
@@ -1545,6 +1680,7 @@ class Conv2DDiagonal(Diagonal):
     return state
 
 
+@add_block_class_from_dict
 class Conv2DFull(Full):
   """A :class:`~Full` block specifically for 2D convolution layers."""
 
@@ -1637,6 +1773,7 @@ class Conv2DFull(Full):
     return state
 
 
+@add_block_class_from_dict
 class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   """A :class:`~TwoKroneckerFactored` block specifically for 2D convolution layers."""
 
@@ -1832,6 +1969,7 @@ def compatible_sum(tensor, target_shape, skip_axes):
   return jnp.sum(tensor, axis=axis)
 
 
+@add_block_class_from_dict
 class ScaleAndShiftDiagonal(Diagonal):
   """A diagonal approximation specifically for a scale and shift layers."""
 
@@ -1893,6 +2031,7 @@ class ScaleAndShiftDiagonal(Diagonal):
     return state
 
 
+@add_block_class_from_dict
 class ScaleAndShiftFull(Full):
   """A full dense approximation specifically for a scale and shift layers."""
 

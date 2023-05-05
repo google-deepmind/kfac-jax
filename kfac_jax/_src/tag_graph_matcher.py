@@ -443,6 +443,7 @@ class GraphPattern:
           clean_broadcasts=True,
       )
       object.__setattr__(self, "_graph", graph)
+    assert self._graph is not None
     return self._graph
 
   def tag_ctor(
