@@ -29,8 +29,8 @@ ArrayTree = types.ArrayTree
 TArrayTree = types.TArrayTree
 
 
-@misc.pytree_dataclass
-class WeightedMovingAverage(Generic[TArrayTree]):
+@misc.register_state_class
+class WeightedMovingAverage(Generic[TArrayTree], misc.State):
   """A wrapped class for an arbitrary weighted moving average."""
   weight: Numeric
   raw_value: Optional[TArrayTree]
@@ -38,8 +38,6 @@ class WeightedMovingAverage(Generic[TArrayTree]):
   @property
   def value(self) -> TArrayTree:
     """The value of the underlying arrays data structure."""
-    if self.raw_value is None:
-      raise ValueError("`raw_value` has not been set yet.")
     return jax.tree_util.tree_map(lambda x: x / self.weight, self.raw_value)
 
   def update(
@@ -78,11 +76,6 @@ class WeightedMovingAverage(Generic[TArrayTree]):
     self.clear()
     return value
 
-  def copy(self) -> "WeightedMovingAverage[TArrayTree]":
-    """Returns a copy of the PyTree structure (but not the JAX arrays)."""
-    (flattened, structure) = jax.tree_util.tree_flatten(self)
-    return jax.tree_util.tree_unflatten(structure, flattened)
-
   @classmethod
   def zeros_array(
       cls,
@@ -110,9 +103,6 @@ class WeightedMovingAverage(Generic[TArrayTree]):
     """Returns an empty moving average instance."""
     weight = jnp.zeros([]) if dtype is None else jnp.zeros([], dtype=dtype)
     return WeightedMovingAverage(weight=weight, raw_value=None)
-
-  def __repr__(self) -> str:
-    return f"{self.__class__.__name__}({self.weight!r}, {self.raw_value!r})"
 
 
 class MultiChunkAccumulator(Generic[TArrayTree]):

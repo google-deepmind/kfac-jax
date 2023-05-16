@@ -33,6 +33,7 @@ PRNGKey = utils.PRNGKey
 Shape = utils.Shape
 DType = utils.DType
 ScalarOrSequence = Union[Scalar, Sequence[Scalar]]
+Cache = Dict[str, Union[Array, Dict[str, Array]]]
 
 # Special global variables
 # The default value that would be used for the argument
@@ -127,7 +128,7 @@ class CurvatureBlock(utils.Finalizable):
   you would have to explicitly specify all powers that you will need to cache.
   """
 
-  @utils.pytree_dataclass
+  @utils.register_state_class
   class State(utils.State):
     """Persistent state of the block.
 
@@ -633,7 +634,7 @@ class ScaledIdentity(CurvatureBlock):
 class Diagonal(CurvatureBlock, abc.ABC):
   """An abstract class for approximating only the diagonal of curvature."""
 
-  @utils.pytree_dataclass
+  @utils.register_state_class
   class State(CurvatureBlock.State):
     """Persistent state of the block.
 
@@ -743,7 +744,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
 class Full(CurvatureBlock, abc.ABC):
   """An abstract class for approximating the block matrix with a full matrix."""
 
-  @utils.pytree_dataclass
+  @utils.register_state_class
   class State(CurvatureBlock.State):
     """Persistent state of the block.
 
@@ -986,7 +987,7 @@ class Full(CurvatureBlock, abc.ABC):
 class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
   """An abstract class for approximating the block with a Kronecker product."""
 
-  @utils.pytree_dataclass
+  @utils.register_state_class
   class State(CurvatureBlock.State):
     """Persistent state of the block.
 

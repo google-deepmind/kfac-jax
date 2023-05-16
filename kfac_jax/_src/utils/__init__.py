@@ -54,7 +54,7 @@ fake_element_from_iterator = misc.fake_element_from_iterator
 default_batch_size_extractor = misc.default_batch_size_extractor
 auto_scope_function = misc.auto_scope_function
 auto_scope_method = misc.auto_scope_method
-pytree_dataclass = misc.pytree_dataclass
+register_state_class = misc.register_state_class
 Finalizable = misc.Finalizable
 State = misc.State
 del misc

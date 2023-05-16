@@ -15,7 +15,7 @@
 import abc
 import dataclasses
 import functools
-from typing import Any, Iterator, Sequence, Type, Tuple, Union
+from typing import Any, Iterator, Sequence, Type, Tuple, Union, Dict, TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -25,6 +25,11 @@ Array = types.Array
 Numeric = types.Numeric
 ArrayTree = types.ArrayTree
 TArrayTree = types.TArrayTree
+StateType = TypeVar("StateType")
+StateTree = types.PyTree["State"]
+
+
+STATE_CLASSES_SERIALIZATION_DICT = {}
 
 
 def fake_element_from_iterator(
@@ -92,7 +97,45 @@ def first_dim_is_size(size: int, *args: Array) -> bool:
   return all(arg.shape[0] == size for arg in args)
 
 
-def pytree_dataclass(class_type: Type[Any]) -> Type[Any]:
+class State(abc.ABC):
+  """Abstract class for state classes."""
+
+  @classmethod
+  def field_names(cls) -> Tuple[str, ...]:
+    return tuple(field.name for field in dataclasses.fields(cls))  # pytype: disable=wrong-arg-types
+
+  @classmethod
+  def field_types(cls) -> Dict[str, Type[Any]]:
+    return {field.name: field.type for field in dataclasses.fields(cls)}  # pytype: disable=wrong-arg-types
+
+  @property
+  def field_values(self) -> Tuple[ArrayTree, ...]:
+    return tuple(getattr(self, name) for name in self.field_names())
+
+  def copy(self):
+    """Returns a copy of the PyTree structure (but not the JAX arrays)."""
+    (flattened, structure) = jax.tree_util.tree_flatten(self)
+    return jax.tree_util.tree_unflatten(structure, flattened)
+
+  def tree_flatten(self) -> Tuple[Tuple[ArrayTree, ...], None]:
+    return self.field_values, None
+
+  @classmethod
+  def tree_unflatten(
+      cls,
+      aux_data: None,
+      children: Tuple[ArrayTree, ...],
+  ):
+    del aux_data  # not used
+    return cls(**dict(zip(cls.field_names(), children)))
+
+  def __repr__(self) -> str:
+    return (f"{self.__class__.__name__}(" +
+            ",".join(f"{name}={v!r}" for name, v in self.field_values) +
+            ")")
+
+
+def register_state_class(class_type: Type[Any]) -> Type[Any]:
   """Extended dataclass decorator, which also registers the class as a PyTree.
 
   The function is equivalent to `dataclasses.dataclass`, but additionally
@@ -106,27 +149,67 @@ def pytree_dataclass(class_type: Type[Any]) -> Type[Any]:
     The transformed `class_type` which is now a dataclass and also registered as
     a PyTree.
   """
+  if not issubclass(class_type, State):
+    raise ValueError(
+        f"Class {class_type} is not a subclass of kfac_jax.utils.State."
+    )
+
   class_type = dataclasses.dataclass(class_type)
-  fields_names = tuple(field.name for field in dataclasses.fields(class_type))
-
-  def flatten(instance) -> Tuple[Tuple[Any, ...], Any]:
-    return tuple(getattr(instance, name) for name in fields_names), None
-
-  def unflatten(_: Any, args: Sequence[Any]) -> Any:
-    return class_type(*args)
-
-  jax.tree_util.register_pytree_node(class_type, flatten, unflatten)
-
+  class_type = jax.tree_util.register_pytree_node_class(class_type)
+  class_name = f"{class_type.__module__}.{class_type.__qualname__}"
+  STATE_CLASSES_SERIALIZATION_DICT[class_name] = class_type
   return class_type
 
 
-@pytree_dataclass
-class State(object):
+def serialize_state_tree(instance: StateTree) -> ArrayTree:
+  """Returns a recursively constructed dictionary of the state."""
+  if isinstance(instance, State):
+    result_dict = {name: serialize_state_tree(getattr(instance, name))
+                   for name in instance.field_names()}
+    cls = instance.__class__
+    result_dict["__class__"] = f"{cls.__module__}.{cls.__qualname__}"
+    return result_dict
 
-  def copy(self):
-    """Returns a copy of the PyTree structure (but not the JAX arrays)."""
-    (flattened, structure) = jax.tree_util.tree_flatten(self)
-    return jax.tree_util.tree_unflatten(structure, flattened)
+  elif isinstance(instance, list):
+    return [serialize_state_tree(v) for v in instance]
+
+  elif isinstance(instance, tuple):
+    return tuple(serialize_state_tree(v) for v in instance)
+
+  elif isinstance(instance, set):
+    return set(serialize_state_tree(v) for v in instance)
+
+  elif isinstance(instance, dict):
+    return {k: serialize_state_tree(v) for k, v in instance.items()}
+
+  else:
+    return instance
+
+
+def deserialize_state_tree(representation: ArrayTree) -> StateTree:
+  """Returns the state class using a recursively constructed."""
+  if isinstance(representation, list):
+    return [deserialize_state_tree(v) for v in representation]
+
+  elif isinstance(representation, tuple):
+    return tuple(deserialize_state_tree(v) for v in representation)
+
+  elif isinstance(representation, set):
+    return set(deserialize_state_tree(v) for v in representation)
+
+  elif isinstance(representation, dict):
+    if "__class__" not in representation:
+      return {k: deserialize_state_tree(v) for k, v in representation.items()}
+
+    class_name = representation.pop("__class__")
+    if class_name not in STATE_CLASSES_SERIALIZATION_DICT:
+      raise ValueError(f"Did not find how to reconstruct class {class_name}.")
+
+    dict_rep = deserialize_state_tree(representation)
+    return STATE_CLASSES_SERIALIZATION_DICT[class_name](**dict_rep)
+
+  else:
+    return representation
 
 
 class Finalizable(abc.ABC):

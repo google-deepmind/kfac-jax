@@ -827,7 +827,7 @@ class BlockDiagonalCurvature(
     CurvatureEstimator["BlockDiagonalCurvature.State"]):
   """Block diagonal curvature estimator class."""
 
-  @utils.pytree_dataclass
+  @utils.register_state_class
   class State(utils.State):
     """Persistent state of the estimator.
 

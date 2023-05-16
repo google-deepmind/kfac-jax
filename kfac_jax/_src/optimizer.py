@@ -62,7 +62,7 @@ ReturnEither = Union[ReturnWithFuncState, ReturnWithoutFuncState]
 class Optimizer(utils.WithStagedMethods):
   """The K-FAC optimizer."""
 
-  @utils.pytree_dataclass
+  @utils.register_state_class
   class State(Generic[Params], utils.State):
     r"""Persistent state of the optimizer.
 
@@ -80,6 +80,15 @@ class Optimizer(utils.WithStagedMethods):
     damping: Optional[Array]
     data_seen: Numeric
     step_counter: Numeric
+
+    @classmethod
+    def from_dict(cls, dict_representation: Dict[str, Any]) -> OptimizerState:
+      dict_representation["estimator_state"] = (
+          curvature_estimator.BlockDiagonalCurvature.State.from_dict(
+              dict_representation["estimator_state"]
+          )
+      )
+      return cls(**dict_representation)
 
   def __init__(
       self,
