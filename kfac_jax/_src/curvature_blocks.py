@@ -15,7 +15,8 @@
 import abc
 import collections
 import functools
-from typing import Optional, Sequence, Any, Set, Tuple, Union, Dict
+import string
+from typing import Optional, Sequence, Any, Set, Tuple, Union, Dict, Mapping
 
 import jax
 import jax.numpy as jnp
@@ -36,6 +37,8 @@ ScalarOrSequence = Union[Scalar, Sequence[Scalar]]
 Cache = Dict[str, Union[Array, Dict[str, Array]]]
 
 # Special global variables
+# This is used for einsum strings
+_ALPHABET = string.ascii_lowercase
 # The default value that would be used for the argument
 # ``max_elements_for_vmap``, when it is set to ``None`` in the
 # ``Conv2DDiagonal`` and ``Conv2DFull` curvature blocks.
@@ -984,7 +987,7 @@ class Full(CurvatureBlock, abc.ABC):
     )
 
 
-class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
+class KroneckerFactored(CurvatureBlock, abc.ABC):
   """An abstract class for approximating the block with a Kronecker product."""
 
   @utils.register_state_class
@@ -992,17 +995,295 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
     """Persistent state of the block.
 
     Attributes:
-      inputs_factor: A moving average of the estimated second moment matrix of
-        the inputs to the associated layer.
-      outputs_factor: A moving average of the estimated second moment matrix of
-        the gradients of w.r.t. the outputs of the associated layer.
+      factors: A tuple of the moving averages of the estimated factors of the
+        curvature for each axis group.
     """
-    # TODO(jamesmartens,botev): Consider splitting input_factor into arrays for
-    # the 1st and 2nd moments separately, for the sake of better op and memory
-    # efficiency.
 
-    inputs_factor: utils.WeightedMovingAverage
-    outputs_factor: utils.WeightedMovingAverage
+    factors: Tuple[utils.WeightedMovingAverage, ...]
+
+    @classmethod
+    def from_dict(cls, dict_rep: Dict[str, Any]) -> "KroneckerFactored.State":
+      class_name = dict_rep.pop("__class__", cls.__name__)
+      assert class_name == cls.__name__
+      return cls(
+          factors=tuple(
+              utils.WeightedMovingAverage.from_dict(rep)
+              for rep in dict_rep["factor"]
+          )
+      )
+
+  def __init__(
+      self,
+      layer_tag_eq: tags.LayerTagEqn,
+      name: str,
+      axis_groups: Optional[Sequence[Sequence[int]]] = None,
+  ):
+    self._layer_tag_eq = layer_tag_eq
+
+    if axis_groups is None:
+      self.axis_groups = tuple((i,) for i in range(self.array_ndim))
+    else:
+      self.axis_groups = tuple(tuple(g) for g in axis_groups)
+
+    all_axis = sum(self.axis_groups, ())
+
+    # Make sure the axis groups are sorted
+    if sorted(all_axis) != list(range(min(all_axis), max(all_axis) + 1)):
+      # We currently don't support out of order axis groups
+      raise NotImplementedError()
+
+    super().__init__(layer_tag_eq, name)
+
+  @abc.abstractmethod
+  def parameters_shaped_list_to_array(
+      self,
+      parameters_shaped_list: Sequence[Array],
+  ) -> Array:
+    """Combines all parameters to a single non axis grouped array."""
+
+  @abc.abstractmethod
+  def array_to_parameters_shaped_list(self, array: Array) -> Tuple[Array, ...]:
+    """An inverse transformation of ``self.parameters_shaped_list_to_array``."""
+
+  @property
+  def array_shape(self) -> Shape:
+    """The shape of the single non axis grouped array."""
+    avals = [jnp.zeros(v.aval.shape) for v in self.parameter_variables]
+    return self.parameters_shaped_list_to_array(avals).shape
+
+  @property
+  def array_ndim(self) -> int:
+    """The number of dimensions of the single non axis grouped array."""
+    return len(self.array_shape)
+
+  @property
+  def grouped_array_shape(self) -> Shape:
+    """The shape of the single axis grouped array."""
+    return tuple(
+        utils.product([self.array_shape[i] for i in group])
+        for group in self.axis_groups
+    )
+
+  @property
+  def grouped_array_ndim(self) -> int:
+    """The number of dimensions of the grouped array."""
+    return len(self.axis_groups)
+
+  def parameter_shaped_list_to_grouped_array(
+      self,
+      parameters_shaped_list: Sequence[Array],
+  ) -> Array:
+    """Combines all parameters to a single grouped array."""
+    array = self.parameters_shaped_list_to_array(parameters_shaped_list)
+    return jnp.reshape(array, self.grouped_array_shape)
+
+  def grouped_array_to_parameters_shaped_list(
+      self,
+      grouped_array: Array,
+  ) -> Tuple[Array, ...]:
+    """An inverse transformation of ``self.parameter_shaped_list_to_grouped_array``."""
+    array = jnp.reshape(grouped_array, self.array_shape)
+    return self.array_to_parameters_shaped_list(array)
+
+  def _init(
+      self,
+      rng: PRNGKey,
+      exact_powers_to_cache: Set[Scalar],
+      approx_powers_to_cache: Set[Scalar],
+      cache_eigenvalues: bool,
+  ) -> "KroneckerFactored.State":
+    cache = {}
+    factors = []
+
+    for i, d in enumerate(self.grouped_array_shape):
+      factors.append(
+          utils.WeightedMovingAverage.zeros_array((d, d), self.dtype)
+      )
+
+      if cache_eigenvalues or exact_powers_to_cache:
+        cache[f"{i}_factor_eigenvalues"] = jnp.zeros((d,), dtype=self.dtype)
+
+      if exact_powers_to_cache:
+        cache[f"{i}_factor_eigen_vectors"] = jnp.zeros((d, d), dtype=self.dtype)
+
+      for power in approx_powers_to_cache:
+        if power != -1:
+          raise NotImplementedError(
+              f"Approximations for power {power} is not yet implemented."
+          )
+        if str(power) not in cache:
+          cache[str(power)] = {}
+
+        cache[str(power)][f"{i}_factor"] = jnp.zeros((d, d), dtype=self.dtype)
+
+    return KroneckerFactored.State(cache=cache, factors=tuple(factors))
+
+  def _multiply_matpower_unscaled(
+      self,
+      state: "KroneckerFactored.State",
+      vector: Sequence[Array],
+      identity_weight: Numeric,
+      power: Scalar,
+      exact_power: bool,
+      use_cached: bool,
+  ) -> Tuple[Array, ...]:
+    assert len(state.factors) == len(self.axis_groups)
+
+    vector = self.parameter_shaped_list_to_grouped_array(vector)
+
+    if power == 1:
+      factors = [f.value for f in state.factors]
+      result = utils.kronecker_product_axis_mul_v(factors, vector)
+      result = result + identity_weight * vector
+
+    elif exact_power:
+      if use_cached:
+        s = [
+            state.cache[f"{i}_factor_eigenvalues"]
+            for i in range(len(state.factors))
+        ]
+        q = [
+            state.cache[f"{i}_factor_eigen_vectors"]
+            for i in range(len(state.factors))
+        ]
+
+      else:
+        s, q = zip(
+            *[utils.safe_psd_eigh(factor.value) for factor in state.factors]
+        )
+
+      eigenvalues = utils.outer_product(*s) + identity_weight
+      eigenvalues = jnp.power(eigenvalues, power)
+
+      result = utils.kronecker_eigen_basis_axis_mul_v(q, eigenvalues, vector)
+
+    else:
+      if power != -1:
+        raise NotImplementedError(
+            f"Approximations for power {power} is not yet implemented."
+        )
+
+      if use_cached:
+        factors = [
+            state.cache[str(power)][f"{i}_factor"]
+            for i in range(len(state.factors))
+        ]
+
+      else:
+        factors = utils.pi_adjusted_kronecker_inverse(
+            *[factor.value for factor in state.factors],
+            damping=identity_weight,
+        )
+
+      result = utils.kronecker_product_axis_mul_v(factors, vector)
+
+    return self.grouped_array_to_parameters_shaped_list(result)
+
+  def _eigenvalues_unscaled(
+      self,
+      state: "KroneckerFactored.State",
+      use_cached: bool,
+  ) -> Array:
+    assert len(state.factors) == len(self.axis_groups)
+
+    if use_cached:
+      s = [
+          state.cache[f"{i}_factor_eigenvalues"]
+          for i in range(len(state.factors))
+      ]
+    else:
+      s_q = [utils.safe_psd_eigh(factor.value) for factor in state.factors]
+      s, _ = zip(*s_q)
+
+    return utils.outer_product(*s)
+
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
+      self,
+      state: "KroneckerFactored.State",
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
+      pmap_axis_name: Optional[str],
+  ) -> "KroneckerFactored.State":
+    assert len(state.factors) == len(self.axis_groups)
+
+    # This function call will return a copy of state:
+    state = self._update_curvature_matrix_estimate(
+        state, estimation_data, ema_old, ema_new, batch_size
+    )
+
+    for factor in state.factors:
+      factor.sync(pmap_axis_name)
+
+    return state
+
+  @abc.abstractmethod
+  def _update_curvature_matrix_estimate(
+      self,
+      state: "KroneckerFactored.State",
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
+  ) -> "KroneckerFactored.State":
+    pass
+
+  def _update_cache(  # pytype: disable=signature-mismatch  # numpy-scalars
+      self,
+      state: "KroneckerFactored.State",
+      identity_weight: Numeric,
+      exact_powers: Numeric,
+      approx_powers: Numeric,
+      eigenvalues: bool,
+  ) -> "KroneckerFactored.State":
+    assert len(state.factors) == len(self.axis_groups)
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
+    scale = self.state_dependent_scale(state)
+    factor_scale = jnp.power(scale, 1.0 / len(self.axis_groups))
+
+    if eigenvalues or exact_powers:
+      s_q = [utils.safe_psd_eigh(factor.value) for factor in state.factors]
+      s, q = zip(*s_q)
+      for i in range(len(state.factors)):
+        state.cache[f"{i}_factor_eigenvalues"] = factor_scale * s[i]
+
+        if exact_powers:
+          state.cache[f"{i}_factor_eigen_vectors"] = q[i]
+
+    for power in approx_powers:
+      if power != -1:
+        raise NotImplementedError(
+            f"Approximations for power {power} is not yet implemented."
+        )
+
+      cache = state.cache[str(power)]
+      # This computes the approximate inverse factors using the generalization
+      # of the pi-adjusted inversion from the original KFAC paper.
+
+      inv_factors = utils.pi_adjusted_kronecker_inverse(
+          *[factor.value for factor in state.factors],
+          damping=identity_weight,
+      )
+      for i in range(len(state.factors)):
+        cache[f"{i}_factor"] = inv_factors[i] / factor_scale
+
+    return state
+
+
+class TwoKroneckerFactored(KroneckerFactored):
+  """A Kronecker factored block for layers with weights and an optional bias."""
+
+  def __init__(
+      self,
+      layer_tag_eq: tags.LayerTagEqn,
+      name: str,
+  ):
+    super().__init__(layer_tag_eq, name, ((0,), (1,)))
 
   @property
   def has_bias(self) -> bool:
@@ -1010,19 +1291,20 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
     return len(self._layer_tag_eq.invars) == 4
 
   @abc.abstractmethod
-  def input_size(self) -> int:
-    """Number of inputs to the layer to which this block corresponds."""
+  def _update_curvature_matrix_estimate(
+      self,
+      state: "KroneckerFactored.State",
+      estimation_data: Mapping[str, Sequence[Array]],
+      ema_old: Numeric,
+      ema_new: Numeric,
+      batch_size: Numeric,
+  ) -> "KroneckerFactored.State":
+    pass
 
-  @abc.abstractmethod
-  def output_size(self) -> int:
-    """Number of outputs to the layer to which this block corresponds."""
-
-  def parameters_shaped_list_to_single_matrix(
+  def parameters_shaped_list_to_array(
       self,
       parameters_shaped_list: Sequence[Array],
   ) -> Array:
-    """Converts the values of parameters into a single matrix."""
-
     for p, s in zip(parameters_shaped_list, self.parameters_shapes):
       assert p.shape == s
 
@@ -1031,236 +1313,29 @@ class TwoKroneckerFactored(CurvatureBlock, abc.ABC):
       return jnp.concatenate([w.reshape([-1, w.shape[-1]]), b[None]], axis=0)
     else:
       # This correctly reshapes the parameters of both dense and conv2d blocks
-      w, = parameters_shaped_list
+      [w] = parameters_shaped_list
       return w.reshape([-1, w.shape[-1]])
 
-  def single_matrix_to_parameters_shaped_list(
-      self,
-      matrix: Array,
-  ) -> Tuple[Array, ...]:
-    """Inverts the transformation of ``self.parameters_list_to_single_matrix``."""
-
+  def array_to_parameters_shaped_list(self, array: Array) -> Tuple[Array, ...]:
     if self.has_bias:
-      w, b = matrix[:-1], matrix[-1]
+      w, b = array[:-1], array[-1]
       return w.reshape(self.parameters_shapes[0]), b
     else:
-      return matrix.reshape(self.parameters_shapes[0]),
+      return tuple([array.reshape(self.parameters_shapes[0])])
 
-  def _init(
-      self,
-      rng: PRNGKey,
-      exact_powers_to_cache: Set[Scalar],
-      approx_powers_to_cache: Set[Scalar],
-      cache_eigenvalues: bool,
-  ) -> "TwoKroneckerFactored.State":
+  def _to_dense_unscaled(self, state: "KroneckerFactored.State") -> Array:
+    assert 0 < self.number_of_parameters <= 2
+    inputs_factor = state.factors[0].value
 
-    d_in = self.input_size()
-    d_out = self.output_size()
-
-    cache = {}
-
-    if cache_eigenvalues or exact_powers_to_cache:
-      cache["inputs_factor_eigenvalues"] = jnp.zeros([d_in], self.dtype)
-      cache["outputs_factor_eigenvalues"] = jnp.zeros([d_out], self.dtype)
-
-    if exact_powers_to_cache:
-      cache["inputs_factor_eigen_vectors"] = jnp.zeros([d_in, d_in], self.dtype)
-      cache["outputs_factor_eigen_vectors"] = jnp.zeros(
-          [d_out, d_out], self.dtype)
-
-    for power in approx_powers_to_cache:
-      if power != -1:
-        raise NotImplementedError(f"Approximations for power {power} is not "
-                                  f"yet implemented.")
-      cache[str(power)] = dict(
-          inputs_factor=jnp.zeros([d_in, d_in], self.dtype),
-          outputs_factor=jnp.zeros([d_out, d_out], self.dtype),
+    if self.has_bias and self.parameters_canonical_order[0] != 0:
+      # Permute the matrix according to the parameters canonical order
+      inputs_factor = utils.block_permuted(
+          state.factors[0].value,
+          block_sizes=[state.factors[0].raw_value.shape[0] - 1, 1],
+          block_order=(1, 0),
       )
 
-    return TwoKroneckerFactored.State(
-        cache=cache,
-        inputs_factor=utils.WeightedMovingAverage.zeros_array(
-            [d_in, d_in], self.dtype),
-        outputs_factor=utils.WeightedMovingAverage.zeros_array(
-            [d_out, d_out], self.dtype),
-    )
-
-  def _multiply_matpower_unscaled(
-      self,
-      state: "TwoKroneckerFactored.State",
-      vector: Sequence[Array],
-      identity_weight: Numeric,
-      power: Scalar,
-      exact_power: bool,
-      use_cached: bool,
-  ) -> Tuple[Array, ...]:
-
-    vector = self.parameters_shaped_list_to_single_matrix(vector)
-
-    if power == 1:
-
-      result = utils.kronecker_product_mul_v(
-          state.outputs_factor.value,
-          state.inputs_factor.value,
-          vector,
-          a_is_symmetric=True)
-
-      # TODO(jamesmartens,botev): consider replacing this with factored damping
-      # for the sake of consistency with the inverse.
-      result = result + identity_weight * vector
-
-    elif exact_power:
-
-      if not use_cached:
-        s_i, q_i = utils.safe_psd_eigh(state.inputs_factor.value)
-        s_o, q_o = utils.safe_psd_eigh(state.outputs_factor.value)
-
-      else:
-        s_i = state.cache["inputs_factor_eigenvalues"]
-        q_i = state.cache["inputs_factor_eigen_vectors"]
-        s_o = state.cache["outputs_factor_eigenvalues"]
-        q_o = state.cache["outputs_factor_eigen_vectors"]
-
-      eigenvalues = jnp.outer(s_i, s_o) + identity_weight
-      eigenvalues = jnp.power(eigenvalues, power)
-
-      result = utils.kronecker_eigen_basis_mul_v(q_o, q_i, eigenvalues, vector)
-
-    else:
-      if power != -1:
-        raise NotImplementedError(f"Approximations for power {power} is not "
-                                  f"yet implemented.")
-
-      if use_cached:
-        outputs_factor = state.cache[str(power)]["outputs_factor"]
-        inputs_factor = state.cache[str(power)]["inputs_factor"]
-
-      else:
-        (inputs_factor, outputs_factor) = utils.pi_adjusted_kronecker_inverse(
-            state.inputs_factor.value,
-            state.outputs_factor.value,
-            damping=identity_weight)
-
-      result = utils.kronecker_product_mul_v(
-          outputs_factor,
-          inputs_factor,
-          vector,
-          a_is_symmetric=True)
-
-    return self.single_matrix_to_parameters_shaped_list(result)
-
-  def _eigenvalues_unscaled(
-      self,
-      state: "TwoKroneckerFactored.State",
-      use_cached: bool,
-  ) -> Array:
-    if use_cached:
-      s_i = state.cache["inputs_factor_eigenvalues"]
-      s_o = state.cache["outputs_factor_eigenvalues"]
-    else:
-      s_i, _ = utils.safe_psd_eigh(state.inputs_factor.value)
-      s_o, _ = utils.safe_psd_eigh(state.outputs_factor.value)
-    return jnp.outer(s_o, s_i)
-
-  @utils.auto_scope_method
-  def update_curvature_matrix_estimate(
-      self,
-      state: "TwoKroneckerFactored.State",
-      estimation_data: Dict[str, Sequence[Array]],
-      ema_old: Numeric,
-      ema_new: Numeric,
-      batch_size: Numeric,
-      pmap_axis_name: Optional[str],
-  ) -> "TwoKroneckerFactored.State":
-
-    # This function call will return a copy of state:
-    state = self._update_curvature_matrix_estimate(
-        state, estimation_data, ema_old, ema_new, batch_size)
-
-    state.inputs_factor.sync(pmap_axis_name)
-    state.outputs_factor.sync(pmap_axis_name)
-
-    return state
-
-  @abc.abstractmethod
-  def _update_curvature_matrix_estimate(
-      self,
-      state: "TwoKroneckerFactored.State",
-      estimation_data: Dict[str, Sequence[Array]],
-      ema_old: Numeric,
-      ema_new: Numeric,
-      batch_size: Numeric,
-  ) -> "TwoKroneckerFactored.State":
-    pass
-
-  def _update_cache(
-      self,
-      state: "TwoKroneckerFactored.State",
-      identity_weight: Numeric,
-      exact_powers: Set[Scalar],
-      approx_powers: Set[Scalar],
-      eigenvalues: bool,
-  ) -> "TwoKroneckerFactored.State":
-    # Copy this first since we mutate it later in this function.
-    state = state.copy()
-
-    scale = self.state_dependent_scale(state)
-    factor_scale = jnp.power(scale, 0.5)
-
-    if eigenvalues or exact_powers:
-      s_i, q_i = utils.safe_psd_eigh(state.inputs_factor.value)
-      s_o, q_o = utils.safe_psd_eigh(state.outputs_factor.value)
-
-      state.cache["inputs_factor_eigenvalues"] = factor_scale * s_i
-      state.cache["outputs_factor_eigenvalues"] = factor_scale * s_o
-
-      if exact_powers:
-        state.cache["inputs_factor_eigen_vectors"] = q_i
-        state.cache["outputs_factor_eigen_vectors"] = q_o
-
-    for power in approx_powers:
-
-      if power != -1:
-        raise NotImplementedError(f"Approximations for power {power} is not "
-                                  f"yet implemented.")
-
-      cache = state.cache[str(power)]
-
-      # This computes the approximate inverse factor using the pi-adjusted
-      # inversion from the original KFAC paper.
-      (cache["inputs_factor"],
-       cache["outputs_factor"]) = utils.pi_adjusted_kronecker_inverse(
-           state.inputs_factor.value,
-           state.outputs_factor.value,
-           damping=identity_weight)
-
-      cache["inputs_factor"] /= factor_scale
-      cache["outputs_factor"] /= factor_scale
-
-    return state
-
-  def _to_dense_unscaled(
-      self,
-      state: "TwoKroneckerFactored.State"
-  ) -> Array:
-
-    assert 0 < self.number_of_parameters <= 2
-
-    inputs_factor = state.inputs_factor.value
-
-    if self.has_bias:
-
-      # Permute the matrix according to the parameters canonical order
-      if self.parameters_canonical_order[0] != 0:
-        inputs_factor = utils.block_permuted(
-            state.inputs_factor.value,
-            block_sizes=[state.inputs_factor.raw_value.shape[0] - 1, 1],
-            block_order=(1, 0),
-        )
-      else:
-        inputs_factor = state.inputs_factor.value
-
-    return jnp.kron(inputs_factor, state.outputs_factor.value)
+    return jnp.kron(inputs_factor, state.factors[1].value)
 
 
 class NaiveDiagonal(Diagonal):
@@ -1399,46 +1474,31 @@ class DenseFull(Full):
 class DenseTwoKroneckerFactored(TwoKroneckerFactored):
   """A :class:`~TwoKroneckerFactored` block specifically for dense layers."""
 
-  def input_size(self) -> int:
-    """The size of the Kronecker-factor corresponding to inputs."""
-    if self.has_bias:
-      return self.parameters_shapes[0][0] + 1
-    else:
-      return self.parameters_shapes[0][0]
-
-  def output_size(self) -> int:
-    """The size of the Kronecker-factor corresponding to outputs."""
-    return self.parameters_shapes[0][1]
-
   def _update_curvature_matrix_estimate(
       self,
-      state: TwoKroneckerFactored.State,
-      estimation_data: Dict[str, Sequence[Array]],
+      state: KroneckerFactored.State,
+      estimation_data: Mapping[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-  ) -> TwoKroneckerFactored.State:
-
+  ) -> KroneckerFactored.State:
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    x, = estimation_data["inputs"]
-    dy, = estimation_data["outputs_tangent"]
+    [x] = estimation_data["inputs"]
+    [dy] = estimation_data["outputs_tangent"]
 
     assert utils.first_dim_is_size(batch_size, x, dy)
-
-    # TODO(jamesmartens,botev): replace this logic with einsum (which is
-    # probably more optimized)?
 
     if self.has_bias:
       x_one = jnp.ones_like(x[:, :1])
       x = jnp.concatenate([x, x_one], axis=1)
 
-    input_stats = jnp.matmul(x.T, x) / batch_size
-    output_stats = jnp.matmul(dy.T, dy) / batch_size
+    input_stats = jnp.einsum("ay,az->yz", x, x) / batch_size
+    output_stats = jnp.einsum("ay,az->yz", dy, dy) / batch_size
 
-    state.inputs_factor.update(input_stats, ema_old, ema_new)
-    state.outputs_factor.update(output_stats, ema_old, ema_new)
+    state.factors[0].update(input_stats, ema_old, ema_new)
+    state.factors[1].update(output_stats, ema_old, ema_new)
 
     return state
 
@@ -1641,6 +1701,13 @@ class Conv2DFull(Full):
 class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   """A :class:`~TwoKroneckerFactored` block specifically for 2D convolution layers."""
 
+  def fixed_scale(self) -> Numeric:
+    return float(self.num_locations)
+
+  @property
+  def kernel_output_axis(self) -> int:
+    return self._layer_tag_eq.params["dimension_numbers"].rhs_spec[0]
+
   @property
   def outputs_channel_index(self) -> int:
     """The ``channels`` index in the outputs of the layer."""
@@ -1657,14 +1724,28 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
     return self._layer_tag_eq.params["dimension_numbers"].rhs_spec[0]
 
   @property
-  def weights_spatial_size(self) -> int:
-    """The spatial filter size of the weights."""
-    return utils.product(self.weights_spatial_shape)
-
-  @property
   def weights_spatial_shape(self) -> Shape:
     spatial_index = self._layer_tag_eq.params["dimension_numbers"].rhs_spec[2:]
     return tuple(self.parameters_shapes[0][i] for i in spatial_index)
+
+  @property
+  def weights_spatial_size(self) -> int:
+    """The spatial filter size of the weights."""
+    return utils.product(self.weights_spatial_shape)  # pytype: disable=bad-return-type  # numpy-scalars
+
+  @property
+  def inputs_spatial_shape(self) -> Shape:
+    spatial_index = self._layer_tag_eq.params["dimension_numbers"].lhs_spec[2:]
+    return tuple(self.inputs_shapes[0][i] for i in spatial_index)
+
+  @property
+  def num_locations(self) -> int:
+    """The number of spatial locations that each filter is applied to."""
+    return psm.num_conv_locations(
+        self.inputs_spatial_shape,
+        self.weights_spatial_shape,
+        self._layer_tag_eq.params["window_strides"],
+        self._layer_tag_eq.params["padding"])
 
   def input_size(self) -> int:
     if self.has_bias:
@@ -1678,37 +1759,22 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   @property
   def num_inputs_channels(self) -> int:
     """The number of channels in the inputs to the layer."""
-    return self._layer_tag_eq.invars[1].aval.shape[  # pytype: disable=attribute-error
+    return self._layer_tag_eq.invars[0].aval.shape[  # pytype: disable=attribute-error
         self.inputs_channel_index]
 
   @property
   def num_outputs_channels(self) -> int:
     """The number of channels in the outputs to the layer."""
-    return self._layer_tag_eq.invars[0].aval.shape[  # pytype: disable=attribute-error
+    return self._layer_tag_eq.invars[1].aval.shape[  # pytype: disable=attribute-error
         self.weights_output_channel_index]
-
-  def num_locations(
-      self,
-      inputs: Array,
-  ) -> int:
-    """The number of spatial locations that each filter is applied to."""
-
-    spatial_index = self._layer_tag_eq.params["dimension_numbers"].lhs_spec[2:]
-    inputs_spatial_shape = tuple(inputs.shape[i] for i in spatial_index)
-
-    return psm.num_conv_locations(
-        inputs_spatial_shape, self.weights_spatial_shape,
-        self._layer_tag_eq.params["window_strides"],
-        self._layer_tag_eq.params["padding"])
 
   def compute_inputs_stats(
       self,
       inputs: Array,
+      weighting_array: Optional[Array] = None,
   ) -> Array:
     """Computes the statistics for the inputs factor."""
-
-    # Note that the input statistics are computed and stored with an extra
-    # num_locations scaling factor compared to what's described in the paper.
+    batch_size = inputs.shape[0]
 
     input_cov_m, input_cov_v = psm.patches_moments(
         inputs,
@@ -1718,62 +1784,47 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
         data_format=None,
         dim_numbers=self._layer_tag_eq.params["dimension_numbers"],
         precision=self._layer_tag_eq.params.get("precision"),
-        inputs_dilation=self._layer_tag_eq.params.get("lhs_dilation"),
-        kernel_dilation=self._layer_tag_eq.params.get("rhs_dilation"),
-        feature_group_count=self._layer_tag_eq.params.get(
-            "feature_group_count"),
-        batch_group_count=self._layer_tag_eq.params.get("batch_group_count"),
+        weighting_array=weighting_array,
     )
-
-    # TODO(jamesmartens,botev): replace this logic with einsum (which is
-    # probably more optimized)?
 
     # Flatten the kernel and channels dimensions
     k, h, c = input_cov_v.shape
     input_cov_v = jnp.reshape(input_cov_v, (k * h * c,))
     input_cov_m = jnp.reshape(input_cov_m, (k * h * c, k * h * c))
 
-    # Normalize by the batch size
-    input_cov_m = input_cov_m / inputs.shape[0]
-    input_cov_v = input_cov_v / inputs.shape[0]
+    # Normalize by the `batch size` * `num_locations`
+    normalizer = batch_size * self.num_locations
+    input_cov_m = input_cov_m / normalizer
+    input_cov_v = input_cov_v / normalizer
 
     if not self.has_bias:
       return input_cov_m
 
-    num_locations = jnp.full((1,), self.num_locations(inputs))
+    if weighting_array is None:
+      corner = jnp.ones([1], dtype=input_cov_m.dtype)
+    else:
+      corner = jnp.mean(weighting_array).reshape([1])
+
     input_cov = jnp.concatenate([input_cov_m, input_cov_v[None]], axis=0)
-    input_cov_v = jnp.concatenate([input_cov_v, num_locations], axis=0)
+    input_cov_v = jnp.concatenate([input_cov_v, corner], axis=0)
 
     return jnp.concatenate([input_cov, input_cov_v[:, None]], axis=1)
 
-  def compute_outputs_stats(
-      self,
-      tangent_of_output: Array,
-  ) -> Array:
+  def compute_outputs_stats(self, tangent_of_output: Array) -> Array:
     """Computes the statistics for the outputs factor."""
+    lhs_str = utils.replace_char(_ALPHABET[:4], "y", self.outputs_channel_index)
+    rhs_str = utils.replace_char(_ALPHABET[:4], "z", self.outputs_channel_index)
+    ein_str = f"{lhs_str},{rhs_str}->yz"
+    stats = jnp.einsum(ein_str, tangent_of_output, tangent_of_output)
 
-    # TODO(jamesmartens,botev): replace this logic with einsum (which is
-    # probably more optimized)?
-
-    if self.outputs_channel_index != 3:
-
-      index = list(range(4))
-      index.remove(self.outputs_channel_index)
-      index = index + [self.outputs_channel_index]
-
-      tangent_of_output = jnp.transpose(tangent_of_output, index)
-
-    tangent_of_output = jnp.reshape(tangent_of_output,
-                                    (-1, tangent_of_output.shape[-1]))
-
-    # Normalize by the batch size * number of locations
-    return (jnp.matmul(tangent_of_output.T, tangent_of_output) /
-            tangent_of_output.shape[0])
+    # Normalize by the `batch size` * `num_locations`
+    normalizer = tangent_of_output.shape[0] * self.num_locations
+    return stats / normalizer
 
   def _update_curvature_matrix_estimate(
       self,
       state: TwoKroneckerFactored.State,
-      estimation_data: Dict[str, Sequence[Array]],
+      estimation_data: Mapping[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1782,16 +1833,16 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    x, = estimation_data["inputs"]
-    dy, = estimation_data["outputs_tangent"]
+    [x] = estimation_data["inputs"]
+    [dy] = estimation_data["outputs_tangent"]
 
     assert utils.first_dim_is_size(batch_size, x, dy)
 
-    input_cov = self.compute_inputs_stats(x)
-    output_cov = self.compute_outputs_stats(dy)
+    input_stats = self.compute_inputs_stats(x)
+    output_stats = self.compute_outputs_stats(dy)
 
-    state.inputs_factor.update(input_cov, ema_old, ema_new)
-    state.outputs_factor.update(output_cov, ema_old, ema_new)
+    state.factors[0].update(input_stats, ema_old, ema_new)
+    state.factors[1].update(output_stats, ema_old, ema_new)
 
     return state
 

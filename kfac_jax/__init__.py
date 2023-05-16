@@ -69,6 +69,7 @@ CurvatureBlock = curvature_blocks.CurvatureBlock
 ScaledIdentity = curvature_blocks.ScaledIdentity
 Diagonal = curvature_blocks.Diagonal
 Full = curvature_blocks.Full
+KroneckerFactored = curvature_blocks.KroneckerFactored
 TwoKroneckerFactored = curvature_blocks.TwoKroneckerFactored
 NaiveDiagonal = curvature_blocks.NaiveDiagonal
 NaiveFull = curvature_blocks.NaiveFull
@@ -146,6 +147,7 @@ __all__ = (
     "ScaledIdentity",
     "Diagonal",
     "Full",
+    "KroneckerFactored",
     "TwoKroneckerFactored",
     "NaiveDiagonal",
     "NaiveFull",

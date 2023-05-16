@@ -501,15 +501,17 @@ class TestEstimator(parameterized.TestCase):
     )
 
     block_eigenvalues = estimator.block_eigenvalues(cached_state, True)
+    scales = [block.fixed_scale() for block in estimator.blocks]
 
     self.assertLen(block_eigenvalues, estimator.num_blocks)
-    for block_state, eigs in zip(cached_state.blocks_states, block_eigenvalues):
+    for block_state, eigs, scale in zip(
+        cached_state.blocks_states, block_eigenvalues, scales):
       if isinstance(block_state, kfac_jax.TwoKroneckerFactored.State):
         in_eigs, _ = kfac_jax.utils.safe_psd_eigh(
-            block_state.inputs_factor.value)
+            block_state.factors[1].value)
         out_eigs, _ = kfac_jax.utils.safe_psd_eigh(
-            block_state.outputs_factor.value)
-        self.assertAllClose(jnp.outer(out_eigs, in_eigs), eigs)
+            block_state.factors[0].value)
+        self.assertAllClose(scale * jnp.outer(out_eigs, in_eigs), eigs)
       elif isinstance(block_state, kfac_jax.Diagonal.State):
         diag_eigs = jnp.concatenate([factor.value.flatten() for factor in
                                      block_state.diagonal_factors])

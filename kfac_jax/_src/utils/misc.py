@@ -297,7 +297,11 @@ def auto_scope_function(func):
   return wrapped
 
 
-def default_batch_size_extractor(
-    batch: types.Batch,
-) -> Numeric:
+def default_batch_size_extractor(batch: types.Batch) -> Numeric:
+  """Computes the batch size as the size of axis `0` of the first element."""
   return jax.tree_util.tree_leaves(batch)[0].shape[0]
+
+
+def replace_char(original: str, new_str: str, index: int) -> str:
+  """Replaces the character at a given location."""
+  return original[:index] + new_str + original[index + 1 :]
