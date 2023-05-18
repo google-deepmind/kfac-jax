@@ -305,7 +305,7 @@ class SupervisedExperiment(abc.ABC):
       for split in self.eval_splits:
         self._eval_input[split] = functools.partial(
             self._build_eval_input,
-            split="train",
+            split=split,
             seed=int(seed_rng[1]),
             device_batch_size=self.eval_per_device_batch_size,
         )
