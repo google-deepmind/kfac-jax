@@ -262,14 +262,17 @@ def kfac_resnet50_schedule(
 
 
 def cosine_schedule(
-    global_step: Numeric,
+    global_step: int,
     dataset_size: int,
     train_total_batch_size: int,
     epochs: Optional[float],
     steps: Optional[int],
-    initial_learning_rate: float,
+    peak_learning_rate: float,
+    initial_learning_rate: float = 1e-7,
+    end_learning_rate: float = 0.0,
     warmup_epochs: Optional[float] = None,
     warmup_steps: Optional[int] = None,
+    warmup_fraction: Optional[float] = None,
     **_: Any,
 ) -> Array:
   """A cosine schedule described in the TAT paper."""
@@ -277,25 +280,38 @@ def cosine_schedule(
   if (steps is None) == (epochs is None):
     raise ValueError("Only one of `steps` and `epochs` can be set.")
 
-  if (warmup_steps is None) == (warmup_epochs is None):
-    raise ValueError("Only one of `warmup_steps` and `warmup_epochs` can be "
-                     "set.")
+  if ((warmup_steps is None) == (warmup_epochs is None) ==
+      (warmup_fraction is None)):
+    raise ValueError(
+        "Only one of `warmup_steps`, `warmup_epochs` and `warmpu_fraction` can "
+        "be set.")
 
-  if warmup_steps is None:
+  if warmup_epochs is not None:
     warmup_steps = warmup_epochs * dataset_size / train_total_batch_size
+  elif warmup_fraction is not None:
+    warmup_steps = warmup_fraction * steps
 
   if epochs is not None:
     total_steps = epochs * dataset_size / train_total_batch_size
   else:
     total_steps = steps
 
-  scaled_step = (jnp.maximum(global_step - warmup_steps, 0) /
-                 (total_steps - warmup_steps))
+  scaled_step = jnp.maximum(global_step - warmup_steps, 0) / (
+      total_steps - warmup_steps
+  )
 
-  warmup_factor = jnp.minimum(1., global_step / warmup_steps)
-  factor = (1.0 + jnp.cos(jnp.pi * scaled_step)) / 2
-
-  return initial_learning_rate * warmup_factor * factor
+  warmup_factor = jnp.minimum(1.0, global_step / warmup_steps)
+  warmup_lr = (
+      warmup_factor * (peak_learning_rate - initial_learning_rate)
+      + initial_learning_rate
+  )
+  regular_factor = (1.0 + jnp.cos(jnp.pi * scaled_step)) / 2
+  regular_lr = (
+      regular_factor * (peak_learning_rate - end_learning_rate)
+      + end_learning_rate
+  )
+  choice = global_step <= warmup_steps
+  return choice * warmup_lr + (1 - choice) * regular_lr
 
 
 def stepwise_schedule(

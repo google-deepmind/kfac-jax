@@ -77,7 +77,7 @@ def get_config() -> config_dict.ConfigDict:
                       use_adaptive_momentum=False,
                       use_adaptive_damping=False,
                       learning_rate_schedule=dict(
-                          initial_learning_rate=3e-4,
+                          peak_learning_rate=3e-4,
                           warmup_epochs=5,
                           name="cosine",
                       ),
@@ -94,7 +94,7 @@ def get_config() -> config_dict.ConfigDict:
                       decay=0.9,
                       nesterov=True,
                       learning_rate_schedule=dict(
-                          initial_learning_rate=0.1,
+                          peak_learning_rate=0.1,
                           warmup_epochs=5,
                           name="cosine",
                       ),
