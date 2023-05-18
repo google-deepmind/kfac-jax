@@ -457,8 +457,9 @@ def create_optimizer(
         multi_device=True,
         **kwargs,
     )
-  elif name == "sgd":
-    lr_schedule = construct_schedule(
+
+  elif hasattr(optax, name):
+    learning_rate_schedule = construct_schedule(
         dataset_size=dataset_size,
         train_total_batch_size=train_total_batch_size,
         steps=steps,
@@ -470,10 +471,10 @@ def create_optimizer(
         value_func_has_aux=has_aux,
         value_func_has_rng=has_rng,
         value_func_has_state=has_func_state,
-        optax_optimizer=optax.chain(
-            optax.trace(**kwargs),
-            optax.scale_by_schedule(lr_schedule),
-            optax.scale(-1))
+        optax_optimizer=getattr(optax, name)(
+            learning_rate=learning_rate_schedule, **kwargs,
+        )
     )
+
   else:
     raise NotImplementedError()
