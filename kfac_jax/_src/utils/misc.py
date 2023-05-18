@@ -117,17 +117,16 @@ class State(abc.ABC):
     (flattened, structure) = jax.tree_util.tree_flatten(self)
     return jax.tree_util.tree_unflatten(structure, flattened)
 
-  def tree_flatten(self) -> Tuple[Tuple[ArrayTree, ...], None]:
-    return self.field_values, None
+  def tree_flatten(self) -> Tuple[Tuple[ArrayTree, ...], Tuple[str, ...]]:
+    return self.field_values, self.field_names()
 
   @classmethod
   def tree_unflatten(
       cls,
-      aux_data: None,
+      aux_data: Tuple[str, ...],
       children: Tuple[ArrayTree, ...],
   ):
-    del aux_data  # not used
-    return cls(**dict(zip(cls.field_names(), children)))
+    return cls(**dict(zip(aux_data, children)))
 
   def __repr__(self) -> str:
     return (f"{self.__class__.__name__}(" +

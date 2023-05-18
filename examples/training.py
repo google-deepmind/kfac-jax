@@ -126,6 +126,9 @@ class SupervisedExperiment(abc.ABC):
 
     self._params, self._state, self._opt_state = None, None, None
     self._python_step = 0
+    self._num_tensors = 0
+    self._num_parameters = 0
+    self._optimizer_state_size = 0
 
   def log_machines_setup(self):
     """Logs the machine setup for the experiment."""
@@ -377,12 +380,14 @@ class SupervisedExperiment(abc.ABC):
     init_rng = kfac_jax.utils.replicate_all_local_devices(self.init_rng)
     # Initialize parameters and optional state
     params_rng, optimizer_rng = kfac_jax.utils.p_split(init_rng)
+    logging.info("Initializing parameters.")
     if self.has_func_state:
       self._params, self._state = self.params_init(params_rng, self.init_batch)
     else:
       self._params = self.params_init(params_rng, self.init_batch)
 
     # Initialize optimizer state
+    logging.info("Initializing optimizer state.")
     self._opt_state = self.optimizer.init(
         self._params, optimizer_rng, self.init_batch, self._state
     )
@@ -390,6 +395,42 @@ class SupervisedExperiment(abc.ABC):
     if not self.has_func_state:
       # Needed for checkpointing
       self._state = ()
+
+    # Log parameters
+    self._num_tensors = 0
+    self._num_parameters = 0
+    logging.info("%s %s %s", "=" * 20, "Parameters", "=" * 20)
+    for path, var in jax.tree_util.tree_flatten_with_path(self._params)[0]:
+      # Because of pmap
+      var = var[0]
+      logging.info(
+          "%s - %s, %s",
+          "-".join(str(p)[2:-2] for p in path),
+          var.shape,
+          var.dtype,
+      )
+      self._num_parameters = self._num_parameters + var.size
+      self._num_tensors = self._num_tensors + 1
+    logging.info("Total parameters: %s", f"{self._num_parameters:,}")
+
+    # Log optimizer state
+    self._optimizer_state_size = 0
+    logging.info("%s %s %s", "=" * 20, "Optimizer State", "=" * 20)
+    easy_state = kfac_jax.utils.serialize_state_tree(self._opt_state)
+    for path, var in jax.tree_util.tree_flatten_with_path(easy_state)[0]:
+      if isinstance(var, str):
+        # For __class__ entries
+        continue
+      # Because of pmap
+      var = var[0]
+      logging.info(
+          "%s - %s, %s",
+          "/".join(str(p)[2:-2] for p in path),
+          var.shape,
+          var.dtype,
+      )
+      self._optimizer_state_size = self._optimizer_state_size + var.size
+    logging.info("Total optimizer state: %s", f"{self._optimizer_state_size:,}")
 
   #  _             _
   # | |_ _ __ __ _(_)_ __

@@ -48,6 +48,8 @@ get_float_dtype_and_check_consistency = (
 del types
 
 # misc
+deserialize_state_tree = misc.deserialize_state_tree
+serialize_state_tree = misc.serialize_state_tree
 to_tuple_or_repeat = misc.to_tuple_or_repeat
 first_dim_is_size = misc.first_dim_is_size
 fake_element_from_iterator = misc.fake_element_from_iterator
