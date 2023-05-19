@@ -280,11 +280,11 @@ def cosine_schedule(
   if (steps is None) == (epochs is None):
     raise ValueError("Only one of `steps` and `epochs` can be set.")
 
-  if ((warmup_steps is None) == (warmup_epochs is None) ==
-      (warmup_fraction is None)):
-    raise ValueError(
-        "Only one of `warmup_steps`, `warmup_epochs` and `warmpu_fraction` can "
-        "be set.")
+  n = sum(x is not None for x in [warmup_epochs, warmup_steps, warmup_fraction])
+  if n != 1:
+    raise ValueError(f"Exactly one of warmup_steps={warmup_steps}, "
+                     f"warmup_epochs={warmup_epochs} and warmpu_fraction="
+                     f"{warmup_fraction} must be set.")
 
   if warmup_epochs is not None:
     warmup_steps = warmup_epochs * dataset_size / train_total_batch_size

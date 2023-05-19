@@ -397,6 +397,14 @@ class SupervisedExperiment(abc.ABC):
       self._state = ()
 
     # Log parameters
+    def format_path_entry(entry: Any) -> str:
+      if isinstance(entry, jax.tree_util.DictKey):
+        return str(entry.key)
+      elif isinstance(entry, jax.tree_util.SequenceKey):
+        return str(entry.idx)
+      else:
+        return str(entry)
+
     self._num_tensors = 0
     self._num_parameters = 0
     logging.info("%s %s %s", "=" * 20, "Parameters", "=" * 20)
@@ -405,7 +413,7 @@ class SupervisedExperiment(abc.ABC):
       var = var[0]
       logging.info(
           "%s - %s, %s",
-          "-".join(str(p)[2:-2] for p in path),
+          "-".join(format_path_entry(p) for p in path),
           var.shape,
           var.dtype,
       )
@@ -425,7 +433,7 @@ class SupervisedExperiment(abc.ABC):
       var = var[0]
       logging.info(
           "%s - %s, %s",
-          "/".join(str(p)[2:-2] for p in path),
+          "/".join(format_path_entry(p) for p in path),
           var.shape,
           var.dtype,
       )
