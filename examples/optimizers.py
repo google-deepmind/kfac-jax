@@ -75,12 +75,12 @@ class OptaxWrapper:
     self._optax_optimizer = optax_optimizer
     self._batch_process_func = batch_process_func or (lambda x: x)
     self.pmap_axis_name = "optax_axis"
-    self._jit_step = jax.pmap(
+    self._pmap_step = jax.pmap(
         self._step,
         axis_name=self.pmap_axis_name,
         donate_argnums=list(range(5))
     )
-    self._jit_init = jax.pmap(
+    self._pmap_init = jax.pmap(
         lambda p, *_: self._optax_optimizer.init(p),
         axis_name=self.pmap_axis_name,
     )
@@ -93,7 +93,7 @@ class OptaxWrapper:
       func_state: Optional[FuncState] = None,
   ) -> OptaxState:
     """Initializes the optimizer and returns the appropriate optimizer state."""
-    return self._jit_init(params, rng, batch, func_state)
+    return self._pmap_init(params, rng, batch, func_state)
 
   def _step(
       self,
@@ -146,7 +146,7 @@ class OptaxWrapper:
       Tuple[Params, Any, Mapping[str, Array]],
   ]:
     """A step with similar interface to KFAC."""
-    result = self._jit_step(
+    result = self._pmap_step(
         params=params,
         state=state,
         rng=rng,
@@ -223,10 +223,14 @@ def linear_interpolation(
 def imagenet_sgd_schedule(
     global_step: Numeric,
     dataset_size: int,
-    train_total_batch_size: int,
+    train_total_batch_size: Optional[int],
     **_: Any,
 ) -> Array:
   """Standard linear scaling schedule for ImageNet."""
+
+  if train_total_batch_size is None:
+    raise ValueError("Batch size must be known.")
+
   # Can be found in Section 5.1 of https://arxiv.org/pdf/1706.02677.pdf
   steps_per_epoch = dataset_size / train_total_batch_size
   current_epoch = global_step / steps_per_epoch
@@ -264,7 +268,7 @@ def kfac_resnet50_schedule(
 def cosine_schedule(
     global_step: int,
     dataset_size: int,
-    train_total_batch_size: int,
+    train_total_batch_size: Optional[int],
     epochs: Optional[float],
     steps: Optional[int],
     peak_learning_rate: float,
@@ -281,10 +285,16 @@ def cosine_schedule(
     raise ValueError("Only one of `steps` and `epochs` can be set.")
 
   n = sum(x is not None for x in [warmup_epochs, warmup_steps, warmup_fraction])
+
   if n != 1:
     raise ValueError(f"Exactly one of warmup_steps={warmup_steps}, "
                      f"warmup_epochs={warmup_epochs} and warmpu_fraction="
                      f"{warmup_fraction} must be set.")
+
+  if ((warmup_epochs is not None or epochs is not None)
+      and train_total_batch_size is None):
+    raise ValueError("Batch size must be known when passing epochs or "
+                     "warmup_epochs.")
 
   if warmup_epochs is not None:
     warmup_steps = warmup_epochs * dataset_size / train_total_batch_size
@@ -317,7 +327,7 @@ def cosine_schedule(
 def stepwise_schedule(
     global_step: Numeric,
     dataset_size: int,
-    train_total_batch_size: int,
+    train_total_batch_size: Optional[int],
     lr_decay_factors: Sequence[float],
     initial_learning_rate: float,
     epoch_boundaries: Optional[Sequence[float]] = None,
@@ -336,8 +346,14 @@ def stepwise_schedule(
     raise ValueError("Only one of `warmup_epochs` and `warmup_steps` can be "
                      "set.")
 
-  steps_per_epoch = dataset_size / train_total_batch_size
-  current_epoch = global_step / steps_per_epoch
+  if step_boundaries is None or warmup_steps is None:
+
+    if train_total_batch_size is None:
+      raise ValueError("Batch size must be known when passing epoch_boundaries "
+                       "or warmup_epochs.")
+
+    steps_per_epoch = dataset_size / train_total_batch_size
+    current_epoch = global_step / steps_per_epoch
 
   if step_boundaries is None:
     step_boundaries = jnp.array(epoch_boundaries) * steps_per_epoch
@@ -408,7 +424,9 @@ def create_optimizer(
   value_and_grad_func = jax.value_and_grad(train_model_func, has_aux=has_aux)
 
   kwargs = dict(**config[name])
-  logging.info("Using %s kfac_jax.", name)
+
+  logging.info("Using %s optimizer.", name)
+
   if "kfac" in name:
 
     # Update kwargs regarding batch norm registration
@@ -459,6 +477,7 @@ def create_optimizer(
     )
 
   elif hasattr(optax, name):
+
     learning_rate_schedule = construct_schedule(
         dataset_size=dataset_size,
         train_total_batch_size=train_total_batch_size,
