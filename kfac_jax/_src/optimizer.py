@@ -116,18 +116,21 @@ class Optimizer(utils.WithStagedMethods):
       num_burnin_steps: int = 10,
       estimation_mode: str = "fisher_gradients",
       curvature_ema: Numeric = 0.95,
+      curvature_update_period: int = 1,
       inverse_update_period: int = 5,
       use_exact_inverses: bool = False,
       batch_process_func: Optional[Callable[[Batch], Batch]] = None,
       register_only_generic: bool = False,
       patterns_to_skip: Sequence[str] = (),
       auto_register_kwargs: Optional[Dict[str, Any]] = None,
-      layer_tag_to_block_ctor:
-      Optional[Dict[str, curvature_estimator.CurvatureBlockCtor]] = None,
+      layer_tag_to_block_ctor: Optional[
+          Dict[str, curvature_estimator.CurvatureBlockCtor]
+      ] = None,
       multi_device: bool = False,
       debug: bool = False,
-      batch_size_extractor: Callable[[Batch], Numeric] =
-      utils.default_batch_size_extractor,
+      batch_size_extractor: Callable[
+          [Batch], Numeric
+      ] = utils.default_batch_size_extractor,
       pmap_axis_name: str = "kfac_axis",
       forbid_setting_attributes_after_finalize: bool = True,
       modifiable_attribute_exceptions: Sequence[str] = (),
@@ -199,12 +202,12 @@ class Optimizer(utils.WithStagedMethods):
       learning_rate_schedule: Callable. A schedule for the learning rate. This
         should take as input the current step number and return a single array
         that represents the learning rate. (Default: ``None``)
-      use_adaptive_momentum: Boolean. Specifies whether to use the special
-        rule from the original K-FAC paper for picking the momentum "decay"
-        parameter at each step. Note that this won't work well for stochastic
-        bjectives. If this is ``False``, the user must use the ``momentum``
-        argument of the step function, or the constructor argument
-        ``momentum_schedule``. (Default: ``False``)
+      use_adaptive_momentum: Boolean. Specifies whether to use the special rule
+        from the original K-FAC paper for picking the momentum "decay" parameter
+        at each step. Note that this won't work well for stochastic objectives.
+        If this is ``False``, the user must use the ``momentum`` argument of the
+        step function, or the constructor argument ``momentum_schedule``.
+        (Default: ``False``)
       momentum_schedule: Callable. A schedule for the momentum parameter. This
         should take as input the current step number and return a single array
         that represents the momentum. (Default: ``None``)
@@ -266,6 +269,8 @@ class Optimizer(utils.WithStagedMethods):
         ``fisher_gradients``).
       curvature_ema: The decay factor used when calculating the covariance
         estimate moving averages. (Default: ``0.95``)
+      curvature_update_period: Int. The number of steps in between updating the
+        the curvature estimates. (Default: ``1``)
       inverse_update_period: Int. The number of steps in between updating the
         the computation of the inverse curvature approximation. (Default: ``5``)
       use_exact_inverses: Bool. If ``True``, preconditioner inverses are
@@ -294,8 +299,8 @@ class Optimizer(utils.WithStagedMethods):
         Note that this also overrides ``multi_device`` and prevents using pmap.
         (Default: ``False``)
       batch_size_extractor: A function that takes as input the function
-        arguments and returns the batch size for a single device.
-        (Default: ``kfac.utils.default_batch_size_extractor``)
+        arguments and returns the batch size for a single device. (Default:
+        ``kfac.utils.default_batch_size_extractor``)
       pmap_axis_name: String. The name of the pmap axis to use when
         ``multi_device`` is set to True. (Default: ``kfac_axis``)
       forbid_setting_attributes_after_finalize: Boolean. By default after the
@@ -392,6 +397,14 @@ class Optimizer(utils.WithStagedMethods):
     self._num_burnin_steps = num_burnin_steps
     self._estimation_mode = estimation_mode
     self._curvature_ema = curvature_ema
+    if curvature_update_period > inverse_update_period:
+      raise ValueError(
+          "curvature_update_period ({}) cannot be larger than"
+          " inverse_update_period ({}) as the identical matrix inversion would"
+          " be redundantly performed. Set inverse_update_period larger instead."
+          .format(curvature_update_period, inverse_update_period)
+      )
+    self._curvature_update_period = curvature_update_period
     self._inverse_update_period = inverse_update_period
     self._register_only_generic = register_only_generic
     self._layer_tag_to_block_cls = layer_tag_to_block_ctor
@@ -600,6 +613,28 @@ class Optimizer(utils.WithStagedMethods):
 
     return func_args, rng
 
+  def _maybe_update_estimator_state(
+      self,
+      state: "Optimizer.State",
+      period: int,
+      update_func: Callable[
+          ..., curvature_estimator.BlockDiagonalCurvature.State
+      ],
+      **update_func_kwargs,
+  ) -> "Optimizer.State":
+    """Updates the estimator state if it is the right iteration."""
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
+    state.estimator_state = lax.cond(
+        state.step_counter % period == 0,
+        functools.partial(update_func, **update_func_kwargs),
+        lambda state_: state_,
+        state.estimator_state,
+    )
+    return state
+
   def _update_estimator_curvature(
       self,
       estimator_state: curvature_estimator.BlockDiagonalCurvature.State,
@@ -619,6 +654,25 @@ class Optimizer(utils.WithStagedMethods):
         rng=rng,
         func_args=func_args,
         pmap_axis_name=self.pmap_axis_name
+    )
+
+  def _maybe_update_estimator_curvature(
+      self,
+      state: "Optimizer.State",
+      func_args: FuncArgsVariants,
+      rng: PRNGKey,
+      ema_old: Numeric,
+      ema_new: Numeric,
+  ) -> "Optimizer.State":
+    """Updates the curvature estimates if it is the right iteration."""
+    return self._maybe_update_estimator_state(
+        state,
+        self._curvature_update_period,
+        self._update_estimator_curvature,
+        func_args=func_args,
+        rng=rng,
+        ema_old=ema_old,
+        ema_new=ema_new,
     )
 
   @utils.auto_scope_method
@@ -641,24 +695,16 @@ class Optimizer(utils.WithStagedMethods):
       damping: Array,
   ) -> "Optimizer.State":
     """Updates the estimator state cache if it is the right iteration."""
-
-    # Copy this first since we mutate it later in this function.
-    state = state.copy()
-
-    state.estimator_state = lax.cond(
-        state.step_counter % self._inverse_update_period == 0,
-        functools.partial(
-            self.estimator.update_cache,
-            identity_weight=self.l2_reg + damping,
-            exact_powers=self._exact_powers_to_cache,
-            approx_powers=self._approx_powers_to_cache,
-            eigenvalues=False,
-            pmap_axis_name=self.pmap_axis_name,
-        ),
-        lambda state_: state_,
-        state.estimator_state
+    return self._maybe_update_estimator_state(
+        state,
+        self._inverse_update_period,
+        self.estimator.update_cache,
+        identity_weight=self.l2_reg + damping,
+        exact_powers=self._exact_powers_to_cache,
+        approx_powers=self._approx_powers_to_cache,
+        eigenvalues=False,
+        pmap_axis_name=self.pmap_axis_name,
     )
-    return state
 
   # TODO(jamesmartens, botev): It's ugly that this method implements the norm
   # constraint on top of computing the preconditioned gradient. Should refactor.
@@ -914,8 +960,9 @@ class Optimizer(utils.WithStagedMethods):
         params, rng, batch, func_state)
 
     # Update curvature estimate
-    state.estimator_state = self._update_estimator_curvature(
-        state.estimator_state, func_args, rng, self._curvature_ema, 1.0)
+    state = self._maybe_update_estimator_curvature(
+        state, func_args, rng, self._curvature_ema, 1.0
+    )
 
     del rng  # should not be used after this point!
 
