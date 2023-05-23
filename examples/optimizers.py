@@ -306,22 +306,13 @@ def cosine_schedule(
   else:
     total_steps = steps
 
-  scaled_step = jnp.maximum(global_step - warmup_steps, 0) / (
-      total_steps - warmup_steps
-  )
-
-  warmup_factor = jnp.minimum(1.0, global_step / warmup_steps)
-  warmup_lr = (
-      warmup_factor * (peak_learning_rate - initial_learning_rate)
-      + initial_learning_rate
-  )
-  regular_factor = (1.0 + jnp.cos(jnp.pi * scaled_step)) / 2
-  regular_lr = (
-      regular_factor * (peak_learning_rate - end_learning_rate)
-      + end_learning_rate
-  )
-  choice = global_step <= warmup_steps
-  return choice * warmup_lr + (1 - choice) * regular_lr
+  return optax.warmup_cosine_decay_schedule(
+      init_value=initial_learning_rate,
+      peak_value=peak_learning_rate,
+      end_value=end_learning_rate,
+      warmup_steps=warmup_steps,
+      decay_steps=total_steps,
+  )(global_step)
 
 
 def stepwise_schedule(

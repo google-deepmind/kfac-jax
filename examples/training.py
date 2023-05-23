@@ -13,11 +13,12 @@
 # limitations under the License.
 """Jaxline experiment classes and utilities."""
 import abc
+import collections
 import copy
 import functools
 import os
 import time
-from typing import Any, Callable, Iterator, Optional, Tuple, Union, Dict
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Union
 
 from absl import logging
 import jax
@@ -39,6 +40,87 @@ Batch = kfac_jax.utils.Batch
 FuncState = kfac_jax.utils.FuncState
 
 InitFunc = Callable[[PRNGKey, Batch], Params]
+BatchSizeCalculatorCtor = Callable[[int, int, str], "BatchSizeCalculator"]
+ExperimentBatchSizes = collections.namedtuple(
+    "ExperimentBatchSizes", ["train", "eval"])
+
+
+def is_exactly_one_not_none(*args):
+  return sum(a is not None for a in args) == 1
+
+
+class BatchSizeCalculator:
+  """A class for computing the batch size in different ways."""
+
+  def __init__(self, total: int, per_device: int, mode: str):
+    if total == -1:
+      total = None
+    if per_device == -1:
+      per_device = None
+    if not is_exactly_one_not_none(total, per_device):
+      raise ValueError(
+          "Exactly one of the ``total`` and ``per_device`` arguments must "
+          "be set to a value and the other one must be ``None``."
+      )
+    self._mode = mode
+    self._total = total
+    self._per_device = per_device
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def num_local_devices(self) -> int:
+    """The number of local devices."""
+    return jax.local_device_count()
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def num_devices(self) -> int:
+    """The total number of devices."""
+    return jax.device_count()
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def per_device(self) -> int:
+    """The per-device batch size."""
+    if self._per_device is not None:
+      return self._per_device
+    if self._total % self.num_devices != 0:
+      raise ValueError(
+          "The total batch size must be divisible by the number of devices."
+      )
+    return self._total // self.num_devices
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def per_host(self) -> int:
+    """The per-host batch size."""
+    return self.per_device * self.num_local_devices
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def total(self) -> int:
+    """The total batch size."""
+    return self.per_device * self.num_devices
+
+  def log_machines_setup(self):
+    """Logs the machine setup and batch sizes."""
+    logging.info("Worker with mode %s", self._mode)
+    logging.info(
+        "Number of hosts[%d]: %d", jax.process_index(), jax.process_count()
+    )
+    logging.info(
+        "Number of devices[%d]: %d/%d",
+        jax.process_index(),
+        self.num_local_devices,
+        self.num_devices,
+    )
+    logging.info(
+        "Device batch size[%d]: (%d x %d)/%d",
+        jax.process_index(),
+        self.num_devices,
+        self.per_device,
+        self.total,
+    )
 
 
 class SupervisedExperiment(abc.ABC):
@@ -55,6 +137,7 @@ class SupervisedExperiment(abc.ABC):
     has_rng: Whether the model function needs an PRNG key.
     has_func_state: Whether the model function has a state.
     eval_splits: Evaluation splits of the evaluation dataset loader.
+    batch_size: An instance of `ExperimentBatchSizes`.
     init_parameters_func: A function that initializes the parameters and
       optionally the state of the model if it has one.
     params_init: A function that initializes the model parameters.
@@ -76,6 +159,7 @@ class SupervisedExperiment(abc.ABC):
       has_rng: bool,
       has_func_state: bool,
       eval_splits: Tuple[str, ...] = ("train", "test"),
+      batch_size_calculator_ctor: BatchSizeCalculatorCtor = BatchSizeCalculator,
   ):
     """Initializes experiment.
 
@@ -92,6 +176,8 @@ class SupervisedExperiment(abc.ABC):
       has_rng: Whether the model function requires an RNG.
       has_func_state: Whether the model function has a state.
       eval_splits: Evaluation splits of the evaluation dataset loader.
+      batch_size_calculator_ctor: A constructor function to create a batch size
+        calculator.
     """
     self.mode = mode
     self.init_rng, seed_rng = jax.random.split(init_rng)
@@ -101,7 +187,14 @@ class SupervisedExperiment(abc.ABC):
     self.has_rng = has_rng
     self.has_func_state = has_func_state
     self.eval_splits = eval_splits
-    self.verify_batch_size_config()
+    self.batch_size = ExperimentBatchSizes(
+        train=batch_size_calculator_ctor(  # pytype: disable=wrong-keyword-args
+            mode=mode, **self.config.batch_size.train
+        ),
+        eval=batch_size_calculator_ctor(  # pytype: disable=wrong-keyword-args
+            mode=mode, **self.config.batch_size.eval
+        ),
+    )
 
     self.params_init = jax.pmap(init_parameters_func)
     self.model_loss_func = model_loss_func
@@ -116,7 +209,7 @@ class SupervisedExperiment(abc.ABC):
     )
 
     # Log some useful information
-    self.log_machines_setup()
+    getattr(self.batch_size, self.mode).log_machines_setup()
 
     # Create the optimizer
     self.optimizer = self.create_optimizer()
@@ -130,147 +223,10 @@ class SupervisedExperiment(abc.ABC):
     self._num_parameters = 0
     self._optimizer_state_size = 0
 
-  def log_machines_setup(self):
-    """Logs the machine setup for the experiment."""
-    logging.info("Worker with mode %s", self.mode)
-    logging.info(
-        "Number of hosts[%d]: %d", jax.process_index(), jax.process_count()
-    )
-    logging.info(
-        "Number of devices[%d]: %d/%d",
-        jax.process_index(),
-        jax.local_device_count(),
-        jax.device_count(),
-    )
-    if self.mode == "train":
-      logging.info(
-          "Training device batch size[%d]: (%d x %d)/%d",
-          jax.process_index(),
-          self.train_num_devices,
-          self.train_per_device_batch_size,
-          self.train_total_batch_size,
-      )
-    else:
-      logging.info(
-          "Evaluation device batch size[%d]: %d/%d",
-          jax.process_index(),
-          self.eval_per_device_batch_size,
-          self.eval_total_batch_size,
-      )
-
-  def verify_batch_size_config(self):
-    """Verifies that the provided batch size config is valid."""
-    if self.config.batch_size.train.total == -1:
-      self.config.batch_size.train.total = None
-    if self.config.batch_size.train.per_device == -1:
-      self.config.batch_size.train.per_device = None
-    if self.config.batch_size.eval.total == -1:
-      self.config.batch_size.eval.total = None
-    if self.config.batch_size.eval.per_device == -1:
-      self.config.batch_size.eval.per_device = None
-    if (
-        self.config.batch_size.train.total
-        is None
-        == self.config.batch_size.train.per_device
-        is not None
-    ):
-      raise ValueError(
-          "Exactly one of the ``batch_size.train.total`` and "
-          "``batch_size.train.per_device`` config arguments must "
-          "be set to a value and the other one must be ``None``."
-      )
-    if (
-        self.config.batch_size.eval.total
-        is None
-        == self.config.batch_size.eval.per_device
-        is None
-    ):
-      raise ValueError(
-          "Exactly one of the ``batch_size.eval.total`` and "
-          "``batch_size.eval.per_device`` config arguments must "
-          "be set to a value and the other one must be ``None``."
-      )
-
   @property
   @abc.abstractmethod
   def dataset_size(self) -> int:
     """The number of data points in the training set."""
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def train_num_local_devices(self) -> int:
-    """The number of training local devices."""
-    return jax.local_device_count()
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def train_num_devices(self) -> int:
-    """The number of training devices."""
-    return jax.device_count()
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def train_per_device_batch_size(self) -> int:
-    """The training per-device batch size."""
-    if self.config.batch_size.train.per_device is None:
-      if self.config.batch_size.train.total % self.train_num_devices != 0:
-        raise ValueError(
-            "The total batch size must be divisible by the number of devices."
-        )
-      return self.config.batch_size.train.total // self.train_num_devices
-    else:
-      return self.config.batch_size.train.per_device
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def train_host_batch_size(self) -> int:
-    """The training per-host batch size."""
-    assert self.mode == "train"
-    return self.train_per_device_batch_size * self.train_num_local_devices
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def train_total_batch_size(self) -> int:
-    """The training total batch size."""
-    return self.train_per_device_batch_size * self.train_num_devices
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def eval_num_local_devices(self) -> int:
-    """The evaluator number of local devices."""
-    return jax.local_device_count()
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def eval_num_devices(self) -> int:
-    """The evaluator number of devices."""
-    return jax.device_count()
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def eval_per_device_batch_size(self) -> int:
-    """The evaluator per-device batch size."""
-    if self.config.batch_size.eval.per_device is None:
-      if self.config.batch_size.eval.total % jax.device_count() != 0:
-        raise ValueError(
-            "The total batch size must be divisible by the number of devices."
-        )
-      return self.config.batch_size.eval.total // self.num_eval_devices
-    else:
-      return self.config.batch_size.eval.per_device
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def eval_host_batch_size(self) -> int:
-    """The evaluator per-host batch size."""
-    assert self.mode == "eval"
-    return self.eval_per_device_batch_size * self.eval_num_local_devices
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def eval_total_batch_size(self) -> int:
-    """The evaluator total batch size."""
-    return self.eval_per_device_batch_size * self.num_eval_devices
 
   @property
   @functools.lru_cache(maxsize=1)
@@ -284,7 +240,7 @@ class SupervisedExperiment(abc.ABC):
               self._build_train_input,
               split="train",
               seed=int(seed_rng[0]),
-              device_batch_size=self.train_per_device_batch_size,
+              device_batch_size=self.batch_size.train.per_device,
           )
       )
     return self._train_input
@@ -310,7 +266,7 @@ class SupervisedExperiment(abc.ABC):
             self._build_eval_input,
             split=split,
             seed=int(seed_rng[1]),
-            device_batch_size=self.eval_per_device_batch_size,
+            device_batch_size=self.batch_size.eval.per_device,
         )
     return self._eval_input
 
@@ -338,7 +294,7 @@ class SupervisedExperiment(abc.ABC):
       return global_step / self.config.training.steps
 
     else:
-      data_seen = self.train_total_batch_size * global_step
+      data_seen = self.batch_size.train.total * global_step
       total_data = self.dataset_size * self.config.training.epochs
 
       return data_seen / total_data
@@ -366,7 +322,7 @@ class SupervisedExperiment(abc.ABC):
         has_func_state=self.has_func_state,
         has_rng=self.has_rng,
         dataset_size=self.dataset_size,
-        train_total_batch_size=self.train_total_batch_size,
+        train_total_batch_size=self.batch_size.train.total,
         steps=self.config.training.steps,
         epochs=self.config.training.epochs,
     )
