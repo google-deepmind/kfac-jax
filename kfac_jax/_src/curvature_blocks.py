@@ -460,6 +460,7 @@ class CurvatureBlock(utils.Finalizable):
       ema_new: Numeric,
       batch_size: Numeric,
       pmap_axis_name: Optional[str],
+      sync: Union[Array, bool] = True,
   ) -> "CurvatureBlock.State":
     """Updates the block's curvature estimates using the ``info`` provided.
 
@@ -481,6 +482,9 @@ class CurvatureBlock(utils.Finalizable):
       batch_size: The batch size used in computing the values in ``info``.
       pmap_axis_name: The name of any pmap axis, which might be needed for
           computing the updates.
+      sync: If True and this method is called within pmap context,the curvature
+          matrix estimates will be synchronized (i.e. pmean'd) axross devices
+          after being updated.
     """
 
   @utils.auto_scope_method
@@ -614,6 +618,7 @@ class ScaledIdentity(CurvatureBlock):
       ema_new: Numeric,
       batch_size: Numeric,
       pmap_axis_name: Optional[str],
+      sync: Union[Array, bool] = True,
   ) -> CurvatureBlock.State:
 
     return state.copy()
@@ -702,15 +707,19 @@ class Diagonal(CurvatureBlock, abc.ABC):
       ema_new: Numeric,
       batch_size: Numeric,
       pmap_axis_name: Optional[str],
+      sync: Union[Array, bool] = True,
   ) -> "Diagonal.State":
 
     # This function call will return a copy of state:
     state = self._update_curvature_matrix_estimate(
         state, estimation_data, ema_old, ema_new, batch_size)
 
-    for factor in state.diagonal_factors:
-      factor.sync(pmap_axis_name)
+    def sync_factors(state):
+      for factor in state.diagonal_factors:
+        factor.sync(pmap_axis_name)
+      return state
 
+    state = jax.lax.cond(sync, sync_factors, lambda s: s, state)
     return state
 
   @abc.abstractmethod
@@ -917,14 +926,18 @@ class Full(CurvatureBlock, abc.ABC):
       ema_new: Numeric,
       batch_size: Numeric,
       pmap_axis_name: Optional[str],
+      sync: Union[Array, bool] = True,
   ) -> "Full.State":
 
     # This function call will return a copy of state:
     state = self._update_curvature_matrix_estimate(
         state, estimation_data, ema_old, ema_new, batch_size)
 
-    state.matrix.sync(pmap_axis_name)
+    def sync_matrix(state):
+      state.matrix.sync(pmap_axis_name)
+      return state
 
+    state = jax.lax.cond(sync, sync_matrix, lambda s: s, state)
     return state
 
   @abc.abstractmethod
@@ -1206,6 +1219,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       ema_new: Numeric,
       batch_size: Numeric,
       pmap_axis_name: Optional[str],
+      sync: Union[Array, bool] = True,
   ) -> "KroneckerFactored.State":
     assert len(state.factors) == len(self.axis_groups)
 
@@ -1214,9 +1228,12 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
         state, estimation_data, ema_old, ema_new, batch_size
     )
 
-    for factor in state.factors:
-      factor.sync(pmap_axis_name)
+    def sync_factors(state):
+      for factor in state.factors:
+        factor.sync(pmap_axis_name)
+      return state
 
+    state = jax.lax.cond(sync, sync_factors, lambda s: s, state)
     return state
 
   @abc.abstractmethod

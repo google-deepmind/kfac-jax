@@ -481,6 +481,22 @@ class Optimizer(utils.WithStagedMethods):
     """Whether at the current step the optimizer should update the damping."""
     return (state.step_counter + 1) % self._damping_adaptation_interval == 0
 
+  def should_update_estimate_curvature(
+      self, state: "Optimizer.State"
+  ) -> Union[Array, bool]:
+    """Whether at the current step the optimizer should update the curvature estimates."""
+    if self._curvature_update_period == 1:
+      return True
+    return state.step_counter % self._curvature_update_period == 0
+
+  def should_update_inverse_cache(
+      self, state: "Optimizer.State"
+  ) -> Union[Array, bool]:
+    """Whether at the current step the optimizer should update the inverse curvature approximation."""
+    if self._inverse_update_period == 1:
+      return True
+    return state.step_counter % self._inverse_update_period == 0
+
   @functools.partial(utils.staged, static_argnums=1)
   def _rng_split(
       self,
@@ -616,7 +632,7 @@ class Optimizer(utils.WithStagedMethods):
   def _maybe_update_estimator_state(
       self,
       state: "Optimizer.State",
-      period: int,
+      should_update: Union[Array, bool],
       update_func: Callable[
           ..., curvature_estimator.BlockDiagonalCurvature.State
       ],
@@ -628,7 +644,7 @@ class Optimizer(utils.WithStagedMethods):
     state = state.copy()
 
     state.estimator_state = lax.cond(
-        state.step_counter % period == 0,
+        should_update,
         functools.partial(update_func, **update_func_kwargs),
         lambda state_: state_,
         state.estimator_state,
@@ -642,9 +658,12 @@ class Optimizer(utils.WithStagedMethods):
       rng: PRNGKey,
       ema_old: Numeric,
       ema_new: Numeric,
+      sync: Union[Array, bool] = True
   ) -> curvature_estimator.BlockDiagonalCurvature.State:
     """Updates the curvature estimator state."""
-
+    # TODO(kazukiosawa, jamesmartens, botev): Prepare an entirely separate
+    # method to perform syncs (independent of any updating) to support more
+    # advanced use cases.
     return self.estimator.update_curvature_matrix_estimate(
         state=estimator_state,
         ema_old=ema_old,
@@ -653,7 +672,8 @@ class Optimizer(utils.WithStagedMethods):
         batch_size=self._batch_size_extractor(func_args[-1]),
         rng=rng,
         func_args=func_args,
-        pmap_axis_name=self.pmap_axis_name
+        pmap_axis_name=self.pmap_axis_name,
+        sync=sync,
     )
 
   def _maybe_update_estimator_curvature(
@@ -663,16 +683,18 @@ class Optimizer(utils.WithStagedMethods):
       rng: PRNGKey,
       ema_old: Numeric,
       ema_new: Numeric,
+      sync: Union[Array, bool] = True,
   ) -> "Optimizer.State":
     """Updates the curvature estimates if it is the right iteration."""
     return self._maybe_update_estimator_state(
         state,
-        self._curvature_update_period,
+        self.should_update_estimate_curvature(state),
         self._update_estimator_curvature,
         func_args=func_args,
         rng=rng,
         ema_old=ema_old,
         ema_new=ema_new,
+        sync=sync,
     )
 
   @utils.auto_scope_method
@@ -697,7 +719,7 @@ class Optimizer(utils.WithStagedMethods):
     """Updates the estimator state cache if it is the right iteration."""
     return self._maybe_update_estimator_state(
         state,
-        self._inverse_update_period,
+        self.should_update_inverse_cache(state),
         self.estimator.update_cache,
         identity_weight=self.l2_reg + damping,
         exact_powers=self._exact_powers_to_cache,
@@ -961,7 +983,14 @@ class Optimizer(utils.WithStagedMethods):
 
     # Update curvature estimate
     state = self._maybe_update_estimator_curvature(
-        state, func_args, rng, self._curvature_ema, 1.0
+        state,
+        func_args,
+        rng,
+        self._curvature_ema,
+        1.0,
+        sync=self.should_update_inverse_cache(
+            state
+        ),  # sync curvature estimates only before inverses are updated.
     )
 
     del rng  # should not be used after this point!

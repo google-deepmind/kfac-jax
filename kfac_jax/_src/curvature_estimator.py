@@ -734,6 +734,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       func_args: utils.FuncArgs,
       pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
+      sync: Union[Array, bool] = True,
   ) -> StateType:
     """Updates the estimator's curvature estimates.
 
@@ -755,6 +756,9 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         multiple devices/hosts.
       estimation_mode: The type of curvature estimator to use. By default
         (e.g. if ``None``) will use ``self.default_estimation_mode``. One of:
+      sync: If True and when calling this method within a pmap context, the
+        curvature matrix estimates will be synchronized (i.e. pmean'd) across
+        devices after being updated.
 
         * fisher_gradients - the basic estimation approach from the original
           K-FAC paper.
@@ -1180,6 +1184,7 @@ class BlockDiagonalCurvature(
       func_args: utils.FuncArgs,
       pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
+      sync: Union[Array, bool] = True,
   ) -> "BlockDiagonalCurvature.State":
 
     if not self.finalized:
@@ -1210,7 +1215,7 @@ class BlockDiagonalCurvature(
 
         new_state.append(block_.update_curvature_matrix_estimate(
             block_state_, block_info_, ema_old_, ema_new_,
-            batch_size, pmap_axis_name))
+            batch_size, pmap_axis_name, sync))
 
       return BlockDiagonalCurvature.State(blocks_states=tuple(new_state))
 
@@ -1537,6 +1542,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       func_args: utils.FuncArgs,
       pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
+      sync: Union[Array, bool] = True,
   ) -> curvature_blocks.Full.State:
 
     rng = jax.random.split(rng, batch_size)
@@ -1563,6 +1569,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
           func_args=args,
           pmap_axis_name=pmap_axis_name,
           estimation_mode=estimation_mode,
+          sync=sync,
       )
 
     return jax.lax.fori_loop(0, batch_size, single_state_update, state)
