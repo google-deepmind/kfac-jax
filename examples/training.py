@@ -235,6 +235,7 @@ class SupervisedExperiment(abc.ABC):
     if self._train_input is None:
       logging.info("Initializing training data iterator.")
       seed_rng = jax.random.fold_in(self.seed_rng, self._python_step)
+      seed_rng = jax.random.fold_in(seed_rng, jax.process_index())
       self._train_input = pipe_utils.py_prefetch(
           functools.partial(
               self._build_train_input,
