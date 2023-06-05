@@ -81,7 +81,6 @@ make_different_rng_key_on_all_devices = (
     parallel.make_different_rng_key_on_all_devices)
 p_split = parallel.p_split
 p_split_num = parallel.p_split_num
-check_and_fix_format_for_pmap = parallel.check_and_fix_format_for_pmap
 host_sync = parallel.host_sync
 host_all_gather = parallel.host_all_gather
 host_mean = parallel.host_mean

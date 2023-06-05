@@ -13,6 +13,7 @@
 # limitations under the License.
 """K-FAC utilities for classes with staged methods."""
 import functools
+import numbers
 import operator
 from typing import Any, Callable, Optional, Sequence, Tuple, Union
 
@@ -220,14 +221,20 @@ def staged(
         outs = method(instance, *args)
 
       elif instance.multi_device:
-
-        new_args = list(args)
-
+        # Compute in_axes so we broadcast any argument that is a scalar
+        in_axes = [None]
         for i in range(len(args)):
           if i + 1 not in static_argnums:
-            new_args[i] = parallel.check_and_fix_format_for_pmap(args[i])
+            if (isinstance(args[i], numbers.Number) or
+                (isinstance(args[i], jax.Array) and not args[i].shape)):
+              # Single scalar
+              in_axes.append(None)
+            else:
+              in_axes.append(0)
 
-        func = pmap_funcs.get(instance.pmap_axis_name)
+        in_axes = tuple(in_axes)
+        key = (instance.pmap_axis_name, in_axes)
+        func = pmap_funcs.get(key)
 
         if func is None:
           func = jax.pmap(
@@ -235,10 +242,11 @@ def staged(
               static_broadcasted_argnums=static_argnums,
               donate_argnums=donate_argnums,
               axis_name=instance.pmap_axis_name,
+              in_axes=in_axes,
           )
-          pmap_funcs[instance.pmap_axis_name] = func
+          pmap_funcs[key] = func
 
-        outs = func(instance, *new_args)
+        outs = func(instance, *args)
 
       else:
         outs = jitted_func(instance, *args)

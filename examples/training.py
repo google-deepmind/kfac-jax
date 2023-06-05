@@ -42,7 +42,8 @@ FuncState = kfac_jax.utils.FuncState
 InitFunc = Callable[[PRNGKey, Batch], Params]
 BatchSizeCalculatorCtor = Callable[[int, int, str], "BatchSizeCalculator"]
 ExperimentBatchSizes = collections.namedtuple(
-    "ExperimentBatchSizes", ["train", "eval"])
+    "ExperimentBatchSizes", ["train", "eval"]
+)
 
 
 def is_exactly_one_not_none(*args):
@@ -410,7 +411,7 @@ class SupervisedExperiment(abc.ABC):
       seed: int,
       device_batch_size: int,
       **_: Any,
-  ) -> datasets.tf.data.Dataset:
+  ) -> Iterator[Batch]:
     """Constructs the training dataset."""
 
   def train_step(self, global_step: Array, rng: PRNGKey) -> Dict[str, Numeric]:
@@ -464,7 +465,7 @@ class SupervisedExperiment(abc.ABC):
       seed: int,
       device_batch_size: int,
       **_: Any,
-  ) -> datasets.tf.data.Dataset:
+  ) -> Iterator[Batch]:
     """Constructs the evaluation dataset."""
 
   def _evaluate_single_batch(
@@ -533,7 +534,7 @@ class SupervisedExperiment(abc.ABC):
 
     all_stats["progress"] = self.progress(self._python_step)
 
-    return all_stats
+    return all_stats  # pytype: disable=bad-return-type
 
 
 class JaxlineExperiment(SupervisedExperiment, experiment.AbstractExperiment):

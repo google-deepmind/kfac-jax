@@ -15,10 +15,11 @@
 
 """
 import types
-from typing import Callable, Iterator, Optional, Tuple, Dict
+from typing import Callable, Dict, Iterator, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
+import kfac_jax
 import numpy as np
 import tensorflow.compat.v2 as tf
 import tensorflow_datasets
@@ -33,6 +34,11 @@ TfBatch = Dict[str, tf.Tensor]
 # Special global variables
 _IMAGENET_MEAN_RGB = (0.485, 0.456, 0.406)
 _IMAGENET_STDDEV_RGB = (0.229, 0.224, 0.225)
+
+
+def iterator_on_device(iterator: Iterator[Batch]) -> Iterator[Batch]:
+  for batch in iterator:
+    yield kfac_jax.utils.broadcast_all_local_devices(batch)
 
 
 def mnist_dataset(
@@ -123,7 +129,7 @@ def mnist_dataset(
 
   ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
 
-  return iter(tensorflow_datasets.as_numpy(ds))
+  return iterator_on_device(iter(tensorflow_datasets.as_numpy(ds)))
 
 
 def imagenet_num_examples_and_split(
@@ -296,7 +302,7 @@ def imagenet_dataset(
 
   ds = ds.prefetch(tf.data.experimental.AUTOTUNE)
 
-  return iter(tensorflow_datasets.as_numpy(ds))
+  return iterator_on_device(iter(tensorflow_datasets.as_numpy(ds)))
 
 
 def _imagenet_preprocess_image(

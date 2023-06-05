@@ -28,9 +28,8 @@ Numeric = kfac_jax.utils.Numeric
 PRNGKey = kfac_jax.utils.PRNGKey
 Params = kfac_jax.utils.Params
 Batch = kfac_jax.utils.Batch
-# FuncState = kfac_jax.utils.FuncState
-FuncState = Any
-OptaxState = Any
+FuncState = kfac_jax.utils.FuncState
+OptaxState = kfac_jax.utils.ArrayTree
 
 
 class OptaxWrapper:
@@ -43,7 +42,7 @@ class OptaxWrapper:
       value_func_has_state: bool,
       value_func_has_rng: bool,
       optax_optimizer: optax.GradientTransformation,
-      batch_process_func: Optional[Callable[[Any], Any]] = lambda x: x,
+      batch_process_func: Optional[Callable[[Batch], Batch]] = lambda x: x,
   ):
     """Initializes the Optax wrapper.
 
@@ -78,7 +77,8 @@ class OptaxWrapper:
     self._pmap_step = jax.pmap(
         self._step,
         axis_name=self.pmap_axis_name,
-        donate_argnums=list(range(5))
+        donate_argnums=list(range(5)),
+        in_axes=(0,) * 5 + (None,),
     )
     self._pmap_init = jax.pmap(
         lambda p, *_: self._optax_optimizer.init(p),
@@ -102,6 +102,7 @@ class OptaxWrapper:
       rng: PRNGKey,
       batch: Batch,
       func_state: Optional[FuncState] = None,
+      global_step_int: Optional[int] = None,
   ) -> kfac_jax.optimizer.ReturnEither:
     """A single step of optax."""
     batch = self._batch_process_func(batch)
@@ -124,9 +125,10 @@ class OptaxWrapper:
     updates, new_state = self._optax_optimizer.update(grads, state, params)
     new_params = optax.apply_updates(params, updates)
 
-    # Add batch size
+    # Add step and batch size
+    stats["step"] = global_step_int + 1
     batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
-    stats["batch_size"] = batch_size * jax.device_count()
+    stats["batch_size"] = stats["step"] * batch_size * jax.device_count()
 
     if self._value_func_has_state:
       return new_params, new_state, new_func_state, stats
@@ -146,19 +148,14 @@ class OptaxWrapper:
       Tuple[Params, Any, Mapping[str, Array]],
   ]:
     """A step with similar interface to KFAC."""
-    result = self._pmap_step(
-        params=params,
-        state=state,
-        rng=rng,
-        batch=next(data_iterator),
-        func_state=func_state,
+    return self._pmap_step(
+        params,
+        state,
+        rng,
+        next(data_iterator),
+        func_state,
+        global_step_int,
     )
-    step = jnp.asarray(global_step_int + 1)
-    step = kfac_jax.utils.replicate_all_local_devices(step)
-    result[-1]["step"] = step
-    result[-1]["data_seen"] = step * result[-1]["batch_size"]
-
-    return result
 
 
 def tf1_rmsprop(

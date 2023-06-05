@@ -1283,7 +1283,7 @@ class Optimizer(utils.WithStagedMethods):
       damping: Array,
       vectors: Sequence[Params],
       fixed_coefficients: Optional[Sequence[Union[Numeric, None]]] = None,
-  ) -> Tuple[Tuple[Optional[Array], ...], Array]:
+  ) -> Tuple[Tuple[Array, ...], Array]:
     """Solves for the optimal learning rate and momentum of the quadratic model.
 
     The quadratic model is represented as:

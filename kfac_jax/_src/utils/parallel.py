@@ -13,7 +13,6 @@
 # limitations under the License.
 """K-FAC utilities for multi-device execution."""
 import functools
-import numbers
 from typing import Callable, Optional, Sequence
 
 import jax
@@ -84,7 +83,6 @@ def index_if_not_scalar(value: Numeric, index: int = 0) -> Numeric:
     raise ValueError("The input should be an instance of `Numeric`.")
 
 
-@jax.jit
 def get_first(obj: TArrayTree) -> TArrayTree:
   """Index the PyTree leaves `x` of `obj` by `x[0]` if they are not scalars."""
   return jax.tree_util.tree_map(index_if_not_scalar, obj)
@@ -125,24 +123,6 @@ def make_different_rng_key_on_all_devices(rng: PRNGKey) -> PRNGKey:
 p_split = jax.pmap(lambda key: tuple(jax.random.split(key)))
 p_split_num = jax.pmap(lambda key, num: tuple(jax.random.split(key, num)),
                        static_broadcasted_argnums=1)
-
-
-def check_and_fix_format_for_pmap(obj: TArrayTree) -> TArrayTree:
-  """Checks shape[0]==device_count and broadcasts scalars to [device_count]."""
-  device_count = jax.local_device_count()
-
-  def check_and_fix(x: Numeric) -> Array:
-
-    # broadcast any 0D scalars
-    if isinstance(x, numbers.Number) or not x.shape:  # pytype: disable=attribute-error  # numpy-scalars
-      return jnp.stack([x] * device_count, axis=0)
-
-    # otherwise, ensure that arrays have the right shape
-    assert x.shape[0] == device_count  # pytype: disable=attribute-error  # numpy-scalars
-
-    return x  # pytype: disable=bad-return-type  # numpy-scalars
-
-  return jax.tree_util.tree_map(check_and_fix, obj)
 
 
 default_device_sync = None
