@@ -117,7 +117,7 @@ class WithStagedMethods(misc.Finalizable):
     """Indexes the `obj` PyTree leaves over leading axis if `multi_device`."""
     return parallel.get_first(obj) if self.multi_device else obj
 
-  def copy_obj(self, obj: TArrayTree) -> TArrayTree:
+  def copy_obj(self, obj: Optional[TArrayTree]) -> Optional[TArrayTree]:
     """Copies the object."""
     if self.multi_device:
       return parallel.pmap_copy_obj(obj)
@@ -224,13 +224,12 @@ def staged(
         # Compute in_axes so we broadcast any argument that is a scalar
         in_axes = [None]
         for i in range(len(args)):
-          if i + 1 not in static_argnums:
-            if (isinstance(args[i], numbers.Number) or
-                (isinstance(args[i], jax.Array) and not args[i].shape)):
-              # Single scalar
-              in_axes.append(None)
-            else:
-              in_axes.append(0)
+          if (isinstance(args[i], numbers.Number) or
+              (isinstance(args[i], jax.Array) and not args[i].shape)):
+            # Single scalar
+            in_axes.append(None)
+          else:
+            in_axes.append(0)
 
         in_axes = tuple(in_axes)
         key = (instance.pmap_axis_name, in_axes)

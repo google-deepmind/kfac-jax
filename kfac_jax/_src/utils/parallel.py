@@ -190,14 +190,29 @@ pmap_sync_and_divide_value = jax.pmap(
 )
 
 
-# We might be able to change this to "return jnp.array(x)" in newer JAX versions
+# We might be able to change this to "return jnp.array(x)" in newer JAX
+# versions. Or maybe we can use jnp.copy now?
 def copy_array(x: Array) -> Array:
   """Copies a Jax array so that it can be donated freely."""
   return x + jnp.zeros_like(x)
 
 
 copy_obj = jax.jit(lambda x: jax.tree_util.tree_map(copy_array, x))
-pmap_copy_obj = jax.pmap(copy_obj)
+_pmap_copy_obj = jax.pmap(copy_obj)
+
+
+def pmap_copy_obj(x: Optional[TArrayTree]) -> Optional[TArrayTree]:
+
+  # pmap will fail to work if passed a totally empty tree
+  if x is None:
+    return None
+
+  if types.tree_is_empty(x):
+    # this does a shallow copy of the tree similar to .copy():
+    (flattened, structure) = jax.tree_util.tree_flatten(x)
+    return jax.tree_util.tree_unflatten(structure, flattened)
+
+  return _pmap_copy_obj(x)
 
 
 def distribute_thunks(

@@ -70,7 +70,8 @@ def get_float_dtype_and_check_consistency(obj: ArrayTree) -> DType:
 
   for leaf in leaves:
 
-    if leaf.dtype in (jnp.float16, jnp.bfloat16, jnp.float32, jnp.float64):
+    if (leaf.dtype == jnp.float16 or leaf.dtype == jnp.bfloat16
+        or leaf.dtype == jnp.float32 or leaf.dtype == jnp.float64):
 
       if dtype is not None and leaf.dtype != dtype:
         raise ValueError("Inconsistent dtypes detected.")

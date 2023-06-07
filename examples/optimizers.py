@@ -128,7 +128,8 @@ class OptaxWrapper:
     # Add step and batch size
     stats["step"] = global_step_int + 1
     batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
-    stats["batch_size"] = stats["step"] * batch_size * jax.device_count()
+    stats["batch_size"] = batch_size * jax.device_count()
+    stats["data_seen"] = stats["step"] * stats["batch_size"]
 
     if self._value_func_has_state:
       return new_params, new_state, new_func_state, stats

@@ -230,12 +230,15 @@ class SupervisedExperiment(abc.ABC):
     """The number of data points in the training set."""
 
   @property
-  @functools.lru_cache(maxsize=1)
   def train_input(self) -> Iterator[Batch]:
     """Returns the current training iterator."""
+
     if self._train_input is None:
+
       logging.info("Initializing training data iterator.")
+
       seed_rng = jax.random.fold_in(self.seed_rng, self._python_step)
+
       self._train_input = pipe_utils.py_prefetch(
           functools.partial(
               self._build_train_input,
@@ -244,10 +247,10 @@ class SupervisedExperiment(abc.ABC):
               device_batch_size=self.batch_size.train.per_device,
           )
       )
+
     return self._train_input
 
   @property
-  @functools.lru_cache(maxsize=1)
   def train_inputs(
       self,
   ) -> Union[Iterator[Batch], Tuple[Iterator[Batch], Iterator[Batch]]]:
@@ -255,10 +258,11 @@ class SupervisedExperiment(abc.ABC):
     return self.train_input
 
   @property
-  @functools.lru_cache(maxsize=1)
   def eval_input(self) -> Dict[str, Callable[[], Iterator[Batch]]]:
+
     """Returns all evaluation iterators constructors."""
     if self._eval_input is None:
+
       logging.info("Initializing evaluation data iterator.")
       seed_rng = jax.random.fold_in(self.seed_rng, self._python_step)
       self._eval_input = {}
@@ -269,13 +273,15 @@ class SupervisedExperiment(abc.ABC):
             seed=int(seed_rng[1]),
             device_batch_size=self.batch_size.eval.per_device,
         )
+
     return self._eval_input
 
   @property
-  @functools.lru_cache(maxsize=1)
   def init_batch(self) -> Batch:
     """A fake batch size used to initialize the model parameters and state."""
+
     if self._init_batch is None:
+
       if self.mode == "train":
         self._init_batch, iterator = kfac_jax.utils.fake_element_from_iterator(
             self.train_input
@@ -283,6 +289,7 @@ class SupervisedExperiment(abc.ABC):
         self._train_input = iterator
       else:
         self._init_batch = next(self.eval_input["train"]())
+
     return self._init_batch
 
   def progress(
@@ -678,7 +685,7 @@ class MnistExperiment(JaxlineExperiment):
         model_loss_func=model_loss_func,
     )
 
-  @functools.cached_property
+  @property
   def dataset_size(self) -> int:
     return 60_000
 
