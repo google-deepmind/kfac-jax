@@ -804,7 +804,7 @@ class Optimizer(utils.WithStagedMethods):
     # The learning rate is defined as the negative of the coefficient by which
     # we multiply the gradients, while the momentum is the coefficient by
     # which we multiply the velocities.
-    neg_learning_rate = - learning_rate if learning_rate is not None else None
+    neg_learning_rate = -learning_rate if learning_rate is not None else None
     coefficients = (neg_learning_rate, momentum)
 
     if self._use_adaptive_learning_rate or self._use_adaptive_momentum:
@@ -1096,7 +1096,7 @@ class Optimizer(utils.WithStagedMethods):
     )
 
     if self._value_func_has_aux:
-      stats["aux"] = aux
+      stats["aux"] = utils.pmean_if_pmap(aux, self.pmap_axis_name)
 
     if self._include_norms_in_stats:
       stats["param_norm"] = param_norm
@@ -1314,6 +1314,10 @@ class Optimizer(utils.WithStagedMethods):
       The function currently supports only up to two vectors, hence if you
       provide more, it will raise a ``NotImplementedError``.
     """
+    # TODO(jamesmartens,botev): it would be better if this method didn't need
+    # to have 'vectors' passed. We could instead use the 'D' matrix to get the
+    # to get the matrix for the l2 regularization.
+
     if fixed_coefficients is None:
       fixed_coefficients = (None,) * len(vectors)
 
