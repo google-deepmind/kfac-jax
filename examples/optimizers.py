@@ -426,6 +426,8 @@ class OptaxWrapper:
       optax_optimizer: optax.GradientTransformation,
       batch_process_func: Optional[Callable[[Batch], Batch]] = lambda x: x,
       preconditioner: Optional[Preconditioner] = None,
+      include_norms_in_stats: bool = False,
+      include_per_param_norms_in_stats: bool = False,
   ):
     """Initializes the Optax wrapper.
 
@@ -450,6 +452,13 @@ class OptaxWrapper:
         before feeding to the KFAC on device. This could be useful for specific
         device input optimizations. (Default: `lambda x: x`)
       preconditioner: The optax-compatible K-FAC preconditioner.
+      include_norms_in_stats: Boolean. It True, the vector norms of the
+        gradient, preconditioned gradient, and parameter update are included in
+        the statistics returned by the step function. (Default: ``False``)
+      include_per_param_norms_in_stats: Boolean. It True, the per-parameter
+        vector norms of the gradient, preconditioned gradient, and parameter
+        update are included in the statistics returned by the step function.
+        (Default: ``False``)
     """
     self._value_and_grad_func = value_and_grad_func
     self._value_func_has_aux = value_func_has_aux
@@ -457,6 +466,8 @@ class OptaxWrapper:
     self._value_func_has_rng = value_func_has_rng
     self._optax_optimizer = optax_optimizer
     self._preconditioner = preconditioner
+    self._include_norms_in_stats = include_norms_in_stats
+    self._include_per_param_norms_in_stats = include_per_param_norms_in_stats
     self._batch_process_func = batch_process_func or (lambda x: x)
     self.pmap_axis_name = (
         "optax_axis"
@@ -554,6 +565,14 @@ class OptaxWrapper:
 
     # Compute and apply updates via our optimizer.
     updates, new_state = self._optax_optimizer.update(grads, state, params)
+    if self._include_norms_in_stats:
+      stats["grad_norm"] = kfac_jax.utils.norm(grads)
+      stats["update_norm"] = kfac_jax.utils.norm(updates)
+      stats["param_norm"] = kfac_jax.utils.norm(params)
+    if self._include_per_param_norms_in_stats:
+      stats.update(kfac_jax.utils.per_parameter_norm(grads, "grad_norm"))
+      stats.update(kfac_jax.utils.per_parameter_norm(updates, "update_norm"))
+      stats.update(kfac_jax.utils.per_parameter_norm(params, "param_norm"))
     new_params = optax.apply_updates(params, updates)
 
     # Add step and batch size
