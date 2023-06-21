@@ -719,56 +719,115 @@ def kfac_resnet50_schedule(
   ))
 
 
+# TODO(jamesmartens,kazukiosawa,botev): Some possible future improvements to
+# the schedules code:
+# - Put the logic to calculate "warmup_data" (or "warmup_steps") and
+#   "total_data" (or "total_steps") in a place so that we can apply warmup to
+#   an arbitrary schedule.
+# - Use existing `optax.schedule` operations (e.g. `exponential_decay`,
+#   `piecewise_constant_schedule`) as much as possible to make the kfac_jax
+#   codebase simple and compact.
+# - Optax's `warmup_cosine_decay_schedule` and
+#   `warmup_exponential_decay_schedule` are implemented by simply combining
+#   `linear_schedule` and the corresponding schedule. So we can prepare a
+#   general warmup scheduler factory that returns a combination of `linear_
+#   schedule` and the given base scheduler based on the arguments e.g. warmup_
+#   steps.
+
+
+# TODO(jamesmartens,kazukiosawa,botev): change these argument names to be not be
+# specific to learning rates.
 def cosine_schedule(
-    global_step: int,
+    global_step: Numeric,
     dataset_size: int,
     train_total_batch_size: Optional[int],
-    epochs: Optional[float],
-    steps: Optional[int],
+    total_steps: Optional[int],
+    total_epochs: Optional[float],
     peak_learning_rate: float,
     initial_learning_rate: float = 1e-7,
     end_learning_rate: float = 0.0,
     warmup_epochs: Optional[float] = None,
     warmup_steps: Optional[int] = None,
     warmup_fraction: Optional[float] = None,
+    data_seen: Optional[Numeric] = None,
     **_: Any,
-) -> Array:
+) -> Numeric:
   """A cosine schedule described in the TAT paper."""
 
-  if (steps is None) == (epochs is None):
-    raise ValueError("Only one of `steps` and `epochs` can be set.")
+  if (total_steps is None) == (total_epochs is None):
+    raise ValueError("Exactly one of `total_steps` and `total_epochs` must be "
+                     "set.")
 
   n = sum(x is not None for x in [warmup_epochs, warmup_steps, warmup_fraction])
 
   if n != 1:
     raise ValueError(f"Exactly one of warmup_steps={warmup_steps}, "
-                     f"warmup_epochs={warmup_epochs} and warmpu_fraction="
+                     f"warmup_epochs={warmup_epochs} and warmup_fraction="
                      f"{warmup_fraction} must be set.")
 
-  if ((warmup_epochs is not None or epochs is not None)
-      and train_total_batch_size is None):
-    raise ValueError("Batch size must be known when passing epochs or "
-                     "warmup_epochs.")
+  if warmup_epochs is not None or total_epochs is not None:
 
-  if warmup_epochs is not None:
-    warmup_steps = warmup_epochs * dataset_size / train_total_batch_size
-  elif warmup_fraction is not None:
-    warmup_steps = warmup_fraction * steps
+    if data_seen is None:
 
-  if epochs is not None:
-    total_steps = epochs * dataset_size / train_total_batch_size
+      if train_total_batch_size is not None:
+        data_seen = global_step * train_total_batch_size
+
+      else:
+        raise ValueError("One of 'train_total_batch_size' or 'data_seen' must "
+                         "passed when 'total_epochs' or 'warmup_epochs' are "
+                         "passed.")
+
+    if ((warmup_epochs is None or total_epochs is None)
+        and train_total_batch_size is None):
+
+      raise ValueError("'train_total_batch_size' must be passed if only one of "
+                       "'total_epochs' or 'warmup_epochs' are passed.")
+
+    if warmup_epochs is not None:
+      warmup_data = warmup_epochs * dataset_size
+
+    elif warmup_fraction is not None:
+      warmup_data = warmup_fraction * total_steps * train_total_batch_size
+
+    else:
+      warmup_data = warmup_steps * train_total_batch_size
+
+    if total_epochs is not None:
+      total_data = total_epochs * dataset_size
+
+    else:
+      total_data = total_steps * train_total_batch_size
+
+    # Optax uses chex which has an inconsistent definition of "Numeric" from
+    # what we use here.
+    return optax.warmup_cosine_decay_schedule(  # pytype: disable=bad-return-type
+        init_value=initial_learning_rate,
+        peak_value=peak_learning_rate,
+        end_value=end_learning_rate,
+        warmup_steps=warmup_data,
+        decay_steps=total_data,
+    )(data_seen)
+
   else:
-    total_steps = steps
 
-  return optax.warmup_cosine_decay_schedule(
-      init_value=initial_learning_rate,
-      peak_value=peak_learning_rate,
-      end_value=end_learning_rate,
-      warmup_steps=warmup_steps,
-      decay_steps=total_steps,
-  )(global_step)
+    if warmup_fraction is not None:
+      warmup_steps = warmup_fraction * total_steps
+
+    # Optax uses chex which has an inconsistent definition of "Numeric" from
+    # what we use here.
+    return optax.warmup_cosine_decay_schedule(  # pytype: disable=bad-return-type
+        init_value=initial_learning_rate,
+        peak_value=peak_learning_rate,
+        end_value=end_learning_rate,
+        warmup_steps=warmup_steps,
+        decay_steps=total_steps,
+    )(global_step)
 
 
+# TODO(jamesmartens,kazukiosawa,botev): change these argument names to be not be
+# specific to learning rates. Also, initial_learning_rate is misnamed since this
+# is value is never actually used, but is just a "base" multiplying for the
+# decay factors.
 def stepwise_schedule(
     global_step: Numeric,
     dataset_size: int,
@@ -779,40 +838,73 @@ def stepwise_schedule(
     warmup_epochs: Optional[float] = None,
     step_boundaries: Optional[Sequence[float]] = None,
     warmup_steps: Optional[int] = None,
+    data_seen: Optional[Numeric] = None,
     **_: Any,
-) -> Array:
+) -> Numeric:
   """A basic stepwise schedule."""
 
   if (epoch_boundaries is None) == (step_boundaries is None):
-    raise ValueError("Only one of `epoch_boundaries` and `step_boundaries` can "
-                     "be set.")
+    raise ValueError("Exactly one of `epoch_boundaries` and `step_boundaries` "
+                     "can must be passed.")
 
   if (warmup_epochs is None) == (warmup_steps is None):
-    raise ValueError("Only one of `warmup_epochs` and `warmup_steps` can be "
-                     "set.")
-
-  if step_boundaries is None or warmup_steps is None:
-
-    if train_total_batch_size is None:
-      raise ValueError("Batch size must be known when passing epoch_boundaries "
-                       "or warmup_epochs.")
-
-    steps_per_epoch = dataset_size / train_total_batch_size
-    current_epoch = global_step / steps_per_epoch
-
-  if step_boundaries is None:
-    step_boundaries = jnp.array(epoch_boundaries) * steps_per_epoch
-  else:
-    step_boundaries = jnp.array(step_boundaries)
+    raise ValueError("Exactly one of `warmup_epochs` and `warmup_steps` must "
+                     "be set.")
 
   values = jnp.array(lr_decay_factors) * initial_learning_rate
-  index = jnp.sum(step_boundaries <= global_step)
-  lr = jnp.take(values, index)
 
-  if warmup_steps is None:
-    return lr * jnp.minimum(1., current_epoch / warmup_epochs)
+  if warmup_epochs is not None or epoch_boundaries is not None:
+
+    if data_seen is None:
+
+      if train_total_batch_size is not None:
+        data_seen = global_step * train_total_batch_size
+
+      else:
+        raise ValueError("One of 'train_total_batch_size' or 'data_seen' must "
+                         "passed when 'epoch_boundaries' or 'warmup_epochs' "
+                         "are passed.")
+
+    if ((warmup_epochs is None or epoch_boundaries is None)
+        and train_total_batch_size is None):
+
+      raise ValueError("'train_total_batch_size' must be passed if only one of "
+                       "'epoch_boundaries' or 'warmup_epochs' are passed.")
+
+    if warmup_epochs is not None:
+      warmup_data = warmup_epochs * dataset_size
+
+    else:
+      warmup_data = warmup_steps * train_total_batch_size
+
+    if epoch_boundaries is not None:
+      data_boundaries = jnp.array(epoch_boundaries) * dataset_size
+
+    else:
+      data_boundaries = jnp.array(step_boundaries) * train_total_batch_size
+
+    index = jnp.sum(data_boundaries <= data_seen)
+    value = jnp.take(values, index)
+
+    return value * jnp.minimum(1., data_seen / warmup_data)
+
   else:
-    return lr * jnp.minimum(1., global_step / warmup_steps)
+
+    step_boundaries = jnp.array(step_boundaries)
+
+    index = jnp.sum(step_boundaries <= global_step)
+    value = jnp.take(values, index)
+
+    return value * jnp.minimum(1., global_step / warmup_steps)
+
+
+def exponential_schedule(
+    global_step: Numeric,
+    initial_value: float,
+    rate: float,
+    **_: Any,
+) -> Numeric:
+  return initial_value * (rate ** global_step)
 
 
 def construct_schedule(
@@ -830,6 +922,8 @@ def construct_schedule(
     return functools.partial(cosine_schedule, **kwargs)
   elif name == "stepwise":
     return functools.partial(stepwise_schedule, **kwargs)
+  elif name == "exponential":
+    return functools.partial(exponential_schedule, **kwargs)
   else:
     raise NotImplementedError(name)
 
@@ -861,8 +955,8 @@ def create_optimizer(
     has_rng: bool,
     dataset_size: int,
     train_total_batch_size: int,
-    steps: Optional[int],
-    epochs: Optional[float],
+    total_steps: Optional[int],
+    total_epochs: Optional[float],
 ) -> Union[OptaxWrapper, kfac_jax.Optimizer]:
   """Creates an optimizer from the provided configuration."""
 
@@ -881,35 +975,18 @@ def create_optimizer(
 
     if name == "kfac":
 
-      # Set learning rate schedule
-      if kwargs.get("learning_rate_schedule") is not None:
-        kwargs["learning_rate_schedule"] = construct_schedule(
-            dataset_size=dataset_size,
-            train_total_batch_size=train_total_batch_size,
-            steps=steps,
-            epochs=epochs,
-            **kwargs["learning_rate_schedule"]
-        )
+      for sched_name in ["learning_rate_schedule", "momentum_schedule",
+                         "damping_schedule"]:
 
-      # Set momentum schedule
-      if kwargs.get("momentum_schedule") is not None:
-        kwargs["momentum_schedule"] = construct_schedule(
-            dataset_size=dataset_size,
-            train_total_batch_size=train_total_batch_size,
-            steps=steps,
-            epochs=epochs,
-            **kwargs["momentum_schedule"]
-        )
+        if kwargs.get(sched_name) is not None:
 
-      # Set damping schedule
-      if kwargs.get("damping_schedule") is not None:
-        kwargs["damping_schedule"] = construct_schedule(
-            dataset_size=dataset_size,
-            train_total_batch_size=train_total_batch_size,
-            steps=steps,
-            epochs=epochs,
-            **kwargs["damping_schedule"]
-        )
+          kwargs[sched_name] = construct_schedule(
+              dataset_size=dataset_size,
+              train_total_batch_size=train_total_batch_size,
+              total_steps=total_steps,
+              total_epochs=total_epochs,
+              **kwargs[sched_name]
+              )
 
     return kfac_jax.Optimizer(
         value_and_grad_func=value_and_grad_func,
@@ -926,8 +1003,8 @@ def create_optimizer(
     learning_rate_schedule = construct_schedule(
         dataset_size=dataset_size,
         train_total_batch_size=train_total_batch_size,
-        steps=steps,
-        epochs=epochs,
+        total_steps=total_steps,
+        total_epochs=total_epochs,
         **kwargs.pop("learning_rate_schedule")
     )
     return OptaxWrapper(

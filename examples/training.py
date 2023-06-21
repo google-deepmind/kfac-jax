@@ -190,10 +190,10 @@ class SupervisedExperiment(abc.ABC):
     self.eval_splits = eval_splits
     self.batch_size = ExperimentBatchSizes(
         train=batch_size_calculator_ctor(  # pytype: disable=wrong-keyword-args
-            mode=mode, **self.config.batch_size.train
+            mode="train", **self.config.batch_size.train
         ),
         eval=batch_size_calculator_ctor(  # pytype: disable=wrong-keyword-args
-            mode=mode, **self.config.batch_size.eval
+            mode="eval", **self.config.batch_size.eval
         ),
     )
 
@@ -331,8 +331,8 @@ class SupervisedExperiment(abc.ABC):
         has_rng=self.has_rng,
         dataset_size=self.dataset_size,
         train_total_batch_size=self.batch_size.train.total,
-        steps=self.config.training.steps,
-        epochs=self.config.training.epochs,
+        total_steps=self.config.training.steps,
+        total_epochs=self.config.training.epochs,
     )
 
   def maybe_initialize_state(self):

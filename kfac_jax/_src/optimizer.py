@@ -35,7 +35,8 @@ FuncState = Any
 FuncAux = utils.FuncAux
 
 OptimizerState: TypeAlias = "Optimizer.State"
-ScheduleType = Callable[[Array], Optional[Array]]
+ScheduleType = Union[Callable[[Numeric, Optional[Numeric]], Numeric],
+                     Callable[[Numeric], Numeric]]
 FuncArgsVariants = Union[
     Tuple[Params, Batch],
     Tuple[Params, FuncState, Batch],
@@ -200,8 +201,9 @@ class Optimizer(utils.WithStagedMethods):
         step function, or the constructor argument ``learning_rate_schedule``.
         (Default: ``False``)
       learning_rate_schedule: Callable. A schedule for the learning rate. This
-        should take as input the current step number and return a single array
-        that represents the learning rate. (Default: ``None``)
+        should take as input the current step number, and optionally the amount
+        of data seen so far as a keyword argument ``data_seen``, and return a
+        single array that represents the learning rate. (Default: ``None``)
       use_adaptive_momentum: Boolean. Specifies whether to use the special rule
         from the original K-FAC paper for picking the momentum "decay" parameter
         at each step. Note that this won't work well for stochastic objectives.
@@ -209,8 +211,9 @@ class Optimizer(utils.WithStagedMethods):
         step function, or the constructor argument ``momentum_schedule``.
         (Default: ``False``)
       momentum_schedule: Callable. A schedule for the momentum parameter. This
-        should take as input the current step number and return a single array
-        that represents the momentum. (Default: ``None``)
+        should take as input the current step number, and optionally the amount
+        of data seen so far as a keyword argument ``data_seen``, and return a
+        single array that represents the momentum. (Default: ``None``)
       use_adaptive_damping: Boolean. Specifies whether the optimizer will use
         the Levenberg-Marquardt method to automatically adjust the damping every
         ``damping_adaptation_interval`` iterations. If this is set to ``False``
@@ -219,8 +222,9 @@ class Optimizer(utils.WithStagedMethods):
         argument. Note that the effectiveness of this technique seems to vary
         between problems. (Default: ``False``)
       damping_schedule: Callable. A schedule for the damping. This should take
-        as input the current step number and return a single array that
-        represents the learning rate. (Default: ``None``)
+        as input the current step number, and optionally the amount
+        of data seen so far as a keyword argument ``data_seen``, and return a
+        single array that represents the learning rate. (Default: ``None``)
       initial_damping: Scalar or None. This specifies the initial value of the
         damping that the optimizer will use when using automatic damping
         adaptation. (Default: ``None``)
@@ -371,9 +375,15 @@ class Optimizer(utils.WithStagedMethods):
 
     if momentum_schedule is not None:
 
-      def schedule_with_first_step_zero(global_step: Array) -> Array:
-        value = momentum_schedule(global_step)
+      def schedule_with_first_step_zero(
+          global_step: Array,
+          data_seen: Optional[Numeric] = None,
+      ) -> Array:
+
+        value = utils.call_func_with_conditional_kwargs(
+            momentum_schedule, global_step, data_seen=data_seen)
         check = jnp.equal(global_step, 0)
+
         return check * jnp.zeros_like(value) + (1 - check) * value
 
       self._momentum_schedule = schedule_with_first_step_zero
@@ -578,22 +588,27 @@ class Optimizer(utils.WithStagedMethods):
       learning_rate: Optional[Array],
       momentum: Optional[Array],
       damping: Optional[Array],
-      step_counter: Array
+      step_counter: Array,
+      data_seen: Array,
   ) -> Tuple[Optional[Array], Optional[Array], Array]:
     """Helper function for setting up learning rate, momentum and damping."""
 
     # Compute schedules if applicable
     if self._learning_rate_schedule is not None:
+
       assert learning_rate is None
-      learning_rate = self._learning_rate_schedule(step_counter)
+      learning_rate = utils.call_func_with_conditional_kwargs(
+          self._learning_rate_schedule, step_counter, data_seen=data_seen)
 
     if self._momentum_schedule is not None:
       assert momentum is None
-      momentum = self._momentum_schedule(step_counter)
+      momentum = utils.call_func_with_conditional_kwargs(
+          self._momentum_schedule, step_counter, data_seen=data_seen)
 
     if self._damping_schedule is not None:
       assert damping is None
-      damping = self._damping_schedule(step_counter)
+      damping = utils.call_func_with_conditional_kwargs(
+          self._damping_schedule, step_counter, data_seen=data_seen)
 
     else:
       assert damping is not None
@@ -977,7 +992,8 @@ class Optimizer(utils.WithStagedMethods):
     learning_rate, momentum, damping = self._setup_state_and_schedules(
         learning_rate, momentum,
         state.damping if self._use_adaptive_damping else damping,
-        state.step_counter)
+        state.step_counter, state.data_seen)
+
     func_args, rng = self._setup_func_args_and_rng(
         params, rng, batch, func_state)
 
@@ -1263,6 +1279,7 @@ class Optimizer(utils.WithStagedMethods):
             utils.matrix_of_inner_products(vectors),
             utils.vector_of_inner_products(grads, vectors))
 
+  @utils.staged
   def compute_quadratic_model_value(
       self,
       a: Array,

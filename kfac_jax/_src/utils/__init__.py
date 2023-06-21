@@ -58,6 +58,7 @@ auto_scope_function = misc.auto_scope_function
 auto_scope_method = misc.auto_scope_method
 register_state_class = misc.register_state_class
 replace_char = misc.replace_char
+call_func_with_conditional_kwargs = misc.call_func_with_conditional_kwargs
 Finalizable = misc.Finalizable
 State = misc.State
 del misc

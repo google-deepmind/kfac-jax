@@ -15,7 +15,8 @@
 import abc
 import dataclasses
 import functools
-from typing import Any, Iterator, Sequence, Type, Tuple, Union, Dict, TypeVar
+import inspect
+from typing import Any, Callable, Iterator, Sequence, Type, Tuple, Union, Dict, TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -304,3 +305,14 @@ def default_batch_size_extractor(batch: types.Batch) -> Numeric:
 def replace_char(original: str, new_str: str, index: int) -> str:
   """Replaces the character at a given location."""
   return original[:index] + new_str + original[index + 1 :]
+
+
+def call_func_with_conditional_kwargs(
+    func: Callable[..., Any],
+    *func_args: Any,
+    **kwargs: Any) -> Any:
+
+  sig = inspect.signature(func)
+  func_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+
+  return func(*func_args, **func_kwargs)
