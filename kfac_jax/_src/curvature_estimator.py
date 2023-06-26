@@ -626,6 +626,14 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
     """
 
   @abc.abstractmethod
+  def sync(
+      self,
+      state: StateType,
+      pmap_axis_name: Optional[str],
+  ) -> StateType:
+    """Synchronizes across devices the state of the estimator."""
+
+  @abc.abstractmethod
   def multiply_matpower(
       self,
       state: StateType,
@@ -732,9 +740,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
-      pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
-      sync: Union[Array, bool] = True,
   ) -> StateType:
     """Updates the estimator's curvature estimates.
 
@@ -751,14 +757,8 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         function (the ``tagged_func`` passed into the constructor) which to be
         used for the estimation process. Should have the same structure as the
         argument ``func_args`` passed in the constructor.
-      pmap_axis_name: When calling this method within a pmap context this
-        argument specifies the axis name over which to aggregate across
-        multiple devices/hosts.
       estimation_mode: The type of curvature estimator to use. By default
         (e.g. if ``None``) will use ``self.default_estimation_mode``. One of:
-      sync: If True and when calling this method within a pmap context, the
-        curvature matrix estimates will be synchronized (i.e. pmean'd) across
-        devices after being updated.
 
         * fisher_gradients - the basic estimation approach from the original
           K-FAC paper.
@@ -836,9 +836,13 @@ class BlockDiagonalCurvature(
     """Persistent state of the estimator.
 
     Attributes:
+      synced: A Jax boolean, specifying if the state has been synced across
+        devices (this does not include the cache, which is never explicitly
+        synced).
       blocks_states: A tuple of the state of the estimator corresponding to each
         block.
     """
+    synced: Array
     blocks_states: Tuple[curvature_blocks.CurvatureBlock.State, ...]
 
   def __init__(
@@ -1090,7 +1094,36 @@ class BlockDiagonalCurvature(
 
       blocks_init.append(block_init)
 
-    return BlockDiagonalCurvature.State(blocks_states=tuple(blocks_init))
+    return BlockDiagonalCurvature.State(
+        synced=jnp.asarray(True),
+        blocks_states=tuple(blocks_init),
+    )
+
+  def _sync_state(
+      self,
+      state: "BlockDiagonalCurvature.State",
+      pmap_axis_name: Optional[str],
+  ) -> "BlockDiagonalCurvature.State":
+    block_states = []
+    for block, block_state in zip(self.blocks, state.blocks_states):
+      block_states.append(block.sync(block_state.copy(), pmap_axis_name))
+    return BlockDiagonalCurvature.State(
+        synced=jnp.asarray(True),
+        blocks_states=tuple(block_states),
+    )
+
+  @utils.auto_scope_method
+  def sync(
+      self,
+      state: "BlockDiagonalCurvature.State",
+      pmap_axis_name: Optional[str],
+  ) -> "BlockDiagonalCurvature.State":
+    return jax.lax.cond(
+        state.synced,
+        lambda s: s,
+        functools.partial(self._sync_state, pmap_axis_name=pmap_axis_name),
+        state,
+    )
 
   @utils.auto_scope_method
   def multiply_matpower(
@@ -1182,9 +1215,7 @@ class BlockDiagonalCurvature(
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
-      pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
-      sync: Union[Array, bool] = True,
   ) -> "BlockDiagonalCurvature.State":
 
     if not self.finalized:
@@ -1215,9 +1246,12 @@ class BlockDiagonalCurvature(
 
         new_state.append(block_.update_curvature_matrix_estimate(
             block_state_, block_info_, ema_old_, ema_new_,
-            batch_size, pmap_axis_name, sync))
+            batch_size))
 
-      return BlockDiagonalCurvature.State(blocks_states=tuple(new_state))
+      return BlockDiagonalCurvature.State(
+          synced=jnp.asarray(False),
+          blocks_states=tuple(new_state),
+      )
 
     if estimation_mode == "fisher_gradients":
 
@@ -1370,7 +1404,10 @@ class BlockDiagonalCurvature(
     else:
       new_states = tuple(thunk() for thunk in thunks)
 
-    return BlockDiagonalCurvature.State(blocks_states=new_states)
+    return BlockDiagonalCurvature.State(
+        synced=state.synced,
+        blocks_states=new_states,
+    )
 
   @utils.auto_scope_method
   def to_diagonal_block_dense_matrix(
@@ -1540,9 +1577,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
-      pmap_axis_name: Optional[str],
       estimation_mode: Optional[str] = None,
-      sync: Union[Array, bool] = True,
   ) -> curvature_blocks.Full.State:
 
     rng = jax.random.split(rng, batch_size)
@@ -1567,9 +1602,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
           batch_size=1,
           rng=rng[index],
           func_args=args,
-          pmap_axis_name=pmap_axis_name,
           estimation_mode=estimation_mode,
-          sync=sync,
       )
 
     return jax.lax.fori_loop(0, batch_size, single_state_update, state)

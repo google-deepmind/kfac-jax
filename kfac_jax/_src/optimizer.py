@@ -679,7 +679,7 @@ class Optimizer(utils.WithStagedMethods):
     # TODO(kazukiosawa, jamesmartens, botev): Prepare an entirely separate
     # method to perform syncs (independent of any updating) to support more
     # advanced use cases.
-    return self.estimator.update_curvature_matrix_estimate(
+    state = self.estimator.update_curvature_matrix_estimate(
         state=estimator_state,
         ema_old=ema_old,
         ema_new=ema_new,
@@ -687,9 +687,11 @@ class Optimizer(utils.WithStagedMethods):
         batch_size=self._batch_size_extractor(func_args[-1]),
         rng=rng,
         func_args=func_args,
-        pmap_axis_name=self.pmap_axis_name,
-        sync=sync,
     )
+    if sync:
+      state = self.estimator.sync(state, pmap_axis_name=self.pmap_axis_name)
+
+    return state
 
   def _maybe_update_estimator_curvature(
       self,
@@ -1011,22 +1013,11 @@ class Optimizer(utils.WithStagedMethods):
 
     del rng  # should not be used after this point!
 
-    if self._include_norms_in_stats:
-      param_norm = utils.norm(params)
-    if self._include_per_param_norms_in_stats:
-      param_norm_per_param = utils.per_parameter_norm(params, "param_norm")
-
     # Compute loss and gradients
     loss, grads, func_state, aux = self._compute_loss_and_grads(func_args)
 
     # Sync
     loss, grads = utils.pmean_if_pmap((loss, grads), self.pmap_axis_name)
-
-    if self._include_norms_in_stats:
-      grad_norm = utils.norm(grads)
-
-    if self._include_per_param_norms_in_stats:
-      grad_norm_per_param = utils.per_parameter_norm(grads, "grad_norm")
 
     # Update the inverse curvature
     state = self._maybe_update_inverse_cache(state, damping)
@@ -1036,14 +1027,7 @@ class Optimizer(utils.WithStagedMethods):
         self._compute_preconditioned_gradient(state, grads, learning_rate,
                                               damping)
     )
-
     vectors = (preconditioned_gradient, state.velocities)
-
-    if self._include_norms_in_stats:
-      precon_grad_norm = utils.norm(preconditioned_gradient)
-    if self._include_per_param_norms_in_stats:
-      precon_grad_norm_per_param = utils.per_parameter_norm(
-          preconditioned_gradient, "precon_grad_norm")
 
     # Compute the coefficients for the vectors
     coefficients, quad_model_change = self._coefficients_and_quad_change(
@@ -1058,11 +1042,6 @@ class Optimizer(utils.WithStagedMethods):
     # Compute delta and update velocities
     delta = self.weighted_sum_of_objects(vectors, coefficients)
     state.velocities = delta
-
-    if self._include_norms_in_stats:
-      update_norm = utils.norm(delta)
-    if self._include_per_param_norms_in_stats:
-      update_norm_per_param = utils.per_parameter_norm(delta, "update_norm")
 
     # Update parameters
     params = jax.tree_util.tree_map(jnp.add, params, delta)
@@ -1115,16 +1094,18 @@ class Optimizer(utils.WithStagedMethods):
       stats["aux"] = utils.pmean_if_pmap(aux, self.pmap_axis_name)
 
     if self._include_norms_in_stats:
-      stats["param_norm"] = param_norm
-      stats["grad_norm"] = grad_norm
-      stats["precon_grad_norm"] = precon_grad_norm
-      stats["update_norm"] = update_norm
+      stats["param_norm"] = utils.norm(params)
+      stats["grad_norm"] = utils.norm(grads)
+      stats["precon_grad_norm"] = utils.norm(preconditioned_gradient)
+      stats["update_norm"] = utils.norm(delta)
 
     if self._include_per_param_norms_in_stats:
-      stats.update(param_norm_per_param)
-      stats.update(grad_norm_per_param)
-      stats.update(precon_grad_norm_per_param)
-      stats.update(update_norm_per_param)
+      stats.update(utils.per_parameter_norm(params, "param_norm"))
+      stats.update(utils.per_parameter_norm(grads, "grad_norm"))
+      stats.update(
+          utils.per_parameter_norm(preconditioned_gradient, "precon_grad_norm")
+      )
+      stats.update(utils.per_parameter_norm(delta, "update_norm"))
 
     if self._value_func_has_state:
       return params, state, func_state, stats

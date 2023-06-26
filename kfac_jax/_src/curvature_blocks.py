@@ -265,10 +265,10 @@ class CurvatureBlock(utils.Finalizable):
 
   def state_dependent_scale(self, state: "CurvatureBlock.State") -> Numeric:
     """A scalar pre-factor of the curvature, computed from the most fresh curvature estimate."""
+    del state  # Unused
     return 1.0
 
   def __str__(self):
-
     return f"{self._name!r}[{self.parameters_shapes!r}]"
 
   @utils.auto_scope_method
@@ -317,6 +317,14 @@ class CurvatureBlock(utils.Finalizable):
       cache_eigenvalues: bool,
   ) -> "CurvatureBlock.State":
     """The non-public interface of ``init``."""
+
+  @abc.abstractmethod
+  def sync(
+      self,
+      state: "CurvatureBlock.State",
+      pmap_axis_name: str,
+  ) -> "CurvatureBlock.State":
+    """Syncs the state across different devices (does not sync the cache)."""
 
   @utils.auto_scope_method
   def multiply_matpower(
@@ -459,8 +467,6 @@ class CurvatureBlock(utils.Finalizable):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
-      sync: Union[Array, bool] = True,
   ) -> "CurvatureBlock.State":
     """Updates the block's curvature estimates using the ``info`` provided.
 
@@ -480,11 +486,6 @@ class CurvatureBlock(utils.Finalizable):
       ema_new: Specifies the weight of the new value when computing the updated
           estimate in the moving average.
       batch_size: The batch size used in computing the values in ``info``.
-      pmap_axis_name: The name of any pmap axis, which might be needed for
-          computing the updates.
-      sync: If True and this method is called within pmap context,the curvature
-          matrix estimates will be synchronized (i.e. pmean'd) axross devices
-          after being updated.
     """
 
   @utils.auto_scope_method
@@ -578,6 +579,13 @@ class ScaledIdentity(CurvatureBlock):
         cache=None,
     )
 
+  def sync(
+      self,
+      state: CurvatureBlock.State,
+      pmap_axis_name: str,
+  ) -> CurvatureBlock.State:
+    return state
+
   def _multiply_matpower_unscaled(
       self,
       state: CurvatureBlock.State,
@@ -617,8 +625,6 @@ class ScaledIdentity(CurvatureBlock):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
-      sync: Union[Array, bool] = True,
   ) -> CurvatureBlock.State:
 
     return state.copy()
@@ -665,9 +671,20 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
     return Diagonal.State(
         cache=None,
-        diagonal_factors=tuple(utils.WeightedMovingAverage.zeros_array(
-            shape, self.dtype) for shape in self.parameters_shapes),
+        diagonal_factors=tuple(
+            utils.WeightedMovingAverage.zeros_array(shape, self.dtype)
+            for shape in self.parameters_shapes
+        ),
     )
+
+  def sync(
+      self,
+      state: "Diagonal.State",
+      pmap_axis_name: str,
+  ) -> "Diagonal.State":
+    for factor in state.diagonal_factors:
+      factor.sync(pmap_axis_name)
+    return state
 
   def _multiply_matpower_unscaled(
       self,
@@ -697,41 +714,6 @@ class Diagonal(CurvatureBlock, abc.ABC):
   ) -> Array:
     return jnp.concatenate([f.value.flatten() for f in state.diagonal_factors],
                            axis=0)
-
-  @utils.auto_scope_method
-  def update_curvature_matrix_estimate(
-      self,
-      state: "Diagonal.State",
-      estimation_data: Dict[str, Sequence[Array]],
-      ema_old: Numeric,
-      ema_new: Numeric,
-      batch_size: Numeric,
-      pmap_axis_name: Optional[str],
-      sync: Union[Array, bool] = True,
-  ) -> "Diagonal.State":
-
-    # This function call will return a copy of state:
-    state = self._update_curvature_matrix_estimate(
-        state, estimation_data, ema_old, ema_new, batch_size)
-
-    def sync_factors(state):
-      for factor in state.diagonal_factors:
-        factor.sync(pmap_axis_name)
-      return state
-
-    state = jax.lax.cond(sync, sync_factors, lambda s: s, state)
-    return state
-
-  @abc.abstractmethod
-  def _update_curvature_matrix_estimate(
-      self,
-      state: "Diagonal.State",
-      estimation_data: Dict[str, Sequence[Array]],
-      ema_old: Numeric,
-      ema_new: Numeric,
-      batch_size: Numeric,
-  ) -> "Diagonal.State":
-    pass
 
   def _update_cache(
       self,
@@ -867,6 +849,14 @@ class Full(CurvatureBlock, abc.ABC):
             [self.dim, self.dim], self.dtype),
     )
 
+  def sync(
+      self,
+      state: "Full.State",
+      pmap_axis_name: str,
+  ) -> "Full.State":
+    state.matrix.sync(pmap_axis_name)
+    return state
+
   def _multiply_matpower_unscaled(
       self,
       state: "Full.State",
@@ -916,40 +906,6 @@ class Full(CurvatureBlock, abc.ABC):
       return utils.safe_psd_eigh(state.matrix.value)[0]
     else:
       return state.cache["eigenvalues"]
-
-  @utils.auto_scope_method
-  def update_curvature_matrix_estimate(
-      self,
-      state: "Full.State",
-      estimation_data: Dict[str, Sequence[Array]],
-      ema_old: Numeric,
-      ema_new: Numeric,
-      batch_size: Numeric,
-      pmap_axis_name: Optional[str],
-      sync: Union[Array, bool] = True,
-  ) -> "Full.State":
-
-    # This function call will return a copy of state:
-    state = self._update_curvature_matrix_estimate(
-        state, estimation_data, ema_old, ema_new, batch_size)
-
-    def sync_matrix(state):
-      state.matrix.sync(pmap_axis_name)
-      return state
-
-    state = jax.lax.cond(sync, sync_matrix, lambda s: s, state)
-    return state
-
-  @abc.abstractmethod
-  def _update_curvature_matrix_estimate(
-      self,
-      state: "Full.State",
-      estimation_data: Dict[str, Sequence[Array]],
-      ema_old: Numeric,
-      ema_new: Numeric,
-      batch_size: Numeric,
-  ) -> "Full.State":
-    pass
 
   def _update_cache(
       self,
@@ -1129,7 +1085,19 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
         cache[str(power)][f"{i}_factor"] = jnp.zeros((d, d), dtype=self.dtype)
 
-    return KroneckerFactored.State(cache=cache, factors=tuple(factors))
+    return KroneckerFactored.State(
+        cache=cache,
+        factors=tuple(factors),
+    )
+
+  def sync(
+      self,
+      state: "KroneckerFactored.State",
+      pmap_axis_name: str,
+  ) -> "KroneckerFactored.State":
+    for factor in state.factors:
+      factor.sync(pmap_axis_name)
+    return state
 
   def _multiply_matpower_unscaled(
       self,
@@ -1218,34 +1186,13 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-      pmap_axis_name: Optional[str],
-      sync: Union[Array, bool] = True,
   ) -> "KroneckerFactored.State":
     assert len(state.factors) == len(self.axis_groups)
 
     # This function call will return a copy of state:
-    state = self._update_curvature_matrix_estimate(
+    return self._update_curvature_matrix_estimate(
         state, estimation_data, ema_old, ema_new, batch_size
     )
-
-    def sync_factors(state):
-      for factor in state.factors:
-        factor.sync(pmap_axis_name)
-      return state
-
-    state = jax.lax.cond(sync, sync_factors, lambda s: s, state)
-    return state
-
-  @abc.abstractmethod
-  def _update_curvature_matrix_estimate(
-      self,
-      state: "KroneckerFactored.State",
-      estimation_data: Mapping[str, Sequence[Array]],
-      ema_old: Numeric,
-      ema_new: Numeric,
-      batch_size: Numeric,
-  ) -> "KroneckerFactored.State":
-    pass
 
   def _update_cache(  # pytype: disable=signature-mismatch  # numpy-scalars
       self,
@@ -1307,17 +1254,6 @@ class TwoKroneckerFactored(KroneckerFactored):
     """Whether this layer's equation has a bias."""
     return len(self._layer_tag_eq.invars) == 4
 
-  @abc.abstractmethod
-  def _update_curvature_matrix_estimate(
-      self,
-      state: "KroneckerFactored.State",
-      estimation_data: Mapping[str, Sequence[Array]],
-      ema_old: Numeric,
-      ema_new: Numeric,
-      batch_size: Numeric,
-  ) -> "KroneckerFactored.State":
-    pass
-
   def parameters_shaped_list_to_array(
       self,
       parameters_shaped_list: Sequence[Array],
@@ -1363,7 +1299,8 @@ class NaiveDiagonal(Diagonal):
   batch size.
   """
 
-  def _update_curvature_matrix_estimate(
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
       self,
       state: "NaiveDiagonal.State",
       estimation_data: Dict[str, Sequence[Array]],
@@ -1390,7 +1327,8 @@ class NaiveFull(Full):
   individual data point, and ``N`` is the batch size.
   """
 
-  def _update_curvature_matrix_estimate(
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
       self,
       state: Full.State,
       estimation_data: Dict[str, Sequence[Array]],
@@ -1428,7 +1366,8 @@ class DenseDiagonal(Diagonal):
     """Whether the layer has a bias parameter."""
     return len(self.parameters_shapes) == 2
 
-  def _update_curvature_matrix_estimate(
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
       self,
       state: "Diagonal.State",
       estimation_data: Dict[str, Sequence[Array]],
@@ -1460,7 +1399,8 @@ class DenseDiagonal(Diagonal):
 class DenseFull(Full):
   """A `Full` block specifically for dense layers."""
 
-  def _update_curvature_matrix_estimate(
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
       self,
       state: "Full.State",
       estimation_data: Dict[str, Sequence[Array]],
@@ -1491,7 +1431,8 @@ class DenseFull(Full):
 class DenseTwoKroneckerFactored(TwoKroneckerFactored):
   """A :class:`~TwoKroneckerFactored` block specifically for dense layers."""
 
-  def _update_curvature_matrix_estimate(
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
       self,
       state: KroneckerFactored.State,
       estimation_data: Mapping[str, Sequence[Array]],
@@ -1591,7 +1532,8 @@ class Conv2DDiagonal(Diagonal):
 
     return jnp.square(vjp(output_tangent[None])[1])
 
-  def _update_curvature_matrix_estimate(
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
       estimation_data: Dict[str, Sequence[Array]],
@@ -1693,7 +1635,8 @@ class Conv2DFull(Full):
 
     return jnp.outer(flat_tangents, flat_tangents)
 
-  def _update_curvature_matrix_estimate(
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
       self,
       state: Full.State,
       estimation_data: Dict[str, Sequence[Array]],
@@ -1838,7 +1781,8 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
     normalizer = tangent_of_output.shape[0] * self.num_locations
     return stats / normalizer
 
-  def _update_curvature_matrix_estimate(
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
       self,
       state: TwoKroneckerFactored.State,
       estimation_data: Mapping[str, Sequence[Array]],
@@ -1914,7 +1858,8 @@ class ScaleAndShiftDiagonal(Diagonal):
     """Whether this layer's equation has a shift."""
     return self._layer_tag_eq.params["has_shift"]
 
-  def _update_curvature_matrix_estimate(
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
       estimation_data: Dict[str, Sequence[Array]],
@@ -1975,7 +1920,8 @@ class ScaleAndShiftFull(Full):
     """Whether this layer's equation has a shift."""
     return self._layer_tag_eq.params["has_shift"]
 
-  def _update_curvature_matrix_estimate(
+  @utils.auto_scope_method
+  def update_curvature_matrix_estimate(
       self,
       state: Full.State,
       estimation_data: Dict[str, Sequence[Array]],

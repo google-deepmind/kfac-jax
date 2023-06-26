@@ -34,6 +34,7 @@ OptaxState = kfac_jax.utils.ArrayTree
 ValueFunc = kfac_jax.optimizer.ValueFunc
 FuncArgsVariants = kfac_jax.optimizer.FuncArgsVariants
 ScheduleType = kfac_jax.optimizer.ScheduleType
+OptaxCtor = Callable[[ScheduleType], optax.GradientTransformation]
 EstimatorState = kfac_jax.curvature_estimator.BlockDiagonalCurvature.State
 
 
@@ -217,6 +218,17 @@ class Preconditioner:
       damping = self._damping_schedule(state.count)
     return damping + self._l2_reg
 
+  def sync_estimator_state(
+      self,
+      state: PreconditionState,
+  ) -> PreconditionState:
+    """Syncs the estimator state."""
+    return PreconditionState(
+        count=state.count,
+        estimator_state=self.estimator.sync(
+            state.estimator_state, pmap_axis_name=self.pmap_axis_name),
+    )
+
   def should_update_estimate_curvature(
       self, state: PreconditionState
   ) -> Union[Array, bool]:
@@ -303,6 +315,7 @@ class Preconditioner:
           "PreconditionState is not initialized. Call"
           " `maybe_update_estimator_curvature` first."
       )
+
     return self._maybe_update_estimator_state(
         state,
         self.should_update_inverse_cache(state),
@@ -423,8 +436,9 @@ class OptaxWrapper:
       value_func_has_aux: bool,
       value_func_has_state: bool,
       value_func_has_rng: bool,
-      optax_optimizer: optax.GradientTransformation,
-      batch_process_func: Optional[Callable[[Batch], Batch]] = lambda x: x,
+      learning_rate: ScheduleType,
+      optax_optimizer_ctor: OptaxCtor,
+      batch_process_func: Callable[[Batch], Batch] = lambda x: x,
       preconditioner: Optional[Preconditioner] = None,
       include_norms_in_stats: bool = False,
       include_per_param_norms_in_stats: bool = False,
@@ -447,7 +461,9 @@ class OptaxWrapper:
       value_func_has_rng: Boolean. Specifies whether the provided callable
         `value_and_grad_func` additionally takes as input an rng key. (Default:
         `False`)
-      optax_optimizer: The optax optimizer to be wrapped.
+      learning_rate: The learning rate or learning rate schedule.
+      optax_optimizer_ctor: A callable that takes the learning rate schedule as
+        an input and returns the optax optimizer.
       batch_process_func: Callable. A function which to be called on each batch
         before feeding to the KFAC on device. This could be useful for specific
         device input optimizations. (Default: `lambda x: x`)
@@ -464,7 +480,12 @@ class OptaxWrapper:
     self._value_func_has_aux = value_func_has_aux
     self._value_func_has_state = value_func_has_state
     self._value_func_has_rng = value_func_has_rng
-    self._optax_optimizer = optax_optimizer
+    if not callable(learning_rate):
+      self._learning_rate = lambda _: learning_rate
+    else:
+      self._learning_rate = learning_rate
+    self._optax_optimizer = optax_optimizer_ctor(self._learning_rate)
+
     self._preconditioner = preconditioner
     self._include_norms_in_stats = include_norms_in_stats
     self._include_per_param_norms_in_stats = include_per_param_norms_in_stats
@@ -480,6 +501,7 @@ class OptaxWrapper:
         donate_argnums=list(range(5)),
         in_axes=(0,) * 5 + (None,),
     )
+
     self._pmap_init = jax.pmap(
         lambda p, *_: self._optax_optimizer.init(p),
         axis_name=self.pmap_axis_name,
@@ -559,12 +581,22 @@ class OptaxWrapper:
         has_aux=self._value_func_has_aux,
         has_state=self._value_func_has_state,
     )
+    loss, stats, grads = kfac_jax.utils.pmean_if_pmap(  # pytype: disable=wrong-keyword-args
+        (loss, stats, grads), axis_name=self.pmap_axis_name
+    )
     stats = stats or {}
     stats["loss"] = loss
-    stats, grads = jax.lax.pmean((stats, grads), axis_name=self.pmap_axis_name)
 
     # Compute and apply updates via our optimizer.
     updates, new_state = self._optax_optimizer.update(grads, state, params)
+    new_params = optax.apply_updates(params, updates)
+
+    # Add step and batch size
+    batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
+    stats["step"] = global_step_int + 1
+    stats["batch_size"] = batch_size * jax.device_count()
+    stats["data_seen"] = stats["step"] * stats["batch_size"]
+    stats["learning_rate"] = self._learning_rate(global_step_int)
     if self._include_norms_in_stats:
       stats["grad_norm"] = kfac_jax.utils.norm(grads)
       stats["update_norm"] = kfac_jax.utils.norm(updates)
@@ -573,13 +605,6 @@ class OptaxWrapper:
       stats.update(kfac_jax.utils.per_parameter_norm(grads, "grad_norm"))
       stats.update(kfac_jax.utils.per_parameter_norm(updates, "update_norm"))
       stats.update(kfac_jax.utils.per_parameter_norm(params, "param_norm"))
-    new_params = optax.apply_updates(params, updates)
-
-    # Add step and batch size
-    stats["step"] = global_step_int + 1
-    batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
-    stats["batch_size"] = batch_size * jax.device_count()
-    stats["data_seen"] = stats["step"] * stats["batch_size"]
 
     if self._value_func_has_state:
       return new_params, new_state, new_func_state, stats
@@ -898,13 +923,50 @@ def stepwise_schedule(
     return value * jnp.minimum(1., global_step / warmup_steps)
 
 
-def exponential_schedule(
-    global_step: Numeric,
-    initial_value: float,
-    rate: float,
+def exponential_decay_schedule(
+    global_step: int,
+    dataset_size: int,
+    train_total_batch_size: Optional[int],
+    total_steps: Optional[int],
+    total_epochs: Optional[float],
+    init_value: float,
+    end_value: float,
+    decay_epochs: Optional[float] = None,
+    decay_steps: Optional[int] = None,
+    decay_fraction: Optional[float] = None,
     **_: Any,
-) -> Numeric:
-  return initial_value * (rate ** global_step)
+):
+  """Exponential decay schedule."""
+  if (total_steps is None) == (total_epochs is None):
+    raise ValueError("Only one of `steps` and `epochs` can be set.")
+
+  n = sum(x is not None for x in [decay_epochs, decay_steps, decay_fraction])
+
+  if n != 1:
+    raise ValueError(
+        f"Exactly one of warmup_steps={decay_steps}, "
+        f"warmup_epochs={decay_epochs} and warmpu_fraction="
+        f"{decay_fraction} must be set."
+    )
+
+  if (
+      decay_epochs is not None or total_epochs is not None
+  ) and train_total_batch_size is None:
+    raise ValueError(
+        "Batch size must be known when passing epochs or warmup_epochs."
+    )
+
+  if decay_epochs is not None:
+    decay_steps = decay_epochs * dataset_size / train_total_batch_size
+  elif decay_fraction is not None:
+    decay_steps = decay_fraction * total_steps
+
+  return optax.exponential_decay(
+      init_value=init_value,
+      end_value=end_value,
+      decay_rate=end_value / init_value,
+      transition_steps=decay_steps,
+  )(global_step)
 
 
 def construct_schedule(
@@ -922,8 +984,8 @@ def construct_schedule(
     return functools.partial(cosine_schedule, **kwargs)
   elif name == "stepwise":
     return functools.partial(stepwise_schedule, **kwargs)
-  elif name == "exponential":
-    return functools.partial(exponential_schedule, **kwargs)
+  elif name == "exponential_decay":
+    return functools.partial(exponential_decay_schedule, **kwargs)
   else:
     raise NotImplementedError(name)
 
@@ -1007,14 +1069,14 @@ def create_optimizer(
         total_epochs=total_epochs,
         **kwargs.pop("learning_rate_schedule")
     )
+    optax_ctor = lambda lr: (getattr(optax, name)(learning_rate=lr, **kwargs))
     return OptaxWrapper(
         value_and_grad_func=value_and_grad_func,
         value_func_has_aux=has_aux,
         value_func_has_rng=has_rng,
         value_func_has_state=has_func_state,
-        optax_optimizer=getattr(optax, name)(
-            learning_rate=learning_rate_schedule, **kwargs,
-        )
+        learning_rate=learning_rate_schedule,
+        optax_optimizer_ctor=optax_ctor,
     )
 
   else:

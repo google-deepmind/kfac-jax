@@ -113,7 +113,7 @@ class State(abc.ABC):
   def field_values(self) -> Tuple[ArrayTree, ...]:
     return tuple(getattr(self, name) for name in self.field_names())
 
-  def copy(self):
+  def copy(self: StateType) -> StateType:
     """Returns a copy of the PyTree structure (but not the JAX arrays)."""
     (flattened, structure) = jax.tree_util.tree_flatten(self)
     return jax.tree_util.tree_unflatten(structure, flattened)

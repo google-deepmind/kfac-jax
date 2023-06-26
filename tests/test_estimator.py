@@ -64,16 +64,17 @@ def compute_exact_approx_curvature(
       approx_powers_to_cache=None,
       cache_eigenvalues=False,
   )
-  return estimator.update_curvature_matrix_estimate(
+  state = estimator.update_curvature_matrix_estimate(
       state=state,
       ema_old=0.0,
       ema_new=1.0,
       batch_size=batch_size,
       rng=rng,
       func_args=func_args,
-      pmap_axis_name="i",
       estimation_mode=f"{curvature_type}_exact",
   )
+  estimator.sync(state, pmap_axis_name="i")
+  return state
 
 
 class TestEstimator(parameterized.TestCase):
