@@ -688,10 +688,13 @@ class Optimizer(utils.WithStagedMethods):
         rng=rng,
         func_args=func_args,
     )
-    if sync:
-      state = self.estimator.sync(state, pmap_axis_name=self.pmap_axis_name)
-
-    return state
+    return jax.lax.cond(
+        sync,
+        functools.partial(self.estimator.sync,
+                          pmap_axis_name=self.pmap_axis_name),
+        lambda state_: state_,
+        state,
+    )
 
   def _maybe_update_estimator_curvature(
       self,
