@@ -676,9 +676,6 @@ class Optimizer(utils.WithStagedMethods):
       sync: Union[Array, bool] = True
   ) -> curvature_estimator.BlockDiagonalCurvature.State:
     """Updates the curvature estimator state."""
-    # TODO(kazukiosawa, jamesmartens, botev): Prepare an entirely separate
-    # method to perform syncs (independent of any updating) to support more
-    # advanced use cases.
     state = self.estimator.update_curvature_matrix_estimate(
         state=estimator_state,
         ema_old=ema_old,

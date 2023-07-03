@@ -241,11 +241,6 @@ class Preconditioner:
       self, state: PreconditionState
   ) -> Union[Array, bool]:
     """Whether at the current step the preconditioner should synchronize (pmean) the curvature estimates."""
-    # TODO(kazukiosawa): Once an independent method for sync curvatures is
-    # introduced, remove this method and modify to call the sync method at the
-    # right timing (i.e., right before calling `self.estimator.update_cache()`
-    # or `self.estimator.multiply_inverse()`).
-
     # sync only before inverses are calculated (either for updating the
     # cache or for preconditioning).
     if not self._use_cached_inverses:
@@ -281,6 +276,33 @@ class Preconditioner:
     state = self.maybe_update_inverse_cache(state)
     return PreconditionState(state.count, state.estimator_state)
 
+  def _update_estimator_curvature(
+      self,
+      estimator_state: EstimatorState,
+      func_args: FuncArgsVariants,
+      rng: PRNGKey,
+      ema_old: Numeric,
+      ema_new: Numeric,
+      sync: Union[Array, bool] = True
+  ) -> EstimatorState:
+    """Updates the curvature estimator state."""
+    state = self.estimator.update_curvature_matrix_estimate(
+        state=estimator_state,
+        ema_old=ema_old,
+        ema_new=ema_new,
+        # Note that the batch is always the last entry of FuncArgsVariantsdef
+        batch_size=self._batch_size_extractor(func_args[-1]),
+        rng=rng,
+        func_args=func_args,
+    )
+    return jax.lax.cond(
+        sync,
+        functools.partial(self.estimator.sync,
+                          pmap_axis_name=self.pmap_axis_name),
+        lambda state_: state_,
+        state,
+    )
+
   def maybe_update_estimator_curvature(
       self,
       state: PreconditionState,
@@ -294,14 +316,11 @@ class Preconditioner:
     return self._maybe_update_estimator_state(
         state,
         self.should_update_estimate_curvature(state),
-        self.estimator.update_curvature_matrix_estimate,
+        self._update_estimator_curvature,
+        func_args=func_args,
+        rng=rng,
         ema_old=ema_old,
         ema_new=1.0,
-        # Note that the batch is always the last entry of FuncArgsVariantsdef
-        batch_size=self._batch_size_extractor(func_args[-1]),
-        rng=rng,
-        func_args=func_args,
-        pmap_axis_name=self.pmap_axis_name,
         sync=sync,
     )
 
