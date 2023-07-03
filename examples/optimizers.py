@@ -620,10 +620,19 @@ class OptaxWrapper:
       stats["grad_norm"] = kfac_jax.utils.norm(grads)
       stats["update_norm"] = kfac_jax.utils.norm(updates)
       stats["param_norm"] = kfac_jax.utils.norm(params)
+      stats["rel_grad_norm"] = stats["grad_norm"] / stats["param_norm"]
+      stats["rel_update_norm"] = stats["update_norm"] / stats["param_norm"]
     if self._include_per_param_norms_in_stats:
       stats.update(kfac_jax.utils.per_parameter_norm(grads, "grad_norm"))
       stats.update(kfac_jax.utils.per_parameter_norm(updates, "update_norm"))
-      stats.update(kfac_jax.utils.per_parameter_norm(params, "param_norm"))
+      param_norms = kfac_jax.utils.per_parameter_norm(params, "param_norm")
+      for key in param_norms:
+        norm = param_norms[key]
+        stats[key] = norm
+        grad_key = key.replace("param", "grad")
+        stats["rel_" + grad_key] = stats[grad_key] / norm
+        upd_key = key.replace("param", "update")
+        stats["rel_" + upd_key] = stats[upd_key] / norm
 
     if self._value_func_has_state:
       return new_params, new_state, new_func_state, stats
