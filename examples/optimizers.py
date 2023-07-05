@@ -13,7 +13,7 @@
 # limitations under the License.
 """Utilities for setting up different optimizers."""
 import functools
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Type, Union
+from typing import Any, Callable, Dict, Iterator, Mapping, NamedTuple, Optional, Sequence, Tuple, Type, Union
 
 from absl import logging
 import jax
@@ -34,13 +34,14 @@ OptaxState = kfac_jax.utils.ArrayTree
 ValueFunc = kfac_jax.optimizer.ValueFunc
 FuncArgsVariants = kfac_jax.optimizer.FuncArgsVariants
 ScheduleType = kfac_jax.optimizer.ScheduleType
-OptaxCtor = Callable[[ScheduleType], optax.GradientTransformation]
+OptaxCtor = Callable[[ScheduleType], optax.GradientTransformationExtraArgs]
 EstimatorState = kfac_jax.curvature_estimator.BlockDiagonalCurvature.State
+EmptyState = optax.EmptyState
 
 
 class PreconditionState(NamedTuple):
-  count: Optional[Array]
-  estimator_state: Optional[EstimatorState]
+  count: Array
+  estimator_state: EstimatorState
 
 
 class Preconditioner:
@@ -179,13 +180,6 @@ class Preconditioner:
             cache_eigenvalues=False,
         ),
     )
-
-  def maybe_init(
-      self, state: PreconditionState, func_args: FuncArgsVariants, rng: PRNGKey
-  ) -> PreconditionState:
-    if state.count is not None:
-      return state
-    return self.init(func_args, rng)
 
   @property
   def _exact_powers_to_cache(self) -> Optional[Union[int, Sequence[int]]]:
@@ -412,66 +406,38 @@ class Preconditioner:
     return updates
 
   def as_gradient_transform(
-      self, use_inverse: bool = True, inc_count: bool = True,
-  ) -> optax.GradientTransformation:
+      self, use_inverse: bool = True
+  ) -> optax.GradientTransformationExtraArgs:
     """Multiplies the inverse or non-inverse curvature estimation matrix to updates."""
 
     def init_fn(params):
       del params
-      # The state must be initialized by `maybe_init()` with the appropriate
-      # func_args (FuncArgsVariants).
-      return PreconditionState(None, None)
+      return EmptyState()
 
     multiply_fn = self.apply if use_inverse else self.multiply_curvature
-    increment_fn = optax.safe_int32_increment if inc_count else lambda x: x
 
-    def update_fn(updates, state: PreconditionState, params=None):
-      del params
-      updates = multiply_fn(updates, state)
-      count_inc = increment_fn(state.count)
-      return updates, PreconditionState(count_inc, state.estimator_state)
+    def update_fn(
+        updates,
+        state,
+        params=None,
+        *,
+        precond_state: PreconditionState,
+        **extra_args,
+    ):
+      del params, extra_args
+      updates = multiply_fn(updates, precond_state)
+      return updates, state
 
-    return optax.GradientTransformation(init_fn, update_fn)
+    return optax.GradientTransformationExtraArgs(init_fn, update_fn)
 
-
-def extract_precondition_state(state: OptaxState) -> PreconditionState:
-  """Extracts the PreconditionState from OptaxState."""
-  if isinstance(state, Iterable):
-    # Assuming that every PreconditionState in the state is identical.
-    precon_state = None
-    for s in state:
-      if isinstance(s, PreconditionState):
-        if precon_state is None:
-          precon_state = s
-        elif s.count is not None:  # already initialized
-          # Check if every PreconditionState is identical if it is initialized.
-          if id(s) != id(precon_state):
-            raise ValueError(
-                "Every PreconditionState in the state must be identical."
-            )
-    if precon_state is None:
-      raise ValueError("The state must have at least one PreconditionState.")
-    return precon_state
-  elif isinstance(state, PreconditionState):
-    return state
-  else:
-    raise ValueError("state {} is not a PreconditionState.".format(state))
+  def increment_count(self, state: PreconditionState):
+    count_inc = optax.safe_int32_increment(state.count)
+    return PreconditionState(count_inc, state.estimator_state)
 
 
-def replace_precondition_state(
-    state: OptaxState, new_precond_state: PreconditionState
-) -> Union[List[Union[OptaxState, PreconditionState]], PreconditionState]:
-  """Replaces the PreconditionState in OptaxState with new one."""
-  extract_precondition_state(state)  # run for validating the state
-  if isinstance(state, Iterable):
-    # Replace every PreconditionState in the state with the identical one.
-    new_state = [
-        new_precond_state if isinstance(s, PreconditionState) else s
-        for s in state
-    ]
-    return new_state
-  else:
-    return new_precond_state
+class OptaxAndPreconditionState(NamedTuple):
+  optax_state: OptaxState
+  precond_state: Optional[PreconditionState] = None
 
 
 class OptaxWrapper:
@@ -550,7 +516,7 @@ class OptaxWrapper:
     )
 
     self._pmap_init = jax.pmap(
-        lambda p, *_: self._optax_optimizer.init(p),
+        lambda p, *_: OptaxAndPreconditionState(self._optax_optimizer.init(p)),
         axis_name=self.pmap_axis_name,
     )
     if self._preconditioner is not None:
@@ -561,9 +527,8 @@ class OptaxWrapper:
             )
         )
       preconditioner: Preconditioner = self._preconditioner
-      def _maybe_init_preconditioner(
+      def _init_preconditioner(
           params: Params,
-          state: OptaxState,
           rng: PRNGKey,
           batch: Batch,
           func_state: Optional[FuncState] = None,
@@ -578,13 +543,10 @@ class OptaxWrapper:
             has_state=self._value_func_has_state,
             has_rng=self._value_func_has_rng,
         )
-        precond_state = preconditioner.maybe_init(
-            extract_precondition_state(state), func_args, rng
-        )
-        return precond_state
+        return preconditioner.init(func_args, rng)
 
-      self._pmap_maybe_init_preconditioner = jax.pmap(
-          _maybe_init_preconditioner,
+      self._pmap_init_preconditioner = jax.pmap(
+          _init_preconditioner,
           axis_name=self.pmap_axis_name,
       )
 
@@ -594,19 +556,22 @@ class OptaxWrapper:
       rng: PRNGKey,
       batch: Batch,
       func_state: Optional[FuncState] = None,
-  ) -> OptaxState:
+  ) -> OptaxAndPreconditionState:
     """Initializes the optimizer and returns the appropriate optimizer state."""
     return self._pmap_init(params, rng, batch, func_state)
 
   def _step(
       self,
       params: Params,
-      state: OptaxState,
+      state: OptaxAndPreconditionState,
       rng: PRNGKey,
       batch: Batch,
       func_state: Optional[FuncState] = None,
       global_step_int: Optional[int] = None,
-  ) -> kfac_jax.optimizer.ReturnEither:
+  ) -> Union[
+      Tuple[Params, OptaxAndPreconditionState, FuncState, Mapping[str, Array]],
+      Tuple[Params, OptaxAndPreconditionState, Mapping[str, Array]],
+  ]:
     """A single step of optax."""
     batch = self._batch_process_func(batch)
     func_args = kfac_jax.optimizer.make_func_args(
@@ -615,13 +580,14 @@ class OptaxWrapper:
         has_rng=self._value_func_has_rng
     )
 
+    optax_state, precond_state = state.optax_state, state.precond_state
     if self._preconditioner is not None:
       precond_state = self._preconditioner.maybe_update(
-          extract_precondition_state(state),
+          precond_state,
           func_args,
           rng,
       )
-      state = replace_precondition_state(state, precond_state)
+      precond_state = self._preconditioner.increment_count(precond_state)
     out, grads = self._value_and_grad_func(*func_args)
     loss, new_func_state, stats = kfac_jax.optimizer.extract_func_outputs(
         out,
@@ -635,7 +601,13 @@ class OptaxWrapper:
     stats["loss"] = loss
 
     # Compute and apply updates via our optimizer.
-    updates, new_state = self._optax_optimizer.update(grads, state, params)
+    updates, new_optax_state = self._optax_optimizer.update(
+        grads,
+        optax_state,
+        params,
+        precond_state=precond_state,
+    )
+    new_state = OptaxAndPreconditionState(new_optax_state, precond_state)
     new_params = optax.apply_updates(params, updates)
 
     # Add step and batch size
@@ -670,22 +642,22 @@ class OptaxWrapper:
   def step(
       self,
       params: Params,
-      state: OptaxState,
+      state: OptaxAndPreconditionState,
       rng: PRNGKey,
       data_iterator: Iterator[Batch],
       func_state: Optional[FuncState] = None,
-      global_step_int: Optional[int] = None
+      global_step_int: Optional[int] = None,
   ) -> Union[
       Tuple[Params, Any, FuncState, Mapping[str, Array]],
       Tuple[Params, Any, Mapping[str, Array]],
   ]:
     """A step with similar interface to KFAC."""
     batch = next(data_iterator)
-    if self._preconditioner is not None:
-      precond_state = self._pmap_maybe_init_preconditioner(
-          params, state, rng, batch, func_state
+    if self._preconditioner is not None and state.precond_state is None:
+      precond_state = self._pmap_init_preconditioner(
+          params, rng, batch, func_state
       )
-      state = replace_precondition_state(state, precond_state)
+      state = OptaxAndPreconditionState(state.optax_state, precond_state)
     return self._pmap_step(
         params,
         state,
@@ -1125,7 +1097,14 @@ def create_optimizer(
         total_epochs=total_epochs,
         **kwargs.pop("learning_rate_schedule")
     )
-    optax_ctor = lambda lr: (getattr(optax, name)(learning_rate=lr, **kwargs))
+    tx_fn = getattr(optax, name)
+
+    def optax_ctor(lr: ScheduleType) -> optax.GradientTransformationExtraArgs:
+      # Wraps a gradient transformation, so that its `update_fn` ignores extra
+      # args (i.e. "precond_state", for preconditioning) if it doesn't use a
+      # preconditioner e.g. `optax.adamw`.
+      return optax.with_extra_args_support(tx_fn(learning_rate=lr, **kwargs))
+
     return OptaxWrapper(
         value_and_grad_func=value_and_grad_func,
         value_func_has_aux=has_aux,
