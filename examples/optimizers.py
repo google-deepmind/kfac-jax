@@ -366,9 +366,8 @@ class Preconditioner:
       self,
       updates: optax.Updates,
       state: PreconditionState,
-      coeff: Optional[optax.ScalarOrSchedule] = None,
   ) -> optax.Updates:
-    """Preconditions the updates."""
+    """Preconditions (= multiplies the inverse curvature estimation matrix to) updates."""
     new_updates = self.estimator.multiply_inverse(
         state=state.estimator_state,
         parameter_structured_vector=updates,
@@ -378,26 +377,44 @@ class Preconditioner:
         pmap_axis_name=self.pmap_axis_name,
     )
     if self._norm_constraint is not None:
-      if coeff is None:
-        raise ValueError(
-            "coeff must be passed when norm_constraint is specified."
-        )
-      if callable(coeff):
-        coeff = coeff(state.count)
       sq_norm_grads = kfac_jax.utils.inner_product(new_updates, updates)
       del updates
-      sq_norm_scaled_grads = sq_norm_grads * coeff**2
-      max_coefficient = jnp.sqrt(self._norm_constraint / sq_norm_scaled_grads)
+      max_coefficient = jnp.sqrt(self._norm_constraint / sq_norm_grads)
       coeff = jnp.minimum(max_coefficient, 1)
       new_updates = kfac_jax.utils.scalar_mul(new_updates, coeff)
     else:
       del updates
     return new_updates
 
+  def multiply_curvature(
+      self,
+      updates: optax.Updates,
+      state: PreconditionState,
+  ) -> optax.Updates:
+    """Multiplies the (non-inverse) curvature estimation matrix to updates."""
+
+    # NOTE: Currently, `exact_power` and `use_cached` arguments are not used
+    # in `self.estimator.multiply()`, and the exact power (of 1) is always used.
+    # Therefore, the way `identity_weight` (damping) is used with
+    # `estimator.multiply()` is different from how it's used in
+    # `estimator.multiply_inverse()` (in `Preconditioner.apply()`) when
+    # `use_exact_inverses == False` (default). In particular, the former uses
+    # non-factored damping while the latter uses factored one, and the two are
+    # NOT the exact inverses of each other.
+    updates = self.estimator.multiply(
+        state=state.estimator_state,
+        parameter_structured_vector=updates,
+        identity_weight=self.get_identity_weight(state),
+        exact_power=self._use_exact_inverses,  # this argument will not be used.
+        use_cached=self._use_cached_inverses,  # this argument will not be used.
+        pmap_axis_name=self.pmap_axis_name,
+    )
+    return updates
+
   def as_gradient_transform(
-      self, learning_rate: Optional[optax.ScalarOrSchedule] = None
+      self, use_inverse: bool = True, inc_count: bool = True,
   ) -> optax.GradientTransformation:
-    """Preconditions updates by the K-FAC preconditioner."""
+    """Multiplies the inverse or non-inverse curvature estimation matrix to updates."""
 
     def init_fn(params):
       del params
@@ -405,10 +422,13 @@ class Preconditioner:
       # func_args (FuncArgsVariants).
       return PreconditionState(None, None)
 
+    multiply_fn = self.apply if use_inverse else self.multiply_curvature
+    increment_fn = optax.safe_int32_increment if inc_count else lambda x: x
+
     def update_fn(updates, state: PreconditionState, params=None):
       del params
-      updates = self.apply(updates, state, learning_rate)
-      count_inc = optax.safe_int32_increment(state.count)
+      updates = multiply_fn(updates, state)
+      count_inc = increment_fn(state.count)
       return updates, PreconditionState(count_inc, state.estimator_state)
 
     return optax.GradientTransformation(init_fn, update_fn)
@@ -417,14 +437,21 @@ class Preconditioner:
 def extract_precondition_state(state: OptaxState) -> PreconditionState:
   """Extracts the PreconditionState from OptaxState."""
   if isinstance(state, Iterable):
-    num_precond_state = sum(isinstance(s, PreconditionState) for s in state)
-    if num_precond_state != 1:
-      raise ValueError(
-          "The state must have only one PreconditionState. It has {}.".format(
-              num_precond_state
-          )
-      )
-    return next(s for s in state if isinstance(s, PreconditionState))
+    # Assuming that every PreconditionState in the state is identical.
+    precon_state = None
+    for s in state:
+      if isinstance(s, PreconditionState):
+        if precon_state is None:
+          precon_state = s
+        elif s.count is not None:  # already initialized
+          # Check if every PreconditionState is identical if it is initialized.
+          if id(s) != id(precon_state):
+            raise ValueError(
+                "Every PreconditionState in the state must be identical."
+            )
+    if precon_state is None:
+      raise ValueError("The state must have at least one PreconditionState.")
+    return precon_state
   elif isinstance(state, PreconditionState):
     return state
   else:
@@ -437,6 +464,7 @@ def replace_precondition_state(
   """Replaces the PreconditionState in OptaxState with new one."""
   extract_precondition_state(state)  # run for validating the state
   if isinstance(state, Iterable):
+    # Replace every PreconditionState in the state with the identical one.
     new_state = [
         new_precond_state if isinstance(s, PreconditionState) else s
         for s in state
