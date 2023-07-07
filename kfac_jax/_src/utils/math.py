@@ -491,15 +491,15 @@ def pi_adjusted_kronecker_inverse(
 
     non_scalars = sum(1 if a.size != 1 else 0 for a in arrays)
 
-    # We distribute the damping only inside the non-scalar factors
-    d_hat = jnp.power(damping / c, 1.0 / non_scalars)
-
     # We distribute the overall scale over each factor, including scalars
     if non_scalars == 0:
       # In the case where all factors are scalar we need to add the damping
       c_k = jnp.power(c + damping, 1.0 / len(arrays))
     else:
       c_k = jnp.power(c, 1.0 / len(arrays))
+
+      # We distribute the damping only inside the non-scalar factors
+      d_hat = jnp.power(damping / c, 1.0 / non_scalars)
 
     u_hats_inv = []
 
