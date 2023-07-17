@@ -17,11 +17,13 @@ from typing import Callable, Mapping
 
 from absl.testing import absltest
 from absl.testing import parameterized
-import chex
 import jax
 import jax.numpy as jnp
 import kfac_jax
 from tests import models
+
+Array = kfac_jax.utils.Array
+Shape = kfac_jax.utils.Shape
 
 
 class TestGraphMatcher(parameterized.TestCase):
@@ -133,8 +135,8 @@ class TestGraphMatcher(parameterized.TestCase):
   def test_auto_register_tags_jaxpr(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shapes: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shapes: Mapping[str, Shape],
       seed: int,
       data_size: int = 4,
   ):
