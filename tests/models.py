@@ -78,6 +78,7 @@ class _Linear(hk.Linear):
     super().__init__(*args, **kwargs)
 
   def __call__(self, inputs: LayerInputs, *_) -> LayerInputs:  # pytype: disable=signature-mismatch  # overriding-parameter-name-checks
+    jax_version = tuple(map(int, jax.__version__.split(".")[:3]))
     x, layer_values, aux = inputs
     y = super().__call__(x, precision=jax.lax.Precision.HIGHEST)
     if aux is not None:
@@ -85,11 +86,18 @@ class _Linear(hk.Linear):
 
     if self._explicit_tagging:
       params = _extract_params(self, ("w", "b"))
+
+      if jax_version < (0, 14, 4):
+        preferred_element_type = None
+      else:
+        assert all(p.dtype == y.dtype for p in params if p is not None)
+        preferred_element_type = y.dtype
+
       y = tags.register_dense(
           y, x, *params,
           dimension_numbers=(((1,), (0,)), ((), ())),
           precision=(jax.lax.Precision.HIGHEST, jax.lax.Precision.HIGHEST),
-          preferred_element_type=None,
+          preferred_element_type=preferred_element_type,
       )
     layer_values.append((x, y))
 
