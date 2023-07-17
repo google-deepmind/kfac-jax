@@ -16,7 +16,6 @@ from typing import Any, Callable, Mapping, Tuple
 
 from absl.testing import absltest
 from absl.testing import parameterized
-import chex
 import jax
 import jax.numpy as jnp
 import kfac_jax
@@ -25,6 +24,9 @@ import numpy as np
 
 tracer = kfac_jax.tracer
 utils = kfac_jax.utils
+Array = utils.Array
+PRNGKey = utils.PRNGKey
+Shape = utils.Shape
 
 
 class TestTracer(parameterized.TestCase):
@@ -51,15 +53,15 @@ class TestTracer(parameterized.TestCase):
   @staticmethod
   def generate_data(
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shapes: Mapping[str, chex.Shape],
-      rng: chex.PRNGKey,
+      model_func: Callable[..., Array],
+      data_point_shapes: Mapping[str, Shape],
+      rng: PRNGKey,
       data_size: int = 4,
   ) -> Tuple[
       models.hk.Params,
-      Mapping[str, chex.Array],
+      Mapping[str, Array],
       models.hk.Params,
-      Tuple[Tuple[chex.Array, ...], ...]
+      Tuple[Tuple[Array, ...], ...]
   ]:
     """Generates random data for any testing."""
     data = {}
@@ -115,8 +117,8 @@ class TestTracer(parameterized.TestCase):
   def test_loss_tags_jvp(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shape: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shape: Mapping[str, Shape],
       seed: int,
       dataset_size: int = 4,
   ):
@@ -148,8 +150,8 @@ class TestTracer(parameterized.TestCase):
   def test_loss_tags_jvp_diff_batch_size(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shape: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shape: Mapping[str, Shape],
       seed: int,
       data_size: int = 4,
   ):
@@ -172,8 +174,8 @@ class TestTracer(parameterized.TestCase):
   def test_loss_tags_vjp(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shape: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shape: Mapping[str, Shape],
       seed: int,
       dataset_size: int = 4,
   ):
@@ -208,8 +210,8 @@ class TestTracer(parameterized.TestCase):
   def test_loss_tags_vjp_diff_batch_size(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shape: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shape: Mapping[str, Shape],
       seed: int,
       data_size: int = 4,
   ):
@@ -240,8 +242,8 @@ class TestTracer(parameterized.TestCase):
   def test_loss_tags_hvp(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shape: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shape: Mapping[str, Shape],
       seed: int,
       dataset_size: int = 4,
   ):
@@ -272,8 +274,8 @@ class TestTracer(parameterized.TestCase):
   def test_loss_tags_hvp_diff_batch_size(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shape: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shape: Mapping[str, Shape],
       seed: int,
       data_size: int = 4,
   ):
@@ -295,8 +297,8 @@ class TestTracer(parameterized.TestCase):
   def test_layer_tags_vjp(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shape: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shape: Mapping[str, Shape],
       seed: int,
       dataset_size: int = 4,
   ):
@@ -359,8 +361,8 @@ class TestTracer(parameterized.TestCase):
   def test_layer_tags_vjp_diff_batch_size(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shape: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shape: Mapping[str, Shape],
       seed: int,
       data_size: int = 4,
   ):

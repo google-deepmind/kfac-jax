@@ -17,13 +17,16 @@ from typing import Callable, Mapping
 
 from absl.testing import absltest
 from absl.testing import parameterized
-import chex
 import jax
 import jax.numpy as jnp
 import kfac_jax
 from tests import models
 import numpy as np
 
+
+Array = kfac_jax.utils.Array
+PRNGKey = kfac_jax.utils.PRNGKey
+Shape = kfac_jax.utils.Shape
 StateType = kfac_jax.curvature_estimator.StateType
 
 
@@ -51,7 +54,7 @@ PIECEWISE_LINEAR_MODELS_AND_CURVATURE = [
 @functools.partial(jax.jit, static_argnums=(0, 3, 4))
 def compute_exact_approx_curvature(
     estimator: kfac_jax.CurvatureEstimator[StateType],
-    rng: chex.PRNGKey,
+    rng: PRNGKey,
     func_args: kfac_jax.utils.FuncArgs,
     batch_size: int,
     curvature_type: str,
@@ -102,8 +105,8 @@ class TestEstimator(parameterized.TestCase):
   def test_explicit_exact_full(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shapes: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shapes: Mapping[str, Shape],
       seed: int,
       curvature_type: str,
       data_size: int = 4,
@@ -165,8 +168,8 @@ class TestEstimator(parameterized.TestCase):
   def test_block_diagonal_full(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shapes: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shapes: Mapping[str, Shape],
       seed: int,
       curvature_type: str,
       data_size: int = 4,
@@ -229,8 +232,8 @@ class TestEstimator(parameterized.TestCase):
   def test_block_diagonal_full_to_hessian(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shapes: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shapes: Mapping[str, Shape],
       seed: int,
       curvature_type: str,
       data_size: int = 4,
@@ -300,8 +303,8 @@ class TestEstimator(parameterized.TestCase):
   def test_diagonal(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shapes: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shapes: Mapping[str, Shape],
       seed: int,
       curvature_type: str,
       data_size: int = 4,
@@ -366,8 +369,8 @@ class TestEstimator(parameterized.TestCase):
   def test_kronecker_factored(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shapes: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shapes: Mapping[str, Shape],
       seed: int,
       curvature_type: str = "fisher",
       data_size: int = 4,
@@ -445,7 +448,7 @@ class TestEstimator(parameterized.TestCase):
   ])
   def test_eigenvalues(
       self,
-      data_point_shapes: Mapping[str, chex.Shape],
+      data_point_shapes: Mapping[str, Shape],
       seed: int,
       curvature_type: str = "fisher",
       data_size: int = 4,
@@ -540,7 +543,7 @@ class TestEstimator(parameterized.TestCase):
   ])
   def test_matmul(
       self,
-      data_point_shapes: Mapping[str, chex.Shape],
+      data_point_shapes: Mapping[str, Shape],
       seed: int,
       curvature_type: str,
       data_size: int = 4,
@@ -639,7 +642,7 @@ class TestEstimator(parameterized.TestCase):
   ])
   def test_implicit_factor_products(
       self,
-      data_point_shapes: Mapping[str, chex.Shape],
+      data_point_shapes: Mapping[str, Shape],
       seed: int,
       curvature_type: str,
       data_size: int = 4,

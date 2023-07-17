@@ -15,7 +15,6 @@
 import functools
 from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple, Union
 
-import chex
 import distrax
 import haiku as hk
 import jax
@@ -26,20 +25,21 @@ tags = kfac_jax.layers_and_loss_tags
 loss_functions = kfac_jax.loss_functions
 utils = kfac_jax.utils
 
-
-LayerValues = List[Tuple[chex.Array, chex.Array]]
-LayerInputs = Tuple[chex.Array, LayerValues, Optional[Tuple[chex.Array, ...]]]
+Array = kfac_jax.utils.Array
+PRNGKey = kfac_jax.utils.PRNGKey
+LayerValues = List[Tuple[Array, Array]]
+LayerInputs = Tuple[Array, LayerValues, Optional[Tuple[Array, ...]]]
 LossOutputs = Union[
-    List[List[chex.Array]],
-    List[chex.Array],
-    Tuple[List[chex.Array], LayerValues]
+    List[List[Array]],
+    List[Array],
+    Tuple[List[Array], LayerValues]
 ]
 
 
 def _extract_params(
     instance: hk.Module,
     names: Sequence[str],
-) -> Tuple[chex.Array, Optional[chex.Array]]:
+) -> Tuple[Array, Optional[Array]]:
   """Extracts the weights and bias parameters or `None` if don't exists."""
   params = [None] * len(names)
   for name, v in instance.params_dict().items():
@@ -211,9 +211,9 @@ class _VanillaRNN(hk.VanillaRNN):
   def __call__(
       self,
       inputs: LayerInputs,
-      prev_state: chex.Array,
+      prev_state: Array,
       *_,
-  ) -> Tuple[Tuple[chex.Array, LayerValues], chex.Array]:
+  ) -> Tuple[Tuple[Array, LayerValues], Array]:
     x, layer_values, aux = inputs
     input_to_hidden = _Linear(
         self.hidden_size, explicit_tagging=self.explicit_tagging)
@@ -228,7 +228,7 @@ class _VanillaRNN(hk.VanillaRNN):
 
 
 def _modify_func(
-    func: Callable[[chex.Array], chex.Array]
+    func: Callable[[Array], Array]
 ) -> Callable[[LayerInputs], LayerInputs]:
   """Functorially maps f: x -> y to f2: (x, p, q) -> (f(x), p, q)."""
 
@@ -250,7 +250,7 @@ _special_identity = _modify_func(lambda x: x)
 class _DeterministicBernoulli(distrax.Bernoulli):
   """A fake deterministic bernoulli distribution, to make KFAC deterministic."""
 
-  def _sample_n(self, key: chex.PRNGKey, n: int) -> chex.Array:
+  def _sample_n(self, key: PRNGKey, n: int) -> Array:
     del key  # not used
     return jnp.repeat(jnp.round(self.probs)[None], n, axis=0)
 
@@ -271,8 +271,8 @@ _DeterministicBernoulliNegativeLogProbLoss_tag = loss_functions.tags.LossTag(
 
 
 def _register_deterministic_bernoulli(
-    logits: chex.Array,
-    targets: chex.Array,
+    logits: Array,
+    targets: Array,
     weight=1.0
 ):
   """Registers a deterministic bernoulli loss."""
@@ -289,7 +289,7 @@ def _register_deterministic_bernoulli(
 class _DeterministicCategorical(distrax.Categorical):
   """A fake deterministic bernoulli distribution, to make KFAC deterministic."""
 
-  def _sample_n(self, key: chex.PRNGKey, n: int) -> chex.Array:
+  def _sample_n(self, key: PRNGKey, n: int) -> Array:
     del key  # not used
     return jnp.repeat(jnp.round(self.probs)[None], n, axis=0)
 
@@ -310,10 +310,10 @@ _DeterministicCategoricalNegativeLogProbLoss_tag = loss_functions.tags.LossTag(
 
 
 def _register_deterministic_categorical(
-    logits: chex.Array,
-    targets: chex.Array,
+    logits: Array,
+    targets: Array,
     weight=1.0
-) -> chex.Array:
+) -> Array:
   """Registers a deterministic categorical loss."""
   if targets is None:
     args = [logits, weight]
@@ -367,9 +367,9 @@ def autoencoder(
 ) -> hk.Transformed:
   """Constructs a Haiku transformed object of the autoencoder network."""
   def func(
-      batch: Union[chex.Array, Mapping[str, chex.Array]],
-      aux: Optional[Tuple[chex.Array, ...]] = None,
-  ) -> Tuple[chex.Array, LayerValues]:
+      batch: Union[Array, Mapping[str, Array]],
+      aux: Optional[Tuple[Array, ...]] = None,
+  ) -> Tuple[Array, LayerValues]:
     images = batch["images"] if isinstance(batch, Mapping) else batch
     images = images.reshape([images.shape[0], -1])
     layers = []
@@ -418,7 +418,7 @@ def autoencoder_deterministic_loss(
     l2_reg: float = 0.0,
     explicit_tagging: bool = False,
     activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
-) -> chex.Array:
+) -> Array:
   """Evaluate the autoencoder with a deterministic loss."""
   x = batch["images"].reshape((batch["images"].shape[0], -1))  # pytype: disable=attribute-error  # numpy-scalars
   logits, _ = autoencoder(
@@ -434,7 +434,7 @@ def autoencoder_with_two_losses(
     params: utils.Params,
     batch: utils.Batch,
     layer_widths: Sequence[int],
-    aux: Optional[Tuple[chex.Array, ...]] = None,
+    aux: Optional[Tuple[Array, ...]] = None,
     explicit_tagging: bool = False,
     return_losses_outputs: bool = False,
     return_layer_values: bool = False,
@@ -456,9 +456,9 @@ def autoencoder_with_two_losses(
   if return_losses_outputs:
     return [[logits], [logits]]
 
-  loss_1 = - distrax.Bernoulli(logits=logits).log_prob(x)
+  loss_1: Array = - distrax.Bernoulli(logits=logits).log_prob(x)  # pytype: disable=annotation-type-mismatch
   scale_diag = jnp.ones_like(logits) * jnp.sqrt(0.5)
-  loss_2 = - distrax.MultivariateNormalDiag(
+  loss_2: Array = - distrax.MultivariateNormalDiag(  # pytype: disable=annotation-type-mismatch
       loc=logits, scale_diag=scale_diag).log_prob(x)
 
   if return_layer_values:
@@ -477,9 +477,9 @@ def conv_classifier(
 ) -> hk.Transformed:
   """Constructs a Haiku transformed object of a convolutional classifier."""
   def func(
-      batch: Union[chex.Array, Mapping[str, chex.Array]],
-      aux: Optional[Tuple[chex.Array, ...]] = None,
-  ) -> Tuple[chex.Array, LayerValues]:
+      batch: Union[Array, Mapping[str, Array]],
+      aux: Optional[Tuple[Array, ...]] = None,
+  ) -> Tuple[Array, LayerValues]:
     images = batch["images"] if isinstance(batch, Mapping) else batch
     layers = []
     # Conv channels
@@ -528,7 +528,7 @@ def conv_classifier_deterministic_loss(
     l2_reg: float = 0.0,
     explicit_tagging: bool = False,
     activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
-) -> chex.Array:
+) -> Array:
   """Evaluate the convolutional classifier with a deterministic loss."""
   logits, _ = conv_classifier(
       num_classes, layer_channels, explicit_tagging, activation=activation
@@ -544,7 +544,7 @@ def conv_classifier_loss(
     batch: utils.Batch,
     num_classes: int,
     layer_channels: Sequence[int],
-    aux: Optional[Tuple[chex.Array, ...]] = None,
+    aux: Optional[Tuple[Array, ...]] = None,
     l2_reg: float = 0.0,
     explicit_tagging: bool = False,
     return_losses_outputs: bool = False,
@@ -577,9 +577,9 @@ def layer_stack_with_scan_mlp(
 ) -> hk.Transformed:
   """A model that uses ``hk.experimental.layer_stack`` with scan."""
   def scan_fn(
-      x: chex.Array,
-      aux: Optional[Tuple[chex.Array, ...]] = None,
-  ) -> Tuple[chex.Array, LayerValues]:
+      x: Array,
+      aux: Optional[Tuple[Array, ...]] = None,
+  ) -> Tuple[Array, LayerValues]:
     layers = []
     for w in layer_widths:
       layers.append(_Linear(w, explicit_tagging=explicit_tagging))
@@ -593,9 +593,9 @@ def layer_stack_with_scan_mlp(
     return output, layer_values
 
   def func(
-      batch: Union[chex.Array, Mapping[str, chex.Array]],
-      aux: Optional[Tuple[chex.Array, ...]] = None,
-  ) -> Tuple[chex.Array, LayerValues]:
+      batch: Union[Array, Mapping[str, Array]],
+      aux: Optional[Tuple[Array, ...]] = None,
+  ) -> Tuple[Array, LayerValues]:
     x = batch["images"] if isinstance(batch, Mapping) else batch
 
     stack = hk.experimental.layer_stack(2, with_per_layer_inputs=True)(scan_fn)
@@ -649,9 +649,9 @@ def vanilla_rnn_with_scan(
 ) -> hk.Transformed:
   """A model that uses an RNN with scan."""
   def func(
-      batch: Union[chex.Array, Mapping[str, chex.Array]],
-      aux: Optional[Tuple[chex.Array, ...]] = None,
-  ) -> Tuple[chex.Array, LayerValues]:
+      batch: Union[Array, Mapping[str, Array]],
+      aux: Optional[Tuple[Array, ...]] = None,
+  ) -> Tuple[Array, LayerValues]:
     x = batch["images"] if isinstance(batch, Mapping) else batch
 
     core = _VanillaRNN(
