@@ -939,7 +939,7 @@ class Full(CurvatureBlock, abc.ABC):
 
         if power == -1:
           state.cache[str(power)] = utils.psd_inv_cholesky(
-              state.matrix.value, identity_weight) / scale
+              state.matrix.value + identity_weight * jnp.eye(self.dim)) / scale
         else:
           matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)
           state.cache[str(power)] = (
@@ -1113,11 +1113,25 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
     vector = self.parameter_shaped_list_to_grouped_array(vector)
 
     if power == 1:
+
       factors = [f.value for f in state.factors]
-      result = utils.kronecker_product_axis_mul_v(factors, vector)
-      result = result + identity_weight * vector
+
+      if exact_power:
+        result = utils.kronecker_product_axis_mul_v(factors, vector)
+        result = result + identity_weight * vector
+
+      else:
+        # If compute pi_adjusted_kronecker_factors used a more expensive matrix
+        # norm in its computation, it might make sense to cache it. But we
+        # currently don't do that.
+
+        result = utils.kronecker_product_axis_mul_v(
+            utils.pi_adjusted_kronecker_factors(*factors,
+                                                damping=identity_weight),
+            vector)
 
     elif exact_power:
+
       if use_cached:
         s = [
             state.cache[f"{i}_factor_eigenvalues"]
@@ -1139,6 +1153,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       result = utils.kronecker_eigen_basis_axis_mul_v(q, eigenvalues, vector)
 
     else:
+
       if power != -1:
         raise NotImplementedError(
             f"Approximations for power {power} is not yet implemented."

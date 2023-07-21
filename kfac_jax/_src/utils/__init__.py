@@ -109,6 +109,7 @@ block_permuted = math.block_permuted
 norm = math.norm
 per_parameter_norm = math.per_parameter_norm
 psd_inv_cholesky = math.psd_inv_cholesky
+pi_adjusted_kronecker_factors = math.pi_adjusted_kronecker_factors
 pi_adjusted_kronecker_inverse = math.pi_adjusted_kronecker_inverse
 kronecker_product_axis_mul_v = math.kronecker_product_axis_mul_v
 kronecker_eigen_basis_axis_mul_v = math.kronecker_eigen_basis_axis_mul_v

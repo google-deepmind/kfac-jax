@@ -329,15 +329,15 @@ def per_parameter_norm(obj: ArrayTree, key_prefix: str) -> ArrayTree:
   }
 
 
-def psd_inv_cholesky(matrix: Array, damping: Array) -> Array:
-  """Computes the inverse of `matrix + damping*I`, with matrix assumed PSD."""
+def psd_inv_cholesky(matrix: Array) -> Array:
+  """Computes the inverse of `matrix`, with matrix assumed PSD."""
 
   if matrix.shape[:1] != matrix.shape[1:]:
     raise ValueError(f"Expected square matrix, but got shape {matrix.shape}.")
 
   identity = jnp.eye(matrix.shape[0], dtype=matrix.dtype)
 
-  return linalg.solve(matrix + damping * identity, identity, assume_a="pos")
+  return linalg.solve(matrix, identity, assume_a="pos")
 
 
 def psd_matrix_norm(
@@ -441,13 +441,153 @@ def psd_matrix_norm(
     raise ValueError(f"Unrecognized norm type: '{norm_type}'")
 
 
+def pi_adjusted_kronecker_factors(
+    *factors: Array,
+    damping: Numeric
+) -> Tuple[Array, ...]:
+  """Computes Kronecker factors with pi-adjusted factored damping.
+
+  The `f1 kron f2 kron ... kron fn + damping * I` is not a Kronecker product
+  in general, because of the added identity. [1] proposed a pi-adjusted factored
+  damping approach to approximate it as a Kronecker product. [2] generalized
+  this approach from two to tree factors, and [3] generalized it to arbitrary
+  numbers of factors. This function implements the generalized approach.
+
+  [1] - https://arxiv.org/abs/1503.05671
+  [2] - https://openreview.net/forum?id=SkkTMpjex
+  [3] - https://ui.adsabs.harvard.edu/abs/2021arXiv210602925R/abstract
+
+  Args:
+    *factors: A list of factors represented as 2D arrays, vectors (which are
+      interpreted as representing the diagonal of a matrix) or scalars (which
+      are interpreted as being a 1x1 matrix). All factors must be PSD.
+    damping: The weight of the identity added to the Kronecker product.
+
+  Returns:
+    A list of factors with the same length as `factors`, and with the same
+    corresponding representations, whose Kronecker product approximates
+    `(f1 kron f2 kron ... kron fn) + damping * I` according to the
+    pi-adjusted factored-damping approach.
+  """
+
+  # The implementation writes each single factor as `c_i u_i`, where the matrix
+  # `u_i` is such that `trace(u_i) / dim(u_i) = 1`. We then factor out all the
+  # scalar factors `c_i` into a single overall scaling coefficient and
+  # distribute the damping to each single non-scalar factor `u_i` equally.
+
+  norm_type = "avg_trace"
+
+  norms = [psd_matrix_norm(f, norm_type=norm_type) for f in factors]
+
+  # Compute the normalized factors `u_i`, such that Trace(u_i) / dim(u_i) = 1
+  us = [fi / ni for fi, ni in zip(factors, norms)]
+
+  # kron(arrays) = c * kron(us)
+
+  c = jnp.prod(jnp.array(norms))
+
+  damping = damping.astype(c.dtype)  # pytype: disable=attribute-error  # numpy-scalars
+
+  def regular_case() -> Tuple[Array, ...]:
+
+    non_scalars = sum(1 if f.size != 1 else 0 for f in factors)
+
+    # We distribute the overall scale over each factor, including scalars
+    if non_scalars == 0:
+
+      # In the case where all factors are scalar we need to add the damping
+      c_k = jnp.power(c + damping, 1.0 / len(factors))
+
+    else:
+      c_k = jnp.power(c, 1.0 / len(factors))
+
+      # We distribute the damping only inside the non-scalar factors
+      d_hat = jnp.power(damping / c, 1.0 / non_scalars)
+
+    u_hats = []
+
+    for u in us:
+
+      if u.size == 1:
+        u_hat = jnp.ones_like(u)  # damping not used in the scalar factors
+
+      elif u.ndim == 2:
+        u_hat = u + d_hat * jnp.eye(u.shape[0], dtype=u.dtype)
+
+      else:  # diagonal case
+        assert u.ndim == 1
+        u_hat = u + d_hat
+
+      u_hats.append(u_hat * c_k)
+
+    return tuple(u_hats)
+
+  def zero_case() -> Tuple[Array, ...]:
+
+    # In the special case where for some reason one of the factors is zero, then
+    # the we write each factor as `damping^(1/k) * I`.
+
+    c_k = jnp.power(damping, 1.0 / len(factors))
+
+    u_hats = []
+
+    for u in us:
+
+      if u.ndim == 2:
+        u_hat = jnp.eye(u.shape[0], dtype=u.dtype)
+
+      else:
+        u_hat = jnp.ones_like(u)
+
+      u_hats.append(u_hat * c_k)
+
+    return tuple(u_hats)
+
+  if get_special_case_zero_inv():
+
+    return lax.cond(
+        jnp.greater(c, 0.0),
+        regular_case,
+        zero_case)
+
+  else:
+    return regular_case()
+
+
+def invert_psd_matrices(
+    matrices: ArrayTree
+) -> ArrayTree:
+  """Inverts a PyTree of matrices.
+
+  Args:
+    matrices: A PyTree of 2D arrays, vectors (which are interpreted as
+      representing the diagonal of a matrix) or scalars (which are interpreted
+      as being a 1x1 matrix) representing the matrices to be inverted. All
+      matrices must be PSD.
+
+  Returns:
+    A PyTree of matrices giving the inverses of the corresponding matrices
+    passed as arguments (with the same respective representations).
+  """
+
+  def invert_psd_matrix(m):
+
+    if m.ndim == 2:
+      return psd_inv_cholesky(m)
+
+    assert m.ndim <= 1
+    return 1.0 / m
+
+  return jax.tree_map(invert_psd_matrix, matrices)
+
+
 def pi_adjusted_kronecker_inverse(
-    *arrays: Array,
+    *factors: Array,
     damping: Numeric,
 ) -> Tuple[Array, ...]:
   """Computes pi-adjusted factored damping inverses.
 
-  The inverse of `a_1 kron a_2 kron ... kron a_n + damping * I` is not Kronecker
+  The inverse of `(f1 kron f2 kron ... kron fn) + damping * I` is not Kronecker
   factored in general, because of the added identity. [1] proposed a pi-adjusted
   factored damping approach to approximate the inverse as a Kronecker product.
   [2] generalized this approach from two to tree factors, and [3] generalized it
@@ -459,97 +599,20 @@ def pi_adjusted_kronecker_inverse(
   [3] - https://ui.adsabs.harvard.edu/abs/2021arXiv210602925R/abstract
 
   Args:
-    *arrays: A list of matrices, vectors (which are interpreted
-      as representing the diagonal of a matrix) or scalars (which are
-      interpreted as being a 1x1 matrix). All matrices must be PSD.
+    *factors: A list of factors represented as 2D arrays, vectors (which are
+      interpreted as representing the diagonal of a matrix) or scalars (which
+      are interpreted as being a 1x1 matrix). All factors must be PSD.
     damping: The weight of the identity added to the Kronecker product.
 
   Returns:
-    A list of factors with the same length as the input `arrays` whose Kronecker
-    product approximates the inverse of `a_1 kron ... kron a_n + damping * I`.
+    A list of factors with the same length as `factors`, and with the same
+    corresponding representations, whose Kronecker product approximates the
+    inverse of `(f1 kron f2 kron ... kron fn) + damping * I` according to the
+    pi-adjusted factored-damping approach.
   """
-  # The implementation writes each single factor as `c_i u_i`, where the matrix
-  # `u_i` is such that `trace(u_i) / dim(u_i) = 1`. We then factor out all the
-  # scalar factors `c_i` into a single overall scaling coefficient and
-  # distribute the damping to each single non-scalar factor `u_i` equally before
-  # inverting them.
 
-  norm_type = "avg_trace"
-
-  norms = [psd_matrix_norm(a, norm_type=norm_type) for a in arrays]
-
-  # Compute the normalized factors `u_i`, such that Trace(u_i) / dim(u_i) = 1
-  us = [ai / ni for ai, ni in zip(arrays, norms)]
-
-  # kron(arrays) = c * kron(us)
-
-  c = jnp.prod(jnp.array(norms))
-
-  damping = damping.astype(c.dtype)  # pytype: disable=attribute-error  # numpy-scalars
-
-  def regular_inverse() -> Tuple[Array, ...]:
-
-    non_scalars = sum(1 if a.size != 1 else 0 for a in arrays)
-
-    # We distribute the overall scale over each factor, including scalars
-    if non_scalars == 0:
-      # In the case where all factors are scalar we need to add the damping
-      c_k = jnp.power(c + damping, 1.0 / len(arrays))
-    else:
-      c_k = jnp.power(c, 1.0 / len(arrays))
-
-      # We distribute the damping only inside the non-scalar factors
-      d_hat = jnp.power(damping / c, 1.0 / non_scalars)
-
-    u_hats_inv = []
-
-    for u in us:
-
-      if u.size == 1:
-        inv = jnp.ones_like(u)  # damping not used in the scalar factors
-
-      elif u.ndim == 2:
-        inv = psd_inv_cholesky(u, d_hat)
-
-      else:  # diagonal case
-        assert u.ndim == 1
-        inv = 1.0 / (u + d_hat)
-
-      u_hats_inv.append(inv / c_k)
-
-    return tuple(u_hats_inv)
-
-  def zero_inverse() -> Tuple[Array, ...]:
-
-    # In the special case where for some reason one of the factors is zero, then
-    # the inverse is just `damping^-1 * I`, hence we write each factor as
-    # `damping^(1/k) * I`.
-
-    c_k = jnp.power(damping, 1.0 / len(arrays))
-
-    u_hats_inv = []
-
-    for u in us:
-
-      if u.ndim == 2:
-        inv = jnp.eye(u.shape[0], dtype=u.dtype)
-
-      else:
-        inv = jnp.ones_like(u)
-
-      u_hats_inv.append(inv / c_k)
-
-    return tuple(u_hats_inv)
-
-  if get_special_case_zero_inv():
-
-    return lax.cond(
-        jnp.greater(c, 0.0),
-        regular_inverse,
-        zero_inverse)
-
-  else:
-    return regular_inverse()
+  return invert_psd_matrices(
+      pi_adjusted_kronecker_factors(*factors, damping=damping))  # pytype: disable=bad-return-type
 
 
 def kronecker_product_axis_mul_v(
