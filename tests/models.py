@@ -87,7 +87,7 @@ class _Linear(hk.Linear):
     if self._explicit_tagging:
       params = _extract_params(self, ("w", "b"))
 
-      if jax_version < (0, 14, 4):
+      if jax_version < (0, 4, 14):
         preferred_element_type = None
       else:
         assert all(p.dtype == y.dtype for p in params if p is not None)
