@@ -682,8 +682,13 @@ class Diagonal(CurvatureBlock, abc.ABC):
       state: "Diagonal.State",
       pmap_axis_name: str,
   ) -> "Diagonal.State":
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     for factor in state.diagonal_factors:
       factor.sync(pmap_axis_name)
+
     return state
 
   def _multiply_matpower_unscaled(
@@ -854,7 +859,12 @@ class Full(CurvatureBlock, abc.ABC):
       state: "Full.State",
       pmap_axis_name: str,
   ) -> "Full.State":
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     state.matrix.sync(pmap_axis_name)
+
     return state
 
   def _multiply_matpower_unscaled(
@@ -1095,8 +1105,13 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       state: "KroneckerFactored.State",
       pmap_axis_name: str,
   ) -> "KroneckerFactored.State":
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
     for factor in state.factors:
       factor.sync(pmap_axis_name)
+
     return state
 
   def _multiply_matpower_unscaled(
