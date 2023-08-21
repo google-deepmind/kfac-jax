@@ -27,6 +27,7 @@ from kfac_jax._src import utils
 from typing_extensions import TypeAlias
 
 # Types for annotation
+ArrayTree = utils.ArrayTree
 Array = utils.Array
 PRNGKey = utils.PRNGKey
 Numeric = utils.Numeric
@@ -78,7 +79,7 @@ class Optimizer(utils.WithStagedMethods):
       data_seen: The number of training cases that the optimizer has processed.
       step_counter: An integer giving the current step number :math:`t`.
     """
-    optax_state: chex.ArrayTree
+    optax_state: ArrayTree
     velocities: Params
     estimator_state: curvature_estimator.BlockDiagonalCurvature.State
     damping: Optional[Array]
@@ -1133,7 +1134,6 @@ class Optimizer(utils.WithStagedMethods):
         damping=damping,
         rho=rho,
         quad_model_change=quad_model_change,
-        scaled_grad_norm_sq=sq_norm_scaled_grads,
     )
 
     if self._value_func_has_aux:
