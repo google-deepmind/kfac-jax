@@ -15,7 +15,6 @@
 import abc
 from typing import Optional, Sequence, Tuple
 
-import chex
 import distrax
 import jax
 import jax.numpy as jnp
@@ -24,7 +23,11 @@ from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import utils
 
 
-Array = chex.Array
+Array = utils.Array
+Numeric = utils.Numeric
+PRNGKey = utils.PRNGKey
+Shape = utils.Shape
+DType = utils.DType
 
 
 class LossFunction(utils.Finalizable):
@@ -36,7 +39,7 @@ class LossFunction(utils.Finalizable):
   needed.
   """
 
-  def __init__(self, weight: chex.Numeric):
+  def __init__(self, weight: Numeric):
     """Initializes the loss instance.
 
     Args:
@@ -50,11 +53,11 @@ class LossFunction(utils.Finalizable):
     self.finalize()
 
   @property
-  def dtype(self) -> chex.ArrayDType:
+  def dtype(self) -> DType:
     return self.parameter_dependants[0].dtype
 
   @property
-  def weight(self) -> chex.Numeric:
+  def weight(self) -> Numeric:
     """The relative weight of the loss."""
     return self._weight
 
@@ -75,7 +78,7 @@ class LossFunction(utils.Finalizable):
 
   @property
   @abc.abstractmethod
-  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+  def parameter_independants(self) -> Tuple[Numeric, ...]:
     """All the parameter independent arrays of the loss."""
 
   @property
@@ -88,7 +91,7 @@ class LossFunction(utils.Finalizable):
       self,
       parameter_dependants: Sequence[Array],
   ) -> "LossFunction":
-    """Creates the same :class:`~LossFunction` object, but with different inputs."""
+    """Creates a copy of the loss function object, but with different inputs."""
 
   def evaluate(
       self,
@@ -152,8 +155,11 @@ class LossFunction(utils.Finalizable):
     """
     def evaluate_sum(inputs: Sequence[Array]) -> Array:
       """Evaluates the loss summed over all axis, including batch etc."""
+
       instance = self.copy_with_different_inputs(inputs)
+
       return jnp.sum(instance.evaluate(targets, coefficient_mode))
+
     return jax.grad(evaluate_sum)(self.parameter_dependants)
 
   def multiply_ggn(
@@ -180,7 +186,7 @@ class LossFunction(utils.Finalizable):
       self,
       vector: Sequence[Array],
   ) -> Tuple[Array, ...]:
-    """Same as :func:`~LossFunction.multiply_ggn`, disregarding the relative weight."""
+    """Unweighted version of :func:`~LossFunction.multiply_ggn`."""
 
   def multiply_ggn_factor(
       self,
@@ -211,7 +217,7 @@ class LossFunction(utils.Finalizable):
   def multiply_ggn_factor_unweighted(
       self, vector: Array
   ) -> Tuple[Array, ...]:
-    """Same as :func:`~LossFunction.multiply_ggn_factor`, disregarding the relative weight."""
+    """Unweighted version of :func:`~LossFunction.multiply_ggn_factor`."""
 
   def multiply_ggn_factor_transpose(
       self,
@@ -244,7 +250,7 @@ class LossFunction(utils.Finalizable):
       self,
       vector: Sequence[Array],
   ) -> Array:
-    """Same as :func:`~LossFunction.multiply_ggn_factor_transpose`, disregarding the relative weight."""
+    """Unweighted version of :func:`~LossFunction.multiply_ggn_factor_transpose`."""
 
   def multiply_ggn_factor_replicated_one_hot(
       self,
@@ -282,11 +288,11 @@ class LossFunction(utils.Finalizable):
       self,
       index: Sequence[int],
   ) -> Tuple[Array, ...]:
-    """Same as :func:`~LossFunction.multiply_ggn_factor_replicated_one_hot`, disregarding the relative weight."""
+    """Unweighted version of :func:`~LossFunction.multiply_ggn_factor_replicated_one_hot`."""
 
   @property
   @abc.abstractmethod
-  def ggn_factor_inner_shape(self) -> chex.Shape:
+  def ggn_factor_inner_shape(self) -> Shape:
     """The shape of the array returned by `self.multiply_ggn_factor`."""
 
 
@@ -324,7 +330,7 @@ class NegativeLogProbLoss(LossFunction):
       self,
       vector: Sequence[Array],
   ) -> Tuple[Array, ...]:
-    """Same as :func:`~LossFunction.multiply_fisher`, disregarding the relative weight."""
+    """Unweighted version of :func:`~LossFunction.multiply_fisher`."""
 
   def multiply_fisher_factor(
       self,
@@ -358,7 +364,7 @@ class NegativeLogProbLoss(LossFunction):
       self,
       vector: Array,
   ) -> Tuple[Array, ...]:
-    """Same as :func:`~LossFunction.multiply_fisher_factor`, disregarding the relative weight."""
+    """Unweighted version of  :func:`~LossFunction.multiply_fisher_factor`."""
 
   def multiply_fisher_factor_transpose(
       self,
@@ -393,7 +399,7 @@ class NegativeLogProbLoss(LossFunction):
       self,
       vector: Sequence[Array],
   ) -> Array:
-    """Same as :func:`~LossFunction.multiply_fisher_factor_transpose`, disregarding the relative weight."""
+    """Unweighted version of :func:`~LossFunction.multiply_fisher_factor_transpose`."""
 
   def multiply_fisher_factor_replicated_one_hot(
       self,
@@ -433,15 +439,15 @@ class NegativeLogProbLoss(LossFunction):
       self,
       index: Sequence[int],
   ) -> Tuple[Array, ...]:
-    """Same as :func:`~LossFunction.multiply_fisher_factor_replicated_one_hot`, disregarding the relative weight."""
+    """Unweighted version of :func:`~LossFunction.multiply_fisher_factor_replicated_one_hot`."""
 
   @property
   @abc.abstractmethod
-  def fisher_factor_inner_shape(self) -> chex.Shape:
+  def fisher_factor_inner_shape(self) -> Shape:
     """The shape of the array returned by :func:`~LossFunction.multiply_fisher_factor`."""
 
   @abc.abstractmethod
-  def sample(self, rng: chex.PRNGKey) -> Array:
+  def sample(self, rng: PRNGKey) -> Array:
     """Sample ``targets`` from the underlying distribution."""
 
   def grad_of_evaluate_on_sample(
@@ -498,7 +504,7 @@ class NaturalParamsNegativeLogProbLoss(NegativeLogProbLoss, abc.ABC):
     return self.multiply_fisher_factor_replicated_one_hot_unweighted(index)
 
   @property
-  def ggn_factor_inner_shape(self) -> chex.Shape:
+  def ggn_factor_inner_shape(self) -> Shape:
     return self.fisher_factor_inner_shape
 
 
@@ -511,13 +517,14 @@ class DistributionNegativeLogProbLoss(NegativeLogProbLoss):
     """The underlying Distrax distribution."""
 
   def _evaluate(self, targets: Array) -> Array:
-    return -self.dist.log_prob(targets)  # keeps leading dims intact
+    # keeps leading dims intact
+    return -self.dist.log_prob(targets)  # pytype: disable=bad-return-type
 
-  def sample(self, rng: chex.PRNGKey) -> Array:
-    return self.dist.sample(seed=rng)
+  def sample(self, rng: PRNGKey) -> Array:
+    return self.dist.sample(seed=rng)  # pytype: disable=bad-return-type
 
   @property
-  def fisher_factor_inner_shape(self) -> chex.Shape:
+  def fisher_factor_inner_shape(self) -> Shape:
     return jax.eval_shape(
         lambda: self.sample(rng=jax.random.PRNGKey(0))).shape
 
@@ -539,8 +546,8 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       mean: Array,
       targets: Optional[Array] = None,
-      variance: chex.Numeric = 0.5,
-      weight: chex.Numeric = 1.0,
+      variance: Numeric = 0.5,
+      weight: Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -564,7 +571,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._mean
 
   @property
-  def variance(self) -> chex.Numeric:
+  def variance(self) -> Numeric:
     return self._variance
 
   @property
@@ -572,7 +579,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._targets
 
   @property
-  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+  def parameter_independants(self) -> Tuple[Numeric, ...]:
     arrays = (self.variance, self.weight)
     if self._targets is not None:
       arrays = (self._targets,) + arrays
@@ -663,7 +670,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
       mean: Array,
       variance: Array,
       targets: Optional[Array] = None,
-      weight: chex.Numeric = 1.0,
+      weight: Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -687,7 +694,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
     return self._targets
 
   @property
-  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+  def parameter_independants(self) -> Tuple[Numeric, ...]:
     arrays = (self.weight,)
     if self._targets is not None:
       arrays = (self._targets,) + arrays
@@ -790,7 +797,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
     return mean_output, var_output
 
   @property
-  def fisher_factor_inner_shape(self) -> chex.Shape:
+  def fisher_factor_inner_shape(self) -> Shape:
     return self._mean.shape[:-1] + self._mean.shape[-1:] * 2
 
   def multiply_ggn_unweighted(
@@ -817,7 +824,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
     raise NotImplementedError()
 
   @property
-  def ggn_factor_inner_shape(self) -> chex.Shape:
+  def ggn_factor_inner_shape(self) -> Shape:
     raise NotImplementedError()
 
 
@@ -837,7 +844,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       logits: Array,
       targets: Optional[Array] = None,
-      weight: chex.Numeric = 1.0,
+      weight: Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -855,7 +862,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._targets
 
   @property
-  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+  def parameter_independants(self) -> Tuple[Numeric, ...]:
     arrays = (self.weight,)
     if self._targets is not None:
       arrays = (self._targets,) + arrays
@@ -868,7 +875,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   @property
   def _probs(self) -> Array:
     """The probabilities of the underlying Bernoulli distribution."""
-    return self.dist.probs
+    return self.dist.probs  # pytype: disable=bad-return-type
 
   @property
   def params(self) -> Tuple[Array]:
@@ -930,7 +937,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       logits: Array,
       targets: Optional[Array] = None,
       mask: Optional[Array] = None,
-      weight: chex.Numeric = 1.0,
+      weight: Numeric = 1.0,
   ):
     """Initializes the loss instance.
 
@@ -966,12 +973,15 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._mask
 
   @property
-  def parameter_independants(self) -> Tuple[chex.Numeric, ...]:
+  def parameter_independants(self) -> Tuple[Numeric, ...]:
     arrays = (self.weight,)
+
     if self.mask is not None:
       arrays = (self.mask,) + arrays
+
     if self.targets is not None:
       arrays = (self.targets,) + arrays
+
     return arrays
 
   @property
@@ -979,15 +989,19 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return distrax.Categorical(logits=self._logits, dtype=jnp.int32)
 
   def _evaluate(self, targets: Array) -> Array:
+
     evl = super()._evaluate(targets)
+
     if self.mask is not None:
       return evl * self.mask
+
     else:
       return evl
 
   @property
   def _probs(self) -> Array:
     """The probabilities of the underlying Bernoulli distribution."""
+
     if self.mask is not None:
       return self.dist.probs * self.mask[..., None]
     else:
@@ -996,21 +1010,27 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   @property
   def _sqrt_probs(self) -> Array:
     """The square root of ``self.probs``."""
-    return jnp.sqrt(self._probs)
+
+    if self.mask is not None:
+      return jnp.sqrt(self.dist.probs) * self.mask[..., None]
+    else:
+      return jnp.sqrt(self.dist.probs)
 
   @property
   def params(self) -> Tuple[Array]:
     return (self._logits,)
 
   @property
-  def fisher_factor_inner_shape(self) -> chex.Shape:
+  def fisher_factor_inner_shape(self) -> Shape:
     return self._logits.shape
 
   def copy_with_different_inputs(
       self,
       parameter_dependants: Sequence[Array]
   ) -> "CategoricalLogitsNegativeLogProbLoss":
+
     [logits] = parameter_dependants
+
     return CategoricalLogitsNegativeLogProbLoss(
         logits, targets=self.targets, mask=self.mask, weight=self.weight)
 
@@ -1018,9 +1038,12 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       vector: Sequence[Array]
   ) -> Tuple[Array]:
+
     probs = self._probs
+
     fisher_product = vector[0] * probs - probs * jnp.sum(
         vector[0] * probs, axis=-1, keepdims=True)
+
     return (fisher_product,)
 
   def multiply_fisher_factor_unweighted(
@@ -1028,7 +1051,9 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       vector: Array
   ) -> Tuple[Array]:
     probs = self._probs
+
     sqrt_probs = self._sqrt_probs
+
     return (sqrt_probs * vector - probs * jnp.sum(
         sqrt_probs * vector, axis=-1, keepdims=True),)
 
@@ -1036,8 +1061,11 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       vector: Sequence[Array]
   ) -> Array:
+
     probs = self._probs
+
     sqrt_probs = self._sqrt_probs
+
     return sqrt_probs * vector[0] - sqrt_probs * jnp.sum(
         probs * vector[0], axis=-1, keepdims=True)
 
@@ -1045,9 +1073,12 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       index: Sequence[int],
   ) -> Tuple[Array]:
+
     [index] = index
     probs = self._probs
+
     sqrt_probs_slice = self._sqrt_probs[:, index][..., None]
+
     padded_slice = insert_slice_in_zeros(sqrt_probs_slice, 1, probs.shape[1],
                                          index)
     return (padded_slice - probs * sqrt_probs_slice,)
@@ -1157,8 +1188,8 @@ def register_normal_predictive_distribution(
     mean: Array,
     targets: Optional[Array] = None,
     variance: float = 0.5,
-    weight: chex.Numeric = 1.0,
-) -> Array:
+    weight: Numeric = 1.0,
+):
   """Registers a normal predictive distribution.
 
   This corresponds to a squared error loss of the form
@@ -1166,10 +1197,11 @@ def register_normal_predictive_distribution(
 
   Args:
     mean: A tensor defining the mean vector of the distribution. The first
-      dimension must be the batch size.
-    targets: (OPTIONAL) The targets for the loss function.  Only required if one
-      wants to use the "empirical Fisher" instead of the true Fisher (which is
-      controlled by the ``estimation_mode`` to the optimizer).
+      dimension will usually be the batch size, but doesn't need to be (unless
+      using ``estimation_mode='fisher_exact'`` or
+      ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
+    targets: (OPTIONAL) The targets for the loss function. Only required if
+      using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
     variance: float. The variance of the distribution. Note that the default
       value of 0.5 corresponds to a standard squared error loss weight *
@@ -1182,9 +1214,6 @@ def register_normal_predictive_distribution(
       factor. In general this is NOT equivalent to changing the temperature of
       the distribution, but in the ase of normal distributions it may be.
       (Default: 1.0)
-
-  Returns:
-    The mean and targets as dependable on the tag.
   """
   if targets is None:
     args = [mean, variance, weight]
@@ -1192,13 +1221,14 @@ def register_normal_predictive_distribution(
   else:
     args = [mean, targets, variance, weight]
     args_names = ["mean", "targets", "variance", "weight"]
-  return NormalMeanNegativeLogProbLoss_tag.bind(*args, args_names=args_names)[0]
+
+  NormalMeanNegativeLogProbLoss_tag.bind(*args, args_names=args_names)
 
 
 def register_squared_error_loss(
     prediction: Array,
     targets: Optional[Array] = None,
-    weight: chex.Numeric = 1.0,
+    weight: Numeric = 1.0,
 ) -> Array:
   """Registers a squared error loss function.
 
@@ -1208,25 +1238,24 @@ def register_squared_error_loss(
 
   Args:
     prediction: The prediction made by the network (i.e. its output). The first
-      dimension must be the batch size.
-    targets: (OPTIONAL) The targets for the loss function.  Only required if one
-      wants to use the "empirical Fisher" instead of the true Fisher (which is
-      controlled by the ``estimation_mode`` to the optimizer).
+      dimension will usually be the batch size, but doesn't need to be (unless
+      using ``estimation_mode='fisher_exact'`` or
+      ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
+    targets: (OPTIONAL) The targets for the loss function. Only required if
+      using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
     weight: A float coefficient to multiply the loss function by.
       (Default: 1.0)
-  Returns:
-    The mean and targets as dependable on the tag.
   """
-  return register_normal_predictive_distribution(
-      prediction, targets, variance=0.5, weight=weight)
+  register_normal_predictive_distribution(
+      prediction, targets, variance=0.5, weight=weight)  # pytype: disable=bad-return-type  # numpy-scalars
 
 
 def register_multi_bernoulli_predictive_distribution(
     logits: Array,
     targets: Optional[Array] = None,
-    weight: chex.Numeric = 1.0,
-) -> Array:
+    weight: Numeric = 1.0,
+):
   """Registers a multi-Bernoulli predictive distribution.
 
   Note that this is distinct from
@@ -1234,19 +1263,18 @@ def register_multi_bernoulli_predictive_distribution(
   confused with it.
 
   Args:
-    logits: The logits of the distribution (i.e. its parameters). The first
-      dimension must be the batch size.
+    logits: The logits of the distribution (i.e. its parameters) as a 2D array
+      of floats. The first dimension will usually be the batch size, but doesn't
+      need to be (unless using ``estimation_mode='fisher_exact'`` or
+      ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
     targets: (OPTIONAL) The targets for the loss function.  Only required if
-      one wants to use the "empirical Fisher" instead of the true Fisher
-      (which is controlled by the ``estimation_mode`` to the optimizer).
+      using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
     weight: (OPTIONAL) a scalar. A coefficient to multiply the log prob loss
       associated with this distribution. The Fisher will be multiplied by the
       corresponding factor. This is NOT equivalent to changing the temperature
       of the distribution since we don't renormalize the log prob in the
       objective function. (Default: 1.0)
-  Returns:
-    The logits and targets as dependable on the tag.
   """
   if targets is None:
     args = [logits, weight]
@@ -1254,15 +1282,15 @@ def register_multi_bernoulli_predictive_distribution(
   else:
     args = [logits, targets, weight]
     args_names = ["logits", "targets", "weight"]
-  return MultiBernoulliNegativeLogProbLoss_tag.bind(
-      *args, args_names=args_names)[0]
+
+  MultiBernoulliNegativeLogProbLoss_tag.bind(*args, args_names=args_names)
 
 
 def register_sigmoid_cross_entropy_loss(
     logits: Array,
     targets: Optional[Array] = None,
-    weight: chex.Numeric = 1.0,
-) -> Array:
+    weight: Numeric = 1.0,
+):
   """Registers a sigmoid cross-entropy loss function.
 
   Note that this is distinct from :func:`~register_softmax_cross_entropy_loss`
@@ -1271,17 +1299,18 @@ def register_sigmoid_cross_entropy_loss(
   explicit probabilistic interpretation. It behaves identically for now.
 
   Args:
-    logits: The logits tensor. The first dimension must be the batch size.
-    targets: (OPTIONAL) The targets for the loss function.  Only required if
-      one wants to use the "empirical Fisher" instead of the true Fisher
-      (which is controlled by the ``estimation_mode`` to the optimizer).
+    logits: The input logits of the loss as a 2D array of floats. The first
+      dimension will usually be the batch size, but doesn't need to be (unless
+      using ``estimation_mode='fisher_exact'`` or
+      ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
+    targets: (OPTIONAL) The targets for the loss function. Must be of the same
+      shape as ``logits``. Only required if using
+      ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
     weight: (OPTIONAL) a scalar. A coefficient to multiply the loss function by.
       (Default: 1.0)
-  Returns:
-    The logits and targets as dependable on the tag.
   """
-  return register_multi_bernoulli_predictive_distribution(
+  register_multi_bernoulli_predictive_distribution(
       logits, targets, weight=weight)
 
 
@@ -1289,8 +1318,8 @@ def register_categorical_predictive_distribution(
     logits: Array,
     targets: Optional[Array] = None,
     mask: Optional[Array] = None,
-    weight: chex.Numeric = 1.0,
-) -> Array:
+    weight: Numeric = 1.0,
+):
   """Registers a categorical predictive distribution.
 
   Note that this is distinct from
@@ -1298,56 +1327,64 @@ def register_categorical_predictive_distribution(
   confused with it.
 
   Args:
-    logits: The logits of the distribution (i.e. its parameters). The first
-      dimension must be the batch size.
+    logits: The logits of the distribution (i.e. its parameters) as a 2D array
+      of floats. The first dimension will usually be the batch size, but doesn't
+      need to be (unless using ``estimation_mode='fisher_exact'`` or
+      ``estimation_mode='ggn_exact'`` in the optimizer/estimator). The second
+      dimension is the one over which the softmax is computed.
     targets: (OPTIONAL) The values at which the log probability of this
-      distribution is evaluated (to give the loss).  Only required if one wants
-      to use the "empirical Fisher" instead of the true Fisher (which is
-      controlled by the ``estimation_mode`` to the optimizer).
+      distribution is evaluated (to give the loss).  Must be a 2D array of
+      integers with shape ``(logits.shape[0],)``. Only required if using
+      ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
-    mask: (OPTIONAL) Mask to apply to log probabilities over the batch of this
-      distribution . Should be 0/1-valued and of shape ``(batch_size,)``. Log
-      probablities corresponding to mask values of 0 will be treated as constant
-      and equal to 0. Note that the contributions to the curvature matrix
-      approximations from such log probs will be treated as 0 instead of absent
-      (which will affect the averages that underlie these computations). Note
-      that this might change in the future. (Default: None)
+    mask: (OPTIONAL) Mask to apply to log probabilities generated by the
+      distribution. Should be 0/1-valued and of shape ``(logits.shape[0],)``.
+      Log probablities corresponding to mask values of False will be treated
+      as constant and equal to 0. (Default: None)
     weight: (OPTIONAL) a scalar. A coefficient to multiply the
       log prob loss associated with this distribution. The Fisher will be
       multiplied by the corresponding factor. This is NOT equivalent to
       changing the temperature of the distribution since we don't renormalize
       the log prob in the objective function. (Default: 1.0)
-  Returns:
-    The logits and targets as dependable on the tag.
   """
   if targets is not None:
+
     if targets.ndim == logits.ndim:
       tag_cls = OneHotCategoricalLogitsNegativeLogProbLoss_tag
+
     elif targets.ndim == logits.ndim - 1:
       tag_cls = CategoricalLogitsNegativeLogProbLoss_tag
+
     else:
-      raise ValueError(f"The logits rank is {logits.ndim} and the targets rank "
+      raise ValueError(f"The logits ndim is {logits.ndim} and the targets ndim "
                        f"must be either equal or one less than it, but is "
                        f"{targets.ndim}.")
+
+  else:
+    tag_cls = CategoricalLogitsNegativeLogProbLoss_tag
+
   args = [logits]
   args_names = ["logits"]
+
   if targets is not None:
     args = args + [targets]
     args_names = args_names + ["targets"]
+
   if mask is not None:
     args = args + [mask]
     args_names = args_names + ["mask"]
+
   args = args + [weight]
   args_names = args_names + ["weight"]
 
-  return tag_cls.bind(*args, args_names=args_names)[0]
+  tag_cls.bind(*args, args_names=args_names)
 
 
 def register_softmax_cross_entropy_loss(
     logits: Array,
     targets: Optional[Array] = None,
     mask: Optional[Array] = None,
-    weight: chex.Numeric = 1.0,
+    weight: Numeric = 1.0,
 ) -> Array:
   """Registers a softmax cross-entropy loss function.
 
@@ -1357,25 +1394,22 @@ def register_softmax_cross_entropy_loss(
   probabilistic interpretation. It behaves identically for now.
 
   Args:
-    logits: The logits of the distribution (i.e. its parameters). The first
-      dimension must be the batch size.
-    targets: (OPTIONAL) The targets for the loss function.  Only required if
-      one wants to use the "empirical Fisher" instead of the true Fisher
-      (which is controlled by the ``estimation_mode`` to the optimizer).
+    logits: The input logits of the loss as a 2D array of floats. The first
+      dimension will usually be the batch size, but doesn't need to be (unless
+      using ``estimation_mode='fisher_exact'`` or
+      ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
+      The second dimension is the one over which the softmax is computed.
+    targets: (OPTIONAL) The targets for the loss function. Must be a 1D array of
+      integers with shape ``(logits.shape[0],)``. Only required if using
+      ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
-    mask: (OPTIONAL) Mask to apply to losses over the batch. Should be
-      0/1-valued and of shape ``(batch_size,)``. Losses corresponding to mask
-      values of 0 will be treated as constant and equal to 0. Note that the
-      contributions to the curvature matrix approximations from such losses will
-      be treated as 0 instead of absent (which will affect the averages that
-      underlie these computations). Note that this might change in the future.
-      (Default: None)
+    mask: (OPTIONAL) Mask to apply to losses. Should be 0/1-valued and of shape
+      ``(logits.shape[0],)``. Losses corresponding to mask values of False will
+      be treated as constant and equal to 0. (Default: None)
     weight: (OPTIONAL) a scalar. A coefficient to multiply the loss function by.
       (Default: 1.0)
-  Returns:
-    The logits and targets as dependable on the tag.
   """
-  return register_categorical_predictive_distribution(logits,
-                                                      targets=targets,
-                                                      mask=mask,
-                                                      weight=weight)
+  register_categorical_predictive_distribution(logits,
+                                               targets=targets,
+                                               mask=mask,
+                                               weight=weight)  # pytype: disable=bad-return-type  # numpy-scalars

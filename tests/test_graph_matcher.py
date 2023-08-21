@@ -17,11 +17,13 @@ from typing import Callable, Mapping
 
 from absl.testing import absltest
 from absl.testing import parameterized
-import chex
 import jax
 import jax.numpy as jnp
 import kfac_jax
 from tests import models
+
+Array = kfac_jax.utils.Array
+Shape = kfac_jax.utils.Shape
 
 
 class TestGraphMatcher(parameterized.TestCase):
@@ -37,6 +39,11 @@ class TestGraphMatcher(parameterized.TestCase):
     eqn2 = eqns[0]
 
     self.assertEqual(eqn1.primitive, eqn2.primitive)
+    if eqn1.primitive.name == "conv2d_tag":
+      # params removed in https://github.com/google/jax/pull/14211
+      skip_params = ["lhs_shape", "rhs_shape"]
+    else:
+      skip_params = []
     if eqn1.primitive.name == "cond":
       raise NotImplementedError()
     elif eqn1.primitive.name == "while":
@@ -49,7 +56,7 @@ class TestGraphMatcher(parameterized.TestCase):
       exclude_param = ""
     # Check all eqn parameters
     for k in eqn1.params:
-      if k != exclude_param:
+      if k != exclude_param and k not in skip_params:
         self.assertEqual(eqn1.params[k], eqn2.params[k])
 
     # For higher order primitive check the jaxpr match
@@ -128,8 +135,8 @@ class TestGraphMatcher(parameterized.TestCase):
   def test_auto_register_tags_jaxpr(
       self,
       init_func: Callable[..., models.hk.Params],
-      model_func: Callable[..., chex.Array],
-      data_point_shapes: Mapping[str, chex.Shape],
+      model_func: Callable[..., Array],
+      data_point_shapes: Mapping[str, Shape],
       seed: int,
       data_size: int = 4,
   ):

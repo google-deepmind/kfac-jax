@@ -81,10 +81,10 @@ def resnet50_loss(
       logits=logits,
       labels_as_int=batch["labels"],
       params=params,
-      l2_reg=l2_reg,
+      l2_reg=l2_reg if is_training else 0.0,
       haiku_exclude_batch_norm=True,
       haiku_exclude_biases=True,
-      label_smoothing=label_smoothing,
+      label_smoothing=label_smoothing if is_training else 0.0,
       average_loss=average_loss,
   )
 

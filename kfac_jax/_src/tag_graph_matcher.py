@@ -16,10 +16,9 @@ import dataclasses
 import functools
 import itertools
 import pprint
-from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple, TypeVar, Union
+from typing import Any, Callable, Mapping, Optional, Sequence, TypeVar, Tuple, Union, Dict, Set
 
 from absl import logging
-import chex
 import immutabledict
 import jax
 import jax.numpy as jnp
@@ -30,6 +29,8 @@ import numpy as np
 HIGHER_ORDER_NAMES = ("cond", "while", "scan", "xla_call", "xla_pmap")
 
 # Types for annotation
+Array = utils.Array
+PyTreeDef = utils.PyTreeDef
 Var = jax.core.Var
 Vars = Sequence[Var]
 Jaxpr = jax.core.Jaxpr
@@ -42,7 +43,7 @@ JaxprOrClosedJaxpr = Union[Jaxpr, ClosedJaxpr]
 EquivalenceFunction = Callable[[JaxprEqn, JaxprEqn], bool]
 MakeVarFunc = Callable[[jax.core.AbstractValue], Var]
 VarProcessor = Callable[[Vars, MakeVarFunc], Tuple[Vars, JaxprEqns]]
-PatternComputeFunc = Callable[[chex.Array, Sequence[chex.Array]], chex.Array]
+PatternComputeFunc = Callable[[Array, Sequence[Array]], Array]
 ParameterExtractorFunc = Callable[[JaxprEqns], Mapping[str, Any]]
 TagCtor = Callable[[Vars, Vars, JaxprEqns, MakeVarFunc], JaxprEqn]
 
@@ -90,8 +91,7 @@ def conv_general_dilated_equivalent(
   params1 = equation1.params
   params2 = equation2.params
   for k in ("window_strides", "padding",
-            "lhs_dilation", "rhs_dilation",
-            "lhs_shape", "rhs_shape"):
+            "lhs_dilation", "rhs_dilation"):
     if len(params1[k]) != len(params2[k]):
       return False
   if (len(params1["dimension_numbers"].lhs_spec) !=
@@ -225,9 +225,9 @@ class JaxprGraph:
   """
   name: str
   closed_jaxpr: ClosedJaxpr
-  params_tree: chex.PyTreeDef
+  params_tree: PyTreeDef
   params_vars: Vars
-  out_tree: chex.PyTreeDef
+  out_tree: PyTreeDef
   tag_ctor: Optional[TagCtor]
   # Until we stop supporting Python 3.7 we can't use @functools.cached_property,
   # so we set these attributes in __post_init__
@@ -278,12 +278,15 @@ class JaxprGraph:
     # leaf_vars depends on them
 
     to_process_eqns = [self.var_to_creation_op[v] for v in leaf_vars]
+    processed_vars = set()
     while to_process_eqns:
       next_eqn = to_process_eqns.pop()
       eqns.append(next_eqn)
       for v in next_eqn.invars:
-        if v not in root_vars and v in self.var_to_creation_op:
+        if (not isinstance(v, jax.core.Literal) and v not in root_vars and
+            v not in processed_vars and v in self.var_to_creation_op):
           to_process_eqns.append(self.var_to_creation_op[v])
+          processed_vars.add(v)
     return tuple(eqns)
   #
   # @functools.cached_property
@@ -316,7 +319,7 @@ class JaxprGraph:
 
 def make_jax_graph(
     func: utils.Func,
-    func_args: Sequence[Any],
+    func_args: utils.FuncArgs,
     params_index: Union[int, Sequence[int]],
     name: str,
     compute_only_loss_tags: bool,
@@ -443,6 +446,7 @@ class GraphPattern:
           clean_broadcasts=True,
       )
       object.__setattr__(self, "_graph", graph)
+    assert self._graph is not None
     return self._graph
 
   def tag_ctor(
@@ -790,9 +794,9 @@ def find_layer_tags_and_patterns(
 
 
 def read_env(
-    env: Mapping[Var, chex.Array],
-    var: Union[jax.core.Literal, Var, Sequence[Var]],
-) -> Union[float, chex.Array, Sequence[chex.Array]]:
+    env: Mapping[Var, Array],
+    var: Union[jax.core.Literal, Vars],
+) -> Union[float, Array, Sequence[Array]]:
   """Reads from the variable-to-array environment during tracing."""
   if isinstance(var, (list, tuple)):
     return jax.tree_util.tree_map(lambda x: read_env(env, x), var)
@@ -806,10 +810,10 @@ def read_env(
 
 
 def write_env(
-    env: MutableMapping[Var, chex.Array],
-    var: Union[Var, List[Var]],
-    val: Union[chex.Array, List[chex.Array]],
-) -> None:
+    env: Dict[Var, Array],
+    var: Union[Var, Vars],
+    val: Union[Array, Sequence[Array]],
+):
   """Writes to the variable-to-array environment during tracing."""
   if isinstance(var, tuple):
     raise NotImplementedError()
@@ -818,7 +822,7 @@ def write_env(
       val = [val]
     return jax.tree_util.tree_map(lambda x, y: write_env(env, x, y), var, val)
   elif isinstance(var, (jax.core.Literal, Var)):
-    env[var] = val
+    env[var] = val  # pytype: disable=container-type-mismatch  # numpy-scalars
   else:
     raise NotImplementedError()
 
@@ -954,17 +958,23 @@ def merge_broadcasts_jaxpr(jaxpr: J) -> J:
 #             |___/
 
 
-def _dense(x: chex.Array, params: Sequence[chex.Array]) -> chex.Array:
+def _dense(x: Array, params: Sequence[Array]) -> Array:
   """Example of a dense layer function."""
   w, *opt_b = params
   y = jnp.matmul(x, w)
   return y if not opt_b else y + opt_b[0]
 
 
+def _dense_with_reshape(x: Array, params: Sequence[Array],) -> Array:
+  w, b = params
+  y = jnp.matmul(x, w)
+  return y + b.reshape([1, b.size])
+
+
 def _dense_parameter_extractor(
     eqns: Sequence[JaxprEqn],
 ) -> Mapping[str, Any]:
-  """Extracts all parameters from the conv_general_dilated operator."""
+  """Extracts all parameters from the `dot_general` operator."""
   for eqn in eqns:
     if eqn.primitive.name == "dot_general":
       return dict(**eqn.params)
@@ -973,6 +983,7 @@ def _dense_parameter_extractor(
 
 def _make_dense_pattern(
     with_bias: bool,
+    reshape: bool,
     in_dim: int = 13,
     out_dim: int = 7,
 ) -> GraphPattern:
@@ -982,13 +993,13 @@ def _make_dense_pattern(
   return GraphPattern(
       name="dense_with_bias" if with_bias else "dense_no_bias",
       tag_primitive=tags.dense,
-      compute_func=_dense,
+      compute_func=_dense_with_reshape if reshape else _dense,
       parameters_extractor_func=_dense_parameter_extractor,
       example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
   )
 
 
-def _conv2d(x: chex.Array, params: Sequence[chex.Array]) -> chex.Array:
+def _conv2d(x: Array, params: Sequence[Array]) -> Array:
   """Example of a conv2d layer function."""
   w = params[0]
   y = jax.lax.conv_general_dilated(
@@ -1007,7 +1018,7 @@ def _conv2d(x: chex.Array, params: Sequence[chex.Array]) -> chex.Array:
 def _conv2d_parameter_extractor(
     eqns: Sequence[JaxprEqn],
 ) -> Mapping[str, Any]:
-  """Extracts all parameters from the conv_general_dilated operator."""
+  """Extracts all parameters from the `conv_general_dilated` operator."""
   for eqn in eqns:
     if eqn.primitive.name == "conv_general_dilated":
       return dict(**eqn.params)
@@ -1030,11 +1041,11 @@ def _make_conv2d_pattern(
 
 
 def _scale_and_shift(
-    x: chex.Array,
-    params: Sequence[chex.Array],
+    x: Array,
+    params: Sequence[Array],
     has_scale: bool,
     has_shift: bool,
-) -> chex.Array:
+) -> Array:
   """Example of a scale and shift function."""
   if has_scale and has_shift:
     scale, shift = params
@@ -1081,11 +1092,11 @@ def _make_scale_and_shift_pattern(
 
 
 def _normalization_haiku(
-    inputs: Sequence[chex.Array],
-    params: Sequence[chex.Array],
+    inputs: Sequence[Array],
+    params: Sequence[Array],
     has_scale: bool,
     has_shift: bool,
-) -> chex.Array:
+) -> Array:
   """Example of normalization as is defined in Haiku."""
   if len(params) not in (1, 2):
     raise ValueError("The inputs to the `normalization_haiku` computation must "
@@ -1161,8 +1172,9 @@ def _make_normalization_haiku_pattern(
 
 
 DEFAULT_GRAPH_PATTERNS = (
-    _make_dense_pattern(True),
-    _make_dense_pattern(False),
+    _make_dense_pattern(True, False),
+    _make_dense_pattern(True, True),
+    _make_dense_pattern(False, False),
     _make_conv2d_pattern(True),
     _make_conv2d_pattern(False),
     _make_scale_and_shift_pattern(1, True, True),

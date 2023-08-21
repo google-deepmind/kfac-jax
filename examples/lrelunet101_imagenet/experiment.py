@@ -15,15 +15,21 @@
 import functools
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
-import chex
 import haiku as hk
 from jax import nn
 import jax.numpy as jnp
+import kfac_jax
 from examples import losses
 from examples import training
-from ml_collections import config_dict
+import ml_collections
 import numpy as np
 
+
+Array = kfac_jax.utils.Array
+Numeric = kfac_jax.utils.Numeric
+PRNGKey = kfac_jax.utils.PRNGKey
+Shape = kfac_jax.utils.Shape
+DType = kfac_jax.utils.DType
 FloatStrOrBool = Union[str, float, bool]
 
 
@@ -47,7 +53,7 @@ class ScaledUniformOrthogonal(hk.initializers.Initializer):
     self.scale = scale
     self.axis = axis
 
-  def __call__(self, shape: chex.Shape, dtype: chex.ArrayDType) -> chex.Array:
+  def __call__(self, shape: Shape, dtype: DType) -> Array:  # pytype: disable=signature-mismatch  # numpy-scalars
     # This has essentially copied from https://github.com/deepmind/dks
 
     if self.axis != -1:
@@ -139,7 +145,7 @@ class BlockV2(hk.Module):
     self.layers = layers
     self.activation = activation
 
-  def __call__(self, inputs: chex.Array, **_: Any) -> chex.Array:
+  def __call__(self, inputs: Array, **_: Any) -> Array:
     out = inputs
 
     for conv_i in self.layers:
@@ -177,7 +183,7 @@ class BlockGroup(hk.Module):
           name=f"block_{i}"
       ))
 
-  def __call__(self, inputs: chex.Array, **kwargs: Any) -> chex.Array:
+  def __call__(self, inputs: Array, **kwargs: Any) -> Array:
     out = inputs
     for block in self.blocks:
       out = block(out, **kwargs)
@@ -295,10 +301,10 @@ class LReLUNet(hk.Module):
 
   def __call__(
       self,
-      inputs: chex.Array,
+      inputs: Array,
       is_training: bool,
       **kwargs: Any
-  ) -> chex.Array:
+  ) -> Array:
     out = inputs
     out = self.initial_conv(out)
     out = hk.max_pool(
@@ -323,9 +329,9 @@ def lrelunet(
 ) -> hk.Transformed:
   """Constructs a Haiku transformed object of the LReLUNet101 network."""
   def func(
-      batch: Union[chex.Array, Mapping[str, chex.Array]],
+      batch: Union[Array, Mapping[str, Array]],
       is_training: bool
-  ) -> chex.Array:
+  ) -> Array:
     """Evaluates the network."""
     if isinstance(batch, dict):
       batch = batch["images"]
@@ -336,18 +342,18 @@ def lrelunet(
 
 def lrelunet_loss(
     params: hk.Params,
-    rng: chex.PRNGKey,
-    batch: Mapping[str, chex.Array],
+    rng: PRNGKey,
+    batch: Mapping[str, Array],
     is_training: bool,
-    l2_reg: chex.Numeric,
+    l2_reg: Numeric,
     label_smoothing: float = 0.1,
     average_loss: bool = True,
     num_classes: int = 1000,
     depth: int = 101,
     **kwargs: Any,
 ) -> Tuple[
-    chex.Array,
-    Union[Dict[str, chex.Array], Tuple[hk.State, Dict[str, chex.Array]]]
+    Array,
+    Union[Dict[str, Array], Tuple[hk.State, Dict[str, Array]]]
 ]:
   """Evaluates the loss of the LReLUNet model."""
   logits = lrelunet(num_classes=num_classes, depth=depth, **kwargs).apply(
@@ -357,10 +363,10 @@ def lrelunet_loss(
       logits=logits,
       labels_as_int=batch["labels"],
       params=params,
-      l2_reg=l2_reg,
+      l2_reg=l2_reg if is_training else 0.0,
       haiku_exclude_batch_norm=True,
       haiku_exclude_biases=True,
-      label_smoothing=label_smoothing,
+      label_smoothing=label_smoothing if is_training else 0.0,
       average_loss=average_loss,
   )
 
@@ -371,8 +377,8 @@ class LReLUNetImageNetExperiment(training.ImageNetExperiment):
   def __init__(
       self,
       mode: str,
-      init_rng: chex.PRNGKey,
-      config: config_dict.ConfigDict
+      init_rng: PRNGKey,
+      config: ml_collections.ConfigDict,
   ):
     """Initializes the network instance."""
     super().__init__(

@@ -12,37 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Utility functions for computing and automatically registering losses."""
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple, Dict
 
-import chex
 import haiku as hk
+import jax
 from jax import lax
 import jax.numpy as jnp
 from jax.scipy import special
 import kfac_jax
 
+Array = kfac_jax.utils.Array
+Numeric = kfac_jax.utils.Numeric
+Params = kfac_jax.utils.Params
+
 
 def l2_regularizer(
-    params: kfac_jax.utils.Params,
+    params: Params,
     haiku_exclude_batch_norm: bool,
     haiku_exclude_biases: bool,
-) -> chex.Array:
+) -> Array:
   """Computes an L2 regularizer."""
+
   if haiku_exclude_batch_norm:
-    params = hk.data_structures.filter(
+    params = hk.data_structures.filter(  # pytype: disable=wrong-arg-types
         lambda m, n, p: "batchnorm" not in m, params)
+
   if haiku_exclude_biases:
-    params = hk.data_structures.filter(
-        lambda m, n, p: n != "b", params)
+    params = hk.data_structures.filter(  # pytype: disable=wrong-arg-types
+        lambda m, n, p: n != "b", params
+    )
+
   return 0.5 * kfac_jax.utils.inner_product(params, params)
 
 
 def sigmoid_cross_entropy(
-    logits: chex.Array,
-    labels: chex.Array,
+    logits: Array,
+    labels: Array,
     weight: float = 1.0,
     register_loss: bool = True,
-) -> chex.Array:
+) -> Array:
   """Sigmoid cross-entropy loss."""
   if register_loss:
     kfac_jax.register_sigmoid_cross_entropy_loss(logits, labels, weight)
@@ -55,63 +63,94 @@ def sigmoid_cross_entropy(
 
 
 def softmax_cross_entropy(
-    logits: chex.Array,
-    labels: chex.Array,
-    weight: float = 1.0,
+    logits: Array,
+    labels: Array,
+    weight: Numeric = 1.0,
     register_loss: bool = True,
-    mask: Optional[chex.Array] = None,
-) -> chex.Array:
+    mask: Optional[Array] = None,
+) -> Array:
   """Softmax cross entropy loss."""
 
   if register_loss:
-    kfac_jax.register_softmax_cross_entropy_loss(logits, targets=labels,
-                                                 mask=mask, weight=weight)
+    if not isinstance(weight, float):
+      raise NotImplementedError("Non-constant loss weights are not currently "
+                                "supported.")
+
+    # Currently the registration functions only support 2D array inputs values
+    # for `logits`, and so we need the reshapes below.
+    kfac_jax.register_softmax_cross_entropy_loss(
+        logits.reshape([-1, logits.shape[-1]]),
+        targets=labels.reshape([-1]),
+        mask=mask.reshape([-1]) if mask is not None else None,
+        weight=weight)
 
   max_logits = jnp.max(logits, keepdims=True, axis=-1)
+
+  # It's unclear whether this stop_gradient is a good idea.
+  # See https://github.com/google/jax/issues/13529
+  max_logits = lax.stop_gradient(max_logits)
+
   logits = logits - max_logits
+
   log_z = special.logsumexp(logits, axis=-1)
 
   if logits.shape == labels.shape:
-    # Dense labels
-    loss = weight * (- jnp.sum(logits * labels, axis=-1) + log_z)
+    # Labels are encoded as 1-hot vectors
+    loss = -jnp.sum(logits * labels, axis=-1) + log_z
+
   elif logits.ndim == labels.ndim + 1:
-    # One hot encoded labels
-    idx = jnp.arange(labels.shape[0])
-    loss = weight * (- logits[idx, labels] + log_z)
+    # Labels are encoded as integers
+
+    # Taken from Optax's softmax_cross_entropy_with_integer_labels:
+    label_logits = jnp.take_along_axis(
+        logits, labels[..., None], axis=-1)[..., 0]
+
+    loss = -label_logits + log_z
+
   else:
     raise ValueError(f"The provided labels must have the same rank as the "
                      f"logits - {logits.ndim}, or one less, but got "
                      f"{labels.ndim}.")
 
   if mask is not None:
-    return loss * mask
-  else:
-    return loss
+    loss = loss * mask
+
+  loss = weight * loss
+
+  # sum over all but the batch dimension
+  loss = jnp.sum(loss, axis=range(1, loss.ndim))
+
+  return loss
 
 
 def squared_error(
-    prediction: chex.Array,
-    targets: chex.Array,
+    prediction: Array,
+    targets: Array,
     weight: float = 1.0,
     register_loss: bool = True,
-) -> chex.Array:
+) -> Array:
   """Squared error loss."""
+
   if prediction.shape != targets.shape:
     raise ValueError("prediction and targets should have the same shape.")
+
   if register_loss:
     kfac_jax.register_squared_error_loss(prediction, targets, weight)
+
   return weight * jnp.sum(jnp.square(prediction - targets), axis=-1)
 
 
 def top_k_accuracy(
-    logits_or_probs: chex.Array,
-    labels: chex.Array,
+    logits_or_probs: Array,
+    labels: Array,
     k: int = 1,
-) -> chex.Array:
+) -> Array:
   """Top-k accuracy."""
+
   if labels.ndim == logits_or_probs.ndim:
     # One hot labels
     labels = jnp.argmax(labels, axis=-1)
+
   elif labels.ndim + 1 != logits_or_probs.ndim:
     raise ValueError(f"The provided labels must have the same rank as the "
                      f"logits_or_probs - {logits_or_probs.ndim}, or one less, "
@@ -119,73 +158,100 @@ def top_k_accuracy(
   if k == 1:
     indices = jnp.argmax(logits_or_probs, axis=-1)
     correct = jnp.equal(indices, labels)
+
   else:
     _, indices = lax.top_k(logits_or_probs, k=k)
     correct = jnp.equal(indices, labels[..., None])
     correct = jnp.sum(correct, axis=-1)
-  return jnp.mean(correct.astype(logits_or_probs.dtype), axis=0)
+
+  return jnp.mean(correct.astype(logits_or_probs.dtype))
 
 
 def add_label_smoothing(
-    labels: chex.Array,
+    labels: Array,
     label_smoothing: float,
     num_classes: int,
     labels_are_one_hot: bool = False,
-) -> chex.Array:
+) -> Array:
   """Adds label smoothing to the labels."""
+
   if label_smoothing < 0. or label_smoothing > 1.:
-    raise ValueError(f"label_smoothing is {label_smoothing} and should be in "
+    raise ValueError(f"label_smoothing is {label_smoothing} but should be in "
                      f"[0, 1].")
+
   if label_smoothing > 0:
+
     if not labels_are_one_hot:
-      labels = hk.one_hot(labels, num_classes)
+      labels = jax.nn.one_hot(labels, num_classes)
+
     assert labels.shape[-1] == num_classes
+
     smooth_positives = 1. - label_smoothing
     smooth_negatives = label_smoothing / num_classes
     labels = smooth_positives * labels + smooth_negatives
+
   return labels
 
 
 def classifier_loss_and_stats(
-    logits: chex.Array,
-    labels_as_int: chex.Array,
-    params: kfac_jax.utils.Params,
-    l2_reg: chex.Numeric,
+    logits: Array,
+    labels_as_int: Array,
+    params: Params,
+    l2_reg: Numeric,
     haiku_exclude_batch_norm: bool,
     haiku_exclude_biases: bool,
     label_smoothing: float = 0.0,
     top_k_stats: Sequence[int] = (1, 5),
     average_loss: bool = True,
     register_loss: bool = True,
-    mask: Optional[chex.Array] = None,
-) -> Tuple[chex.Array, Dict[str, chex.Array]]:
+    mask: Optional[Array] = None,
+    normalization_mode: str = "batch_size_only",
+) -> Tuple[Array, Dict[str, Array]]:
   """Softmax cross-entropy with regularizer and accuracy statistics."""
+
+  batch_size = logits.shape[0]
+
+  if labels_as_int.shape[0] != batch_size:
+    raise ValueError(f"Size of first dimension of logits ({batch_size}) "
+                     f"(i.e. batch size) doesn't match that of labels "
+                     f"({labels_as_int.shape[0]})")
+
+  if mask is not None and mask.shape[0] != batch_size:
+    raise ValueError(f"Size of first dimension of logits ({batch_size}) "
+                     f"(i.e. batch size) doesn't match that of mask "
+                     f"({mask.shape[0]})")
+
+  if normalization_mode == "batch_size_only":
+    weight = 1.0
+
+  elif normalization_mode == "all_dims":
+    weight = 1.0 / kfac_jax.utils.product(logits.shape[1:-1])
+
+  elif normalization_mode == "all_dims_nonmasked":
+    assert mask is not None
+    weight = batch_size / jnp.sum(mask)
+
+  else:
+    raise ValueError(f"Unrecognized value for normalization_mode: "
+                     f"{normalization_mode}")
 
   labels = add_label_smoothing(labels_as_int, label_smoothing, logits.shape[-1])
 
-  softmax_loss = softmax_cross_entropy(logits, labels,
-                                       register_loss=register_loss,
-                                       mask=mask)
-  if mask is not None:
-    total_non_masked = jnp.sum(mask)
-  else:
-    total_non_masked = softmax_loss.shape[0]
+  softmax_loss = softmax_cross_entropy(
+      logits, labels, weight=weight, register_loss=register_loss, mask=mask)
 
-  averaged_raw_loss = jnp.sum(softmax_loss, axis=0) / total_non_masked
+  averaged_raw_loss = jnp.sum(softmax_loss, axis=0) / batch_size
 
   loss = averaged_raw_loss if average_loss else softmax_loss
 
-  regularizer = l2_regularizer(
+  l2_reg_val = l2_regularizer(
       params, haiku_exclude_batch_norm, haiku_exclude_biases)
 
-  if mask is not None and not average_loss:
-    regularizer = regularizer * mask
-
-  regularized_loss = loss + l2_reg * regularizer
+  regularized_loss = loss + l2_reg * l2_reg_val
 
   stats = dict(
       raw_loss=averaged_raw_loss,
-      regularizer=regularizer,
+      l2_reg_val=l2_reg_val,
   )
   for k in top_k_stats:
     stats[f"top_{k}_accuracy"] = top_k_accuracy(logits, labels_as_int, k)

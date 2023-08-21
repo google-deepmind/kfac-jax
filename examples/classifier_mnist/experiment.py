@@ -13,20 +13,24 @@
 # limitations under the License.
 """Haiku implementation of a small convolutional classifier for MNIST."""
 import functools
-from typing import Dict, Mapping, Tuple, Union
+from typing import Mapping, Tuple, Union, Dict
 
-import chex
 import haiku as hk
 import jax
 import jax.numpy as jnp
 
+import kfac_jax
 from examples import losses
 from examples import training
+
+Array = kfac_jax.utils.Array
+Numeric = kfac_jax.utils.Numeric
+PRNGKey = kfac_jax.utils.PRNGKey
 
 
 def convolutional_classifier() -> hk.Transformed:
   """Constructs a Haiku transformed object of the classifier network."""
-  def func(batch: Union[chex.Array, Mapping[str, chex.Array]]) -> chex.Array:
+  def func(batch: Union[Array, Mapping[str, Array]]) -> Array:
     """Evaluates the classifier."""
     if isinstance(batch, Mapping):
       batch = batch["images"]
@@ -52,33 +56,33 @@ def convolutional_classifier() -> hk.Transformed:
 
 def classifier_loss(
     params: hk.Params,
-    batch: Mapping[str, chex.Array],
-    l2_reg: chex.Numeric,
+    batch: Mapping[str, Array],
+    l2_reg: Numeric,
     is_training: bool,
     average_loss: bool = True,
-) -> Tuple[chex.Array, Dict[str, chex.Array]]:
+) -> Tuple[Array, Dict[str, Array]]:
   """Evaluates the loss of the classifier network."""
-  del is_training  # not used
 
   logits = convolutional_classifier().apply(params, batch["images"])
 
-  cross_entropy = losses.softmax_cross_entropy(logits, batch["labels"])
+  loss, stats = losses.classifier_loss_and_stats(
+      logits=logits,
+      labels_as_int=batch["labels"],
+      params=params,
+      l2_reg=l2_reg if is_training else 0.0,
+      haiku_exclude_batch_norm=False,
+      haiku_exclude_biases=False,
+      average_loss=average_loss,
+      top_k_stats=(1,),
+  )
 
-  if average_loss:
-    cross_entropy = jnp.mean(cross_entropy)
-
-  params_l2 = losses.l2_regularizer(params, False, False)
-  regularized_loss = cross_entropy + l2_reg * params_l2
-
-  accuracy = losses.top_k_accuracy(logits, batch["labels"], 1)
-
-  return regularized_loss, dict(accuracy=accuracy)
+  return loss, stats
 
 
 class ClassifierMnistExperiment(training.MnistExperiment):
   """Jaxline experiment class for running the MNIST classifier."""
 
-  def __init__(self, mode: str, init_rng: jnp.ndarray, config):
+  def __init__(self, mode: str, init_rng: PRNGKey, config):
     super().__init__(
         supervised=True,
         flatten_images=False,

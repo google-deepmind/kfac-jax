@@ -13,6 +13,7 @@
 # limitations under the License.
 """Jaxline experiment classes and utilities."""
 import abc
+import collections
 import copy
 import functools
 import os
@@ -20,7 +21,6 @@ import time
 from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Union
 
 from absl import logging
-import chex
 import jax
 import jax.numpy as jnp
 from jaxline import experiment
@@ -28,28 +28,120 @@ from jaxline import utils as pipe_utils
 import kfac_jax
 from examples import datasets
 from examples import optimizers
-from ml_collections import config_dict
-import numpy as np
+import ml_collections
 
 
 # Types for annotation
-InitFunc = Callable[[chex.PRNGKey, kfac_jax.utils.Batch], kfac_jax.utils.Params]
+Array = kfac_jax.utils.Array
+Numeric = kfac_jax.utils.Numeric
+PRNGKey = kfac_jax.utils.PRNGKey
+Params = kfac_jax.utils.Params
+Batch = kfac_jax.utils.Batch
+FuncState = kfac_jax.utils.FuncState
+
+InitFunc = Callable[[PRNGKey, Batch], Params]
+BatchSizeCalculatorCtor = Callable[[int, int, str], "BatchSizeCalculator"]
+ExperimentBatchSizes = collections.namedtuple(
+    "ExperimentBatchSizes", ["train", "eval"]
+)
 
 
-class SupervisedExperiment(experiment.AbstractExperiment):
+def is_exactly_one_not_none(*args):
+  return sum(a is not None for a in args) == 1
+
+
+class BatchSizeCalculator:
+  """A class for computing the batch size in different ways."""
+
+  def __init__(self, total: int, per_device: int, mode: str):
+    if total == -1:
+      total = None
+    if per_device == -1:
+      per_device = None
+    if not is_exactly_one_not_none(total, per_device):
+      raise ValueError(
+          "Exactly one of the ``total`` and ``per_device`` arguments must "
+          "be set to a value and the other one must be ``None``."
+      )
+    self._mode = mode
+    self._total = total
+    self._per_device = per_device
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def num_local_devices(self) -> int:
+    """The number of local devices."""
+    return jax.local_device_count()
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def num_devices(self) -> int:
+    """The total number of devices."""
+    return jax.device_count()
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def per_device(self) -> int:
+    """The per-device batch size."""
+    if self._per_device is not None:
+      return self._per_device
+    if self._total % self.num_devices != 0:
+      raise ValueError(
+          "The total batch size must be divisible by the number of devices."
+      )
+    return self._total // self.num_devices
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def per_host(self) -> int:
+    """The per-host batch size."""
+    return self.per_device * self.num_local_devices
+
+  @property
+  @functools.lru_cache(maxsize=1)
+  def total(self) -> int:
+    """The total batch size."""
+    return self.per_device * self.num_devices
+
+  def log_machines_setup(self):
+    """Logs the machine setup and batch sizes."""
+    logging.info("Worker with mode %s", self._mode)
+    logging.info(
+        "Number of hosts[%d]: %d", jax.process_index(), jax.process_count()
+    )
+    logging.info(
+        "Number of devices[%d]: %d/%d",
+        jax.process_index(),
+        self.num_local_devices,
+        self.num_devices,
+    )
+    logging.info(
+        "Device batch size[%d]: (%d x %d)/%d",
+        jax.process_index(),
+        self.num_devices,
+        self.per_device,
+        self.total,
+    )
+
+
+class SupervisedExperiment(abc.ABC):
   """Abstract supervised experiment.
 
   Attributes:
     mode: Either 'train' or 'eval' specifying whether to run training or
       evaluation of the experiment.
-    init_rng: The Jax PRNG key that is used to seed any randomness of the
-      experiment.
+    init_rng: The Jax PRNG key that is used to seed the initialization of the
+      model parameters.
+    seed_rng: An RNG used fo seeding the dataset iterators.
     config: The experiment config.
     has_aux: Whether the model function returns any auxiliary data.
     has_rng: Whether the model function needs an PRNG key.
     has_func_state: Whether the model function has a state.
+    eval_splits: Evaluation splits of the evaluation dataset loader.
+    batch_size: An instance of `ExperimentBatchSizes`.
     init_parameters_func: A function that initializes the parameters and
       optionally the state of the model if it has one.
+    params_init: A function that initializes the model parameters.
     model_loss_func: A function that computes the loss for the model.
     train_model_func: The `model_loss_func` with `is_training` set to `True`.
     eval_model_func: The `model_loss_func` with `is_training` set to `False`.
@@ -57,26 +149,18 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     optimizer: The optimizer instance used for training.
   """
 
-  CHECKPOINT_ATTRS = {
-      "_params": "params",
-      "_state": "state",
-      "_opt_state": "opt_state",
-  }
-
-  NON_BROADCAST_CHECKPOINT_ATTRS = {
-      "_python_step": "python_step"
-  }
-
   def __init__(
       self,
       mode: str,
-      init_rng: chex.PRNGKey,
-      config: config_dict.ConfigDict,
+      init_rng: PRNGKey,
+      config: ml_collections.ConfigDict,
       init_parameters_func: InitFunc,
       model_loss_func: kfac_jax.optimizer.ValueFunc,
       has_aux: bool,
       has_rng: bool,
       has_func_state: bool,
+      eval_splits: Tuple[str, ...] = ("train", "test"),
+      batch_size_calculator_ctor: BatchSizeCalculatorCtor = BatchSizeCalculator,
   ):
     """Initializes experiment.
 
@@ -92,76 +176,53 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       has_aux: Whether the model function returns auxiliary data.
       has_rng: Whether the model function requires an RNG.
       has_func_state: Whether the model function has a state.
+      eval_splits: Evaluation splits of the evaluation dataset loader.
+      batch_size_calculator_ctor: A constructor function to create a batch size
+        calculator.
     """
-    super().__init__(mode=mode, init_rng=init_rng)
     self.mode = mode
-    self.init_rng = init_rng
+    self.init_rng, seed_rng = jax.random.split(init_rng)
+    self.seed_rng = jax.random.fold_in(seed_rng, jax.process_index())
     self.config = config
     self.has_aux = has_aux
     self.has_rng = has_rng
     self.has_func_state = has_func_state
-    self.verify_batch_size_config()
+    self.eval_splits = eval_splits
+    self.batch_size = ExperimentBatchSizes(
+        train=batch_size_calculator_ctor(  # pytype: disable=wrong-keyword-args
+            mode="train", **self.config.batch_size.train
+        ),
+        eval=batch_size_calculator_ctor(  # pytype: disable=wrong-keyword-args
+            mode="eval", **self.config.batch_size.eval
+        ),
+    )
 
-    self.init_parameters_func = init_parameters_func
+    self.params_init = jax.pmap(init_parameters_func)
     self.model_loss_func = model_loss_func
     self.train_model_func = functools.partial(
-        self.model_loss_func, is_training=True)
+        self.model_loss_func, is_training=True
+    )
     self.eval_model_func = functools.partial(
-        self.model_loss_func, is_training=False)
+        self.model_loss_func, is_training=False
+    )
     self.eval_batch = jax.pmap(
-        self._evaluate_single_batch, axis_name="eval_axis")
+        self._evaluate_single_batch, axis_name="eval_axis"
+    )
 
     # Log some useful information
-    self.log_machines_setup()
+    getattr(self.batch_size, self.mode).log_machines_setup()
 
     # Create the optimizer
     self.optimizer = self.create_optimizer()
 
     # Initialize the state
-    self._train_input, self._eval_input = None, None
+    self._train_input, self._eval_input, self._init_batch = None, None, None
 
     self._params, self._state, self._opt_state = None, None, None
     self._python_step = 0
-    self.initialize_state()
-
-  def log_machines_setup(self):
-    logging.info("Worker with mode %s", self.mode)
-    logging.info("Number of hosts[%d]: %d", jax.process_index(),
-                 jax.process_count())
-    logging.info("Number of devices[%d]: %d/%d", jax.process_index(),
-                 jax.local_device_count(), jax.device_count())
-    if self.mode == "train":
-      logging.info("Training device batch size[%d]: (%d x %d)/%d",
-                   jax.process_index(),
-                   self.train_num_devices,
-                   self.train_per_device_batch_size,
-                   self.train_total_batch_size)
-    else:
-      logging.info("Evaluation device batch size[%d]: %d/%d",
-                   jax.process_index(),
-                   self.eval_per_device_batch_size,
-                   self.eval_total_batch_size)
-
-  def verify_batch_size_config(self):
-    """Verifies that the provided batch size config is valid."""
-    if self.config.batch_size.train.total == -1:
-      self.config.batch_size.train.total = None
-    if self.config.batch_size.train.per_device == -1:
-      self.config.batch_size.train.per_device = None
-    if self.config.batch_size.eval.total == -1:
-      self.config.batch_size.eval.total = None
-    if self.config.batch_size.eval.per_device == -1:
-      self.config.batch_size.eval.per_device = None
-    if (self.config.batch_size.train.total is None ==
-        self.config.batch_size.train.per_device is not None):
-      raise ValueError("Exactly one of the ``batch_size.train.total`` and "
-                       "``batch_size.train.per_device`` config arguments must "
-                       "be set to a value and the other one must be ``None``.")
-    if (self.config.batch_size.eval.total is None ==
-        self.config.batch_size.eval.per_device is None):
-      raise ValueError("Exactly one of the ``batch_size.eval.total`` and "
-                       "``batch_size.eval.per_device`` config arguments must "
-                       "be set to a value and the other one must be ``None``.")
+    self._num_tensors = 0
+    self._num_parameters = 0
+    self._optimizer_state_size = 0
 
   @property
   @abc.abstractmethod
@@ -169,117 +230,95 @@ class SupervisedExperiment(experiment.AbstractExperiment):
     """The number of data points in the training set."""
 
   @property
-  @functools.lru_cache(maxsize=1)
-  def train_num_local_devices(self) -> int:
-    """The number of training local devices."""
-    return jax.local_device_count()
+  def train_input(self) -> Iterator[Batch]:
+    """Returns the current training iterator."""
 
-  @property
-  @functools.lru_cache(maxsize=1)
-  def train_num_devices(self) -> int:
-    """The number of training devices."""
-    return jax.device_count()
+    if self._train_input is None:
 
-  @property
-  @functools.lru_cache(maxsize=1)
-  def train_per_device_batch_size(self) -> int:
-    """The training per-device batch size."""
-    if self.config.batch_size.train.per_device is None:
-      if self.config.batch_size.train.total % self.train_num_devices != 0:
-        raise ValueError("The total batch size must be divisible by the number "
-                         "of devices.")
-      return self.config.batch_size.train.total // self.train_num_devices
-    else:
-      return self.config.batch_size.train.per_device
+      logging.info("Initializing training data iterator.")
 
-  @property
-  @functools.lru_cache(maxsize=1)
-  def train_host_batch_size(self) -> int:
-    """The training per-host batch size."""
-    assert self.mode == "train"
-    return self.train_per_device_batch_size * self.train_num_local_devices
+      seed_rng = jax.random.fold_in(self.seed_rng, self._python_step)
 
-  @property
-  @functools.lru_cache(maxsize=1)
-  def train_total_batch_size(self) -> int:
-    """The training total batch size."""
-    return self.train_per_device_batch_size * self.train_num_devices
+      self._train_input = pipe_utils.py_prefetch(
+          functools.partial(
+              self._build_train_input,
+              split="train",
+              seed=int(seed_rng[0]),
+              device_batch_size=self.batch_size.train.per_device,
+          )
+      )
 
-  @property
-  @functools.lru_cache(maxsize=1)
-  def eval_num_local_devices(self) -> int:
-    """The evaluator number of local devices."""
-    return jax.local_device_count()
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def eval_num_devices(self) -> int:
-    """The evaluator number of devices."""
-    return jax.device_count()
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def eval_per_device_batch_size(self) -> int:
-    """The evaluator per-device batch size."""
-    if self.config.batch_size.eval.per_device is None:
-      if self.config.batch_size.eval.total % jax.device_count() != 0:
-        raise ValueError("The total batch size must be divisible by the number "
-                         "of devices.")
-      return self.config.batch_size.eval.total // self.num_eval_devices
-    else:
-      return self.config.batch_size.eval.per_device
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def eval_host_batch_size(self) -> int:
-    """The evaluator per-host batch size."""
-    assert self.mode == "eval"
-    return self.eval_per_device_batch_size * self.eval_num_local_devices
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def eval_total_batch_size(self) -> int:
-    """The evaluator total batch size."""
-    return self.eval_per_device_batch_size * self.num_eval_devices
-
-  @property
-  @functools.lru_cache(maxsize=1)
-  def train_inputs(self) -> Union[
-      Iterator[kfac_jax.utils.Batch],
-      Tuple[Iterator[kfac_jax.utils.Batch], Iterator[kfac_jax.utils.Batch]],
-  ]:
-    """The training data iterator."""
     return self._train_input
+
+  @property
+  def train_inputs(
+      self,
+  ) -> Union[Iterator[Batch], Tuple[Iterator[Batch], Iterator[Batch]]]:
+    """The training data iterator."""
+    return self.train_input
+
+  @property
+  def eval_input(self) -> Dict[str, Callable[[], Iterator[Batch]]]:
+
+    """Returns all evaluation iterators constructors."""
+    if self._eval_input is None:
+
+      logging.info("Initializing evaluation data iterator.")
+      seed_rng = jax.random.fold_in(self.seed_rng, self._python_step)
+      self._eval_input = {}
+      for split in self.eval_splits:
+        self._eval_input[split] = functools.partial(
+            self._build_eval_input,
+            split=split,
+            seed=int(seed_rng[1]),
+            device_batch_size=self.batch_size.eval.per_device,
+        )
+
+    return self._eval_input
+
+  @property
+  def init_batch(self) -> Batch:
+    """A fake batch size used to initialize the model parameters and state."""
+
+    if self._init_batch is None:
+
+      if self.mode == "train":
+        self._init_batch, iterator = kfac_jax.utils.fake_element_from_iterator(
+            self.train_input
+        )
+        self._train_input = iterator
+      else:
+        self._init_batch = next(self.eval_input["train"]())
+
+    return self._init_batch
 
   def progress(
       self,
-      global_step: chex.Numeric,
-  ) -> chex.Numeric:
+      global_step: Numeric,
+  ) -> Numeric:
     """Computes the current progress of the training as a number in [0,1]."""
 
     if self.config.training.steps is not None:
       return global_step / self.config.training.steps
 
     else:
-      data_seen = self.train_total_batch_size * global_step
+      data_seen = self.batch_size.train.total * global_step
       total_data = self.dataset_size * self.config.training.epochs
 
       return data_seen / total_data
 
-  def should_run_step(
+  def terminate_training(
       self,
       global_step: int,
-      config: config_dict.ConfigDict,
+      config: ml_collections.ConfigDict,
   ) -> bool:
-
     del config  # not used
 
-    return int(self.progress(global_step)) < 1
+    return int(self.progress(global_step)) >= 1
 
-  def create_optimizer(self) -> Union[
-      optimizers.OptaxWrapper,
-      kfac_jax.Optimizer,
-  ]:
+  def create_optimizer(
+      self,
+  ) -> Union[optimizers.OptaxWrapper, kfac_jax.Optimizer]:
     """Creates the optimizer specified in the experiment's config."""
     optimizer_config = copy.deepcopy(self.config.optimizer)
     return optimizers.create_optimizer(
@@ -291,70 +330,79 @@ class SupervisedExperiment(experiment.AbstractExperiment):
         has_func_state=self.has_func_state,
         has_rng=self.has_rng,
         dataset_size=self.dataset_size,
-        train_total_batch_size=self.train_total_batch_size,
-        steps=self.config.training.steps,
-        epochs=self.config.training.epochs,
+        train_total_batch_size=self.batch_size.train.total,
+        total_steps=self.config.training.steps,
+        total_epochs=self.config.training.epochs,
     )
 
-  def initialize_state(self):
+  def maybe_initialize_state(self):
     """Initializes all the experiment's state variables."""
-    init_rng, seed_rng = jax.random.split(self.init_rng)
-    init_rng = kfac_jax.utils.replicate_all_local_devices(init_rng)
+    if self._params is not None:
+      logging.info("Loaded from checkpoint, not initializing parameters.")
+      return
 
-    # Beause we fold in the process index here, it's important that any sharding
-    # happen *before* shuffling
-    seed_rng = jax.random.fold_in(seed_rng, jax.process_index())
-    seed = int(seed_rng[0])
-
-    # Initialize and load dataset
-    if self.mode == "train":
-      self._train_input = pipe_utils.py_prefetch(
-          datasets.dataset_as_generator(
-              self._build_train_input,
-              split="train",
-              seed=seed,
-              device_batch_size=self.train_per_device_batch_size,
-          )
-      )
-      # Need an example batch for initialization
-      init_batch, self._train_input = kfac_jax.utils.fake_element_from_iterator(
-          self._train_input)
-
-    elif self.mode == "eval":
-      self._eval_input = dict(
-          train=self._build_eval_input(
-              split="train",
-              seed=seed,
-              device_batch_size=self.eval_per_device_batch_size
-          ),
-          test=self._build_eval_input(
-              split="test",
-              seed=seed,
-              device_batch_size=self.eval_per_device_batch_size
-          ),
-      )
-      init_batch = next(iter(datasets.tensorflow_datasets.as_numpy(
-          self._eval_input["train"])))
-
-    else:
-      raise NotImplementedError()
-
+    init_rng = kfac_jax.utils.replicate_all_local_devices(self.init_rng)
     # Initialize parameters and optional state
-    init_func = jax.pmap(self.init_parameters_func)
     params_rng, optimizer_rng = kfac_jax.utils.p_split(init_rng)
+    logging.info("Initializing parameters.")
     if self.has_func_state:
-      self._params, self._state = init_func(params_rng, init_batch)
+      self._params, self._state = self.params_init(params_rng, self.init_batch)
     else:
-      self._params = init_func(params_rng, init_batch)
+      self._params = self.params_init(params_rng, self.init_batch)
 
     # Initialize optimizer state
+    logging.info("Initializing optimizer state.")
     self._opt_state = self.optimizer.init(
-        self._params, optimizer_rng, init_batch, self._state)
+        self._params, optimizer_rng, self.init_batch, self._state
+    )
 
     if not self.has_func_state:
       # Needed for checkpointing
-      self._state = kfac_jax.utils.replicate_all_local_devices(
-          jax.numpy.zeros([]))
+      self._state = ()
+
+    # Log parameters
+    def format_path_entry(entry: Any) -> str:
+      if isinstance(entry, jax.tree_util.DictKey):
+        return str(entry.key)
+      elif isinstance(entry, jax.tree_util.SequenceKey):
+        return str(entry.idx)
+      else:
+        return str(entry)
+
+    self._num_tensors = 0
+    self._num_parameters = 0
+    logging.info("%s %s %s", "=" * 20, "Parameters", "=" * 20)
+    for path, var in jax.tree_util.tree_flatten_with_path(self._params)[0]:
+      # Because of pmap
+      var = var[0]
+      logging.info(
+          "%s - %s, %s",
+          "-".join(format_path_entry(p) for p in path),
+          var.shape,
+          var.dtype,
+      )
+      self._num_parameters = self._num_parameters + var.size
+      self._num_tensors = self._num_tensors + 1
+    logging.info("Total parameters: %s", f"{self._num_parameters:,}")
+
+    # Log optimizer state
+    self._optimizer_state_size = 0
+    logging.info("%s %s %s", "=" * 20, "Optimizer State", "=" * 20)
+    easy_state = kfac_jax.utils.serialize_state_tree(self._opt_state)
+    for path, var in jax.tree_util.tree_flatten_with_path(easy_state)[0]:
+      if isinstance(var, str):
+        # For __class__ entries
+        continue
+      # Because of pmap
+      var = var[0]
+      logging.info(
+          "%s - %s, %s",
+          "/".join(format_path_entry(p) for p in path),
+          var.shape,
+          var.dtype,
+      )
+      self._optimizer_state_size = self._optimizer_state_size + var.size
+    logging.info("Total optimizer state: %s", f"{self._optimizer_state_size:,}")
 
   #  _             _
   # | |_ _ __ __ _(_)_ __
@@ -370,16 +418,12 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       seed: int,
       device_batch_size: int,
       **_: Any,
-  ) -> datasets.tf.data.Dataset:
+  ) -> Iterator[Batch]:
     """Constructs the training dataset."""
 
-  def step(
-      self,
-      global_step: jnp.ndarray,
-      rng: jnp.ndarray,
-      **unused_args: Any
-  ) -> Dict[str, jnp.ndarray]:
-    del global_step  # Instead, we use the self._python_step
+  def train_step(self, global_step: Array, rng: PRNGKey) -> Dict[str, Numeric]:
+    """Performs a single training step."""
+    del global_step  # Unused
 
     # Perform optimizer step
     result = self.optimizer.step(
@@ -388,7 +432,7 @@ class SupervisedExperiment(experiment.AbstractExperiment):
         rng=rng,
         data_iterator=self.train_inputs,
         func_state=self._state if self.has_func_state else None,
-        global_step_int=self._python_step
+        global_step_int=self._python_step,
     )
 
     # Unpack result
@@ -399,11 +443,19 @@ class SupervisedExperiment(experiment.AbstractExperiment):
 
     if "aux" in stats:
       # Average everything in aux and then put it in stats
-      stats.update(kfac_jax.utils.compute_mean(stats.pop("aux")))
+      stats.update(stats.pop("aux", {}))
 
     stats["progress"] = self.progress(self._python_step)
 
     self._python_step += 1
+
+    for name in self.config.get("per_device_stats_to_log", []):
+      gathered_stat = jnp.reshape(
+          kfac_jax.utils.host_all_gather(stats[name]), [-1]
+      )
+
+      for i in range(gathered_stat.shape[0]):
+        stats[f"{name}_{i}"] = jnp.array([gathered_stat[i]])
 
     return kfac_jax.utils.get_first(stats)
 
@@ -420,77 +472,131 @@ class SupervisedExperiment(experiment.AbstractExperiment):
       seed: int,
       device_batch_size: int,
       **_: Any,
-  ) -> datasets.tf.data.Dataset:
+  ) -> Iterator[Batch]:
     """Constructs the evaluation dataset."""
 
   def _evaluate_single_batch(
       self,
-      global_step: jnp.ndarray,
-      params: kfac_jax.utils.Params,
-      func_state: kfac_jax.utils.FuncState,
+      global_step: Array,
+      params: Params,
+      func_state: FuncState,
       opt_state: Union[kfac_jax.Optimizer.State, optimizers.OptaxState],
-      rng: chex.PRNGKey,
-      batch: kfac_jax.utils.Batch,
-  ) -> Dict[str, chex.Array]:
+      rng: PRNGKey,
+      batch: Batch,
+  ) -> Dict[str, Array]:
     """Evaluates a single batch."""
-    del global_step, opt_state  # This might be used in subclasses
+
+    del global_step  # This might be used in subclasses
+
     func_args = kfac_jax.optimizer.make_func_args(
         params=params,
         func_state=func_state,
         rng=rng,
         batch=batch,
         has_state=self.has_func_state,
-        has_rng=self.has_rng
+        has_rng=self.has_rng,
     )
-    loss, stats = self.eval_model_func(*func_args)
-    stats["loss"] = loss
-    return kfac_jax.utils.pmean_if_pmap(stats, "eval_axis")
 
-  def evaluate(
+    loss, stats = self.eval_model_func(*func_args)
+
+    stats["loss"] = loss
+
+    if hasattr(opt_state, "data_seen"):
+      stats["data_seen"] = opt_state.data_seen
+
+    return stats
+
+  def run_evaluation(
       self,
-      global_step: chex.Array,
-      rng: chex.PRNGKey,
-      writer: Optional[pipe_utils.Writer],
-  ) -> Dict[str, chex.Array]:
-    del writer  # not used
+      global_step: Array,
+      rng: PRNGKey,
+  ) -> Dict[str, Numeric]:
+    """Runs the evaluation of the currently loaded model parameters."""
+    all_stats = dict()
 
     # Evaluates both the train and eval split metrics
-    all_stats = dict()
-    for name, dataset in self._eval_input.items():
+    for name, dataset_iter_thunk in self.eval_input.items():  # pytype: disable=attribute-error
       logging.info("Running evaluation for %s", name)
 
       averaged_stats = kfac_jax.utils.MultiChunkAccumulator.empty(True)
-      for batch in datasets.tensorflow_datasets.as_numpy(dataset):
+
+      for batch in dataset_iter_thunk():
         key, rng = kfac_jax.utils.p_split(rng)
+
         stats = self.eval_batch(
-            global_step, self._params, self._state, self._opt_state, key, batch)
+            global_step, self._params, self._state, self._opt_state, key, batch
+        )
+
         averaged_stats.add(stats, 1)
 
       # Extract all stats
-      for k, v in averaged_stats.value.items():
+      for k, v in averaged_stats.value.items():  # pytype: disable=attribute-error
         all_stats[f"{name}_{k}"] = kfac_jax.utils.get_first(v)
 
-      logging.info("Evaluation for %s is completed with %d number of batches.",
-                   name, int(averaged_stats.weight[0]))
+      logging.info(
+          "Evaluation for %s is completed with %d number of batches.",
+          name,
+          int(averaged_stats.weight[0]),
+      )
 
     all_stats["progress"] = self.progress(self._python_step)
-    return jax.tree_util.tree_map(np.array, all_stats)
+
+    return all_stats  # pytype: disable=bad-return-type
+
+
+class JaxlineExperiment(SupervisedExperiment, experiment.AbstractExperiment):
+  """A Jaxline supervised experiment."""
+
+  CHECKPOINT_ATTRS = {
+      "_params": "params",
+      "_state": "state",
+      "_opt_state": "opt_state",
+  }
+
+  NON_BROADCAST_CHECKPOINT_ATTRS = {"_python_step": "python_step"}
+
+  def should_run_step(
+      self,
+      global_step: int,
+      config: ml_collections.ConfigDict,
+  ) -> bool:
+    return not self.terminate_training(global_step, config)
+
+  def step(  # pytype: disable=signature-mismatch
+      self,
+      global_step: Array,
+      rng: PRNGKey,
+      **unused_kwargs,
+  ) -> Dict[str, Numeric]:
+    self.maybe_initialize_state()
+    return self.train_step(global_step, rng)
+
+  def evaluate(  # pytype: disable=signature-mismatch
+      self,
+      global_step: Array,
+      rng: PRNGKey,
+      **unused_kwargs,
+  ) -> Dict[str, Numeric]:
+    return self.run_evaluation(global_step, rng)
 
 
 def train_standalone_supervised(
     random_seed: int,
-    full_config: config_dict.ConfigDict,
-    experiment_ctor:
-    Callable[[str, chex.PRNGKey, config_dict.ConfigDict], SupervisedExperiment],
+    full_config: ml_collections.ConfigDict,
+    experiment_ctor: Callable[
+        [str, PRNGKey, ml_collections.ConfigDict], JaxlineExperiment
+    ],
     storage_folder: Optional[str],
-) -> Dict[str, chex.Array]:
+) -> Dict[str, Array]:
   """Run an experiment without the Jaxline runtime."""
 
   rng = jax.random.PRNGKey(random_seed)
   rng, init_rng = jax.random.split(rng)
 
   experiment_instance = experiment_ctor(
-      "train", init_rng, full_config.experiment_kwargs.config,
+      "train",
+      init_rng,
+      full_config.experiment_kwargs.config,
   )
 
   if storage_folder is not None:
@@ -508,14 +614,14 @@ def train_standalone_supervised(
 
   i = 0
   while experiment_instance.should_run_step(i, full_config):
-
-    if (i % full_config.save_checkpoint_interval == 0 and
-        storage_folder is not None):
-
+    if (
+        i % full_config.save_checkpoint_interval == 0
+        and storage_folder is not None
+    ):
       # Optional save to file
       jnp.savez(
           f"{storage_folder}/snapshot_{i}.npz",
-          *jax.tree_util.tree_leaves(experiment_instance.snapshot_state())
+          *jax.tree_util.tree_leaves(experiment_instance.snapshot_state()),
       )
 
     rng, step_rng = kfac_jax.utils.p_split(rng)
@@ -527,7 +633,7 @@ def train_standalone_supervised(
     stats["time"] = stats.get("time", []) + [elapsed_time]
 
     for k in sorted(scalars):
-      stats.setdefault(k, []).append(scalars[k])
+      stats.setdefault(k, []).append(jnp.asarray(scalars[k]))
 
     # Logging
     if i % full_config.log_tensors_interval == 0:
@@ -539,14 +645,17 @@ def train_standalone_supervised(
       logging.info("-" * 20)
     i += 1
 
+  stats = {k: jnp.stack(v) for k, v in stats.items()}
   if storage_folder is not None:
-    jnp.savez(f"{storage_folder}/snapshot_final.npz",
-              *jax.tree_util.tree_leaves(experiment_instance.snapshot_state()))
+    jnp.savez(
+        f"{storage_folder}/snapshot_final.npz",
+        *jax.tree_util.tree_leaves(experiment_instance.snapshot_state()),
+    )
     jnp.savez(f"{storage_folder}/stats.npz", **stats)
   return stats
 
 
-class MnistExperiment(SupervisedExperiment):
+class MnistExperiment(JaxlineExperiment):
   """An experiment using the MNIST dataset."""
 
   def __init__(
@@ -554,8 +663,8 @@ class MnistExperiment(SupervisedExperiment):
       supervised: bool,
       flatten_images: bool,
       mode: str,
-      init_rng: jnp.ndarray,
-      config: config_dict.ConfigDict,
+      init_rng: PRNGKey,
+      config: ml_collections.ConfigDict,
       init_parameters_func: InitFunc,
       model_loss_func: kfac_jax.optimizer.ValueFunc,
       has_aux: bool,
@@ -577,7 +686,6 @@ class MnistExperiment(SupervisedExperiment):
     )
 
   @property
-  @functools.lru_cache(maxsize=1)
   def dataset_size(self) -> int:
     return 60_000
 
@@ -587,7 +695,7 @@ class MnistExperiment(SupervisedExperiment):
       seed: int,
       device_batch_size: int,
       **_: Any,
-  ) -> datasets.tf.data.Dataset:
+  ) -> Iterator[Batch]:
     assert split == "train"
     return datasets.mnist_dataset(
         split=split,
@@ -607,8 +715,9 @@ class MnistExperiment(SupervisedExperiment):
       seed: int,
       device_batch_size: int,
       **_: Any,
-  ) -> datasets.tf.data.Dataset:
-    assert split in ("train", "test")
+  ) -> Iterator[Batch]:
+    assert split in self.eval_splits
+
     return datasets.mnist_dataset(
         split=split,
         has_labels=self._supervised,
@@ -617,18 +726,18 @@ class MnistExperiment(SupervisedExperiment):
         repeat=False,
         shuffle=False,
         drop_remainder=False,
-        seed=seed
+        seed=seed,
     )
 
 
-class ImageNetExperiment(SupervisedExperiment):
+class ImageNetExperiment(JaxlineExperiment):
   """An experiment using the ImageNet dataset."""
 
   def __init__(
       self,
       mode: str,
-      init_rng: chex.PRNGKey,
-      config: config_dict.ConfigDict,
+      init_rng: PRNGKey,
+      config: ml_collections.ConfigDict,
       init_parameters_func: InitFunc,
       model_loss_func: kfac_jax.optimizer.ValueFunc,
       has_aux: bool,
@@ -675,6 +784,7 @@ class ImageNetExperiment(SupervisedExperiment):
       **_: Any,
   ) -> datasets.tf.data.Dataset:
     assert split in ("train", "test")
+
     return datasets.imagenet_dataset(
         split="train_eval" if split == "train" else "test",
         seed=seed,

@@ -13,9 +13,8 @@
 # limitations under the License.
 """K-FAC optimized functions for patches second moment(PSM) computation."""
 import functools
-from typing import List, Optional, Sequence, Tuple, TypeVar, Union
+from typing import Optional, Sequence, TypeVar, Tuple, Union, List
 
-import chex
 import jax
 from jax import interpreters
 from jax import lax
@@ -25,8 +24,10 @@ from kfac_jax._src import utils
 
 # Types for annotation
 T = TypeVar("T")
+Array = utils.Array
+Shape = utils.Shape
 TracedType = interpreters.partial_eval.DynamicJaxprTracer
-DimNumbers = Tuple[chex.Shape, chex.Shape, chex.Shape]
+DimNumbers = Tuple[Shape, Shape, Shape]
 PaddingVariants = Union[str, int, Sequence[int], Sequence[Tuple[int, int]]]
 
 # Special global variables
@@ -76,15 +77,15 @@ class _ConvSpec:
     """Returns the indices of the spatial axes."""
     return self.order[2:]
 
-  def get_n(self, shape: chex.Shape) -> int:
+  def get_n(self, shape: Shape) -> int:
     """Returns the batch size of the given shape, under this spec layout."""
     return shape[self.n_axis]
 
-  def get_c(self, shape: chex.Shape) -> int:
+  def get_c(self, shape: Shape) -> int:
     """Returns the channel size of the given shape, under this spec layout."""
     return shape[self.c_axis]
 
-  def get_spatial(self, shape: chex.Shape) -> Tuple[int, ...]:
+  def get_spatial(self, shape: Shape) -> Tuple[int, ...]:
     """Returns the spatial sizes of the given shape, under this spec layout."""
     return tuple(shape[i] for i in self.spatial_axes)
 
@@ -122,10 +123,10 @@ class _ConvSpec:
 
 
 def _slice_array(
-    array: chex.Array,
+    array: Array,
     indices: Sequence[Union[int, TracedType]],
     sizes: Sequence[int],
-) -> chex.Array:
+) -> Array:
   """Takes a slice from the array provided."""
   if any(isinstance(x, TracedType) for x in indices):
     # Any of the indices are dynamic values.
@@ -137,11 +138,11 @@ def _slice_array(
 
 
 def _output_spatial_shape(
-    inputs_spatial_shape: chex.Shape,
-    kernel_spatial_shape: chex.Shape,
-    spatial_strides: chex.Shape,
+    inputs_spatial_shape: Shape,
+    kernel_spatial_shape: Shape,
+    spatial_strides: Shape,
     padding: Union[str, Sequence[Tuple[int, int]]],
-) -> chex.Shape:
+) -> Shape:
   """Returns the output spatial shape of the corresponding convolution."""
   if isinstance(padding, str):
     if padding.lower() == "valid":
@@ -161,9 +162,9 @@ def _output_spatial_shape(
 
 
 def _normalize_padding(
-    inputs_spatial_shape: chex.Shape,
-    kernel_spatial_shape: chex.Shape,
-    spatial_strides: chex.Shape,
+    inputs_spatial_shape: Shape,
+    kernel_spatial_shape: Shape,
+    spatial_strides: Shape,
     padding: PaddingVariants,
 ) -> Tuple[Tuple[int, int], ...]:
   """Returns the padding as a tuple of pairs of integers."""
@@ -197,8 +198,8 @@ def _normalize_padding(
 
 
 def _normalize_strides(
-    kernel_spatial_shape: chex.Shape,
-    strides: Union[int, chex.Shape],
+    kernel_spatial_shape: Shape,
+    strides: Union[int, Shape],
 ) -> Tuple[int, ...]:
   """Returns the strides as a tuple of integers."""
   n = len(kernel_spatial_shape)
@@ -227,9 +228,9 @@ def _data_format_to_dim_numbers(
 
 
 def _parse_simple_args(
-    inputs_shape: chex.Shape,
-    kernel_spatial_shape: Union[int, chex.Shape],
-    strides: Union[int, chex.Shape] = 1,
+    inputs_shape: Shape,
+    kernel_spatial_shape: Union[int, Shape],
+    strides: Union[int, Shape] = 1,
     padding: PaddingVariants = "VALID",
     data_format: Optional[str] = "NHWC",
     dim_numbers: Optional[Union[DimNumbers, lax.ConvDimensionNumbers]] = None,
@@ -237,7 +238,7 @@ def _parse_simple_args(
     Tuple[int, ...],
     Tuple[int, ...],
     Tuple[Tuple[int, int], ...],
-    lax.ConvDimensionNumbers
+    lax.ConvDimensionNumbers,
 ]:
   """Parses all convolutional arguments to a single unified format.
 
@@ -308,9 +309,9 @@ def _parse_simple_args(
 
 
 def _num_conv_locations_full_spec(
-    input_spatial_shape: chex.Shape,
-    kernel_spatial_shape: chex.Shape,
-    spatial_strides: chex.Shape,
+    input_spatial_shape: Shape,
+    kernel_spatial_shape: Shape,
+    spatial_strides: Shape,
     spatial_padding: Sequence[Tuple[int, int]],
 ) -> int:
   """The number of convolution locations from the unified spec for arguments."""
@@ -339,9 +340,9 @@ def _num_conv_locations_full_spec(
 
 
 def num_conv_locations(
-    inputs_spatial_shape: chex.Shape,
-    kernel_spatial_shape: Union[int, chex.Shape],
-    spatial_strides: Union[int, chex.Shape],
+    inputs_spatial_shape: Shape,
+    kernel_spatial_shape: Union[int, Shape],
+    spatial_strides: Union[int, Shape],
     spatial_padding: Union[str, int, Sequence[Tuple[int, int]]],
 ) -> int:
   """Returns the number of convolution locations for the provided shapes."""
@@ -360,9 +361,9 @@ def num_conv_locations(
 
 @utils.auto_scope_function
 def _the_conv4d(
-    lhs: chex.Array,
+    lhs: Array,
     lhs_spec: _ConvSpec,
-    rhs: chex.Array,
+    rhs: Array,
     rhs_spec: _ConvSpec,
     pad_h: int,
     pad_w: int,
@@ -370,7 +371,7 @@ def _the_conv4d(
     stride_w: int,
     per_channel: bool = False,
     precision: Optional[jax.lax.Precision] = None,
-) -> chex.Array:
+) -> Array:
   """Performs a special conv4d or conv2d based on the global flag."""
   assert len(rhs_spec) == 6
   if get_use_4d_convolution_in_psm_loop():
@@ -482,9 +483,9 @@ def _the_conv4d(
 
 
 def _validate_inputs_lengths(
-    inputs: chex.Array,
-    kernel_spatial_shape: chex.Shape,
-    strides: chex.Shape,
+    inputs: Array,
+    kernel_spatial_shape: Shape,
+    strides: Shape,
     padding: Tuple[Tuple[int, int], ...],
 ) -> None:
   """Checks that the provided arguments are valid."""
@@ -518,9 +519,9 @@ def _validate_inputs_lengths(
                        "batch_group_count", "unroll_loop", "precision"))
 @utils.auto_scope_function
 def patches_moments_explicit(
-    inputs: chex.Array,
-    kernel_spatial_shape: Union[int, chex.Shape],
-    strides: Union[int, chex.Shape] = 1,
+    inputs: Array,
+    kernel_spatial_shape: Union[int, Shape],
+    strides: Union[int, Shape] = 1,
     padding: PaddingVariants = "VALID",
     data_format: Optional[str] = "NHWC",
     dim_numbers: Optional[Union[DimNumbers, lax.ConvDimensionNumbers]] = None,
@@ -530,8 +531,8 @@ def patches_moments_explicit(
     batch_group_count: int = 1,
     unroll_loop: bool = False,
     precision: Optional[jax.lax.Precision] = None,
-    weighting_array: Optional[chex.Array] = None,
-) -> Tuple[chex.Array, chex.Array]:
+    weighting_array: Optional[Array] = None,
+) -> Tuple[Array, Array]:
   """The exact same functionality as :func:`~patches_moments`, but explicitly extracts the patches via :func:`jax.lax.conv_general_dilated_patches`, potentially having a higher memory usage."""
   kernel_spatial_shape, strides, padding, dim_numbers = _parse_simple_args(
       inputs.shape, kernel_spatial_shape, padding=padding, strides=strides,
@@ -627,7 +628,7 @@ def patches_moments_explicit(
       else:
         wf_n = weighting_array[in_spec.n_axis]
         wf_spatial = [weighting_array.shape[a] for a in in_spec.spatial_axes]
-        wf_sizes = in_spec.create_shape(wf_n, 1, *wf_spatial)
+        wf_sizes = in_spec.create_shape(wf_n, jnp.ones([]), *wf_spatial)
         wf_i = _slice_array(weighting_array, index, wf_sizes)
     else:
       wf_i = None
@@ -653,17 +654,25 @@ def patches_moments_explicit(
 
   def loop_cond(args):
     return args[0] < c
+
   def loop_body(args):
+
     i, image, matrix_result, vector_result = args
+
     matrix_update, vector_update = general_loop_body(i, image)
+
     matrix_result = lax.dynamic_update_slice(
         matrix_result, matrix_update, (0, 0, 0, 0, i))
+
     vector_result = lax.dynamic_update_slice(
         vector_result, vector_update, (0, 0, i))
+
     return i + 1, image, matrix_result, vector_result
+
   init_vals = (0, inputs,
-               jnp.zeros(matrix_target_shape),
-               jnp.zeros(vector_target_shape))
+               jnp.zeros(matrix_target_shape, dtype=inputs.dtype),
+               jnp.zeros(vector_target_shape, dtype=inputs.dtype))
+
   return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]
 
 
@@ -675,9 +684,9 @@ def patches_moments_explicit(
                        "batch_group_count", "unroll_loop", "precision"))
 @utils.auto_scope_function
 def patches_moments(
-    inputs: chex.Array,
-    kernel_spatial_shape: Union[int, chex.Shape],
-    strides: Union[int, chex.Shape] = 1,
+    inputs: Array,
+    kernel_spatial_shape: Union[int, Shape],
+    strides: Union[int, Shape] = 1,
     padding: PaddingVariants = "VALID",
     data_format: Optional[str] = "NHWC",
     dim_numbers: Optional[Union[DimNumbers, lax.ConvDimensionNumbers]] = None,
@@ -687,8 +696,8 @@ def patches_moments(
     batch_group_count: int = 1,
     unroll_loop: bool = False,
     precision: Optional[jax.lax.Precision] = None,
-    weighting_array: Optional[chex.Array] = None,
-) -> Tuple[chex.Array, chex.Array]:
+    weighting_array: Optional[Array] = None,
+) -> Tuple[Array, Array]:
   """Computes the first and second moment of the convolutional patches.
 
   Since the code is written to support arbitrary convolution data formats, e.g.

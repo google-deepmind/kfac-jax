@@ -13,18 +13,17 @@
 # limitations under the License.
 """K-FAC losses and layers tagging Jax primitives."""
 import types
-from typing import Any, Generic, Optional, Sequence, Tuple, Type, TypeVar, Union
+from typing import Any, Generic, Optional, Sequence, Type, TypeVar, Tuple, Union
 
-import chex
 import jax
 from jax import core
 from jax.interpreters import batching as jax_batching
 
 # Types for annotation
 T = TypeVar("T")
-ArrayOrXla = TypeVar("ArrayOrXla", chex.Array, jax.xla.XlaOp)
-Array = chex.Array
+Array = jax.Array
 Arrays = Tuple[Array, ...]
+ArrayOrXla = TypeVar("ArrayOrXla", Array, jax.interpreters.xla.XlaOp)
 
 
 class LossTag(core.Primitive, Generic[T]):
@@ -66,8 +65,8 @@ class LossTag(core.Primitive, Generic[T]):
     self._parameter_dependants = tuple(parameter_dependants)
     self._parameter_independants = tuple(parameter_independants)
 
-    jax.xla.register_translation(self, self._xla_translation)
-    jax.ad.primitive_jvps[self] = self._jvp
+    jax.interpreters.xla.register_translation(self, self._xla_translation)
+    jax.interpreters.ad.primitive_jvps[self] = self._jvp
     # This line defines how does the tag behave under vmap. It is required for
     # any primitive that can be used inside a vmap. The reason why we want to
     # allow this is two fold - one to not break user code when the tags are not
@@ -127,13 +126,13 @@ class LossTag(core.Primitive, Generic[T]):
 
   def _xla_translation(
       self,
-      xla_context: jax.xla.TranslationContext,
+      xla_context: jax.interpreters.xla.TranslationContext,
       avals_in: Sequence[core.AbstractValue],
       avals_out: Sequence[core.AbstractValue],
-      *args: jax.xla.XlaOp,
+      *args: jax.interpreters.xla.XlaOp,
       args_names: Sequence[str],
-  ) -> Tuple[jax.xla.XlaOp, ...]:
-    """The XLA translation rule for this primitive (creates a no-op Tuple)."""
+  ) -> Tuple[jax.interpreters.xla.XlaOp, ...]:
+    """The XLA translation rule for this primitive (creates a no-op tuple)."""
     del avals_in, avals_out  # not used
     return self.get_outputs(*args, args_names=args_names)
 
@@ -195,9 +194,9 @@ class LayerTag(core.Primitive):
     self._num_outputs = num_outputs
     self._num_inputs = num_inputs
 
-    jax.xla.register_translation(self, self._xla_translation)
-    jax.ad.deflinear(self, self._transpose)
-    jax.ad.primitive_transposes[self] = self._transpose
+    jax.interpreters.xla.register_translation(self, self._xla_translation)  # pytype: disable=wrong-arg-types  # numpy-scalars
+    jax.interpreters.ad.deflinear(self, self._transpose)
+    jax.interpreters.ad.primitive_transposes[self] = self._transpose
     # This line defines how does the tag behave under vmap. It is required for
     # any primitive that can be used inside a vmap. The reason why we want to
     # allow this is two fold - one to not break user code when the tags are not
@@ -238,10 +237,10 @@ class LayerTag(core.Primitive):
 
   def _xla_translation(
       self,
-      xla_context: jax.xla.TranslationContext,
+      xla_context: jax.interpreters.xla.TranslationContext,
       avals_in: Sequence[core.AbstractValue],
       avals_out: Sequence[core.AbstractValue],
-      *args: jax.xla.XlaOp,
+      *args: jax.interpreters.xla.XlaOp,
       **_: Any,
   ) -> Tuple[Array, ...]:
     """The XLA translation rule for this primitive - returns the ``outputs`` ."""
@@ -268,7 +267,7 @@ class LayerTag(core.Primitive):
         jax.__version_info__ if hasattr(jax, "__version_info__")
         else tuple(map(int, jax.__version__.split("."))))
     if jax_version > (0, 3, 4):
-      return self.get_outputs(*operands), jax.core.no_effects
+      return self.get_outputs(*operands), jax.core.no_effects  # pytype: disable=bad-return-type  # numpy-scalars
     return self.get_outputs(*operands)
 
   def _batching(

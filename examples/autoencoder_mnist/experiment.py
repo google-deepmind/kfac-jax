@@ -13,21 +13,26 @@
 # limitations under the License.
 """Haiku implementation of the standard MNIST Autoencoder."""
 import functools
-from typing import Dict, Mapping, Tuple, Union
+from typing import Mapping, Tuple, Union, Dict
 
-import chex
 import haiku as hk
 import jax
 from jax import nn
 import jax.numpy as jnp
 
+import kfac_jax
 from examples import losses
 from examples import training
 
 
+Array = kfac_jax.utils.Array
+Numeric = kfac_jax.utils.Numeric
+PRNGKey = kfac_jax.utils.PRNGKey
+
+
 def autoencoder() -> hk.Transformed:
   """Constructs a Haiku transformed object of the autoencoder."""
-  def func(batch: Union[chex.Array, Mapping[str, chex.Array]]) -> chex.Array:
+  def func(batch: Union[Array, Mapping[str, Array]]) -> Array:
     """Evaluates the autoencoder."""
     if isinstance(batch, Mapping):
       batch = batch["images"]
@@ -54,13 +59,13 @@ def autoencoder() -> hk.Transformed:
 
 def autoencoder_loss(
     params: hk.Params,
-    batch: Union[chex.Array, Mapping[str, chex.Array]],
-    l2_reg: chex.Numeric,
+    batch: Union[Array, Mapping[str, Array]],
+    l2_reg: Numeric,
     is_training: bool,
     average_loss: bool = True,
-) -> Tuple[chex.Array, Dict[str, chex.Array]]:
+) -> Tuple[Array, Dict[str, Array]]:
   """Evaluates the loss of the autoencoder."""
-  del is_training  # not used
+
   if isinstance(batch, Mapping):
     batch = batch["images"]
 
@@ -69,16 +74,18 @@ def autoencoder_loss(
   cross_entropy = jnp.sum(losses.sigmoid_cross_entropy(logits, batch), axis=-1)
   averaged_cross_entropy = jnp.mean(cross_entropy)
 
-  params_l2 = losses.l2_regularizer(params, False, False)
-  loss = averaged_cross_entropy if average_loss else cross_entropy
-  regularized_loss = loss + l2_reg * params_l2
+  loss: Array = averaged_cross_entropy if average_loss else cross_entropy
+
+  l2_reg_val = losses.l2_regularizer(params, False, False)
+  if is_training:
+    loss = loss + l2_reg * l2_reg_val
 
   error = nn.sigmoid(logits) - batch.reshape([batch.shape[0], -1])
   mean_squared_error = jnp.mean(jnp.sum(error * error, axis=1), axis=0)
 
-  return regularized_loss, dict(
+  return loss, dict(
       cross_entropy=averaged_cross_entropy,
-      regualrizer=params_l2,
+      l2_reg_val=l2_reg_val,
       mean_squared_error=mean_squared_error,
   )
 
@@ -86,12 +93,7 @@ def autoencoder_loss(
 class AutoencoderMnistExperiment(training.MnistExperiment):
   """Jaxline experiment class for running the MNIST Autoencoder."""
 
-  def __init__(
-      self,
-      mode: str,
-      init_rng: chex.PRNGKey,
-      config,
-  ):
+  def __init__(self, mode: str, init_rng: PRNGKey, config):
     super().__init__(
         supervised=False,
         flatten_images=True,
