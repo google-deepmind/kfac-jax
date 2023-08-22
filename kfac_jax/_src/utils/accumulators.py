@@ -83,7 +83,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
       dtype: Optional[DType] = None,
   ) -> "WeightedMovingAverage[Array]":
     """Initializes a `WeightedMovingAverage` with a single array of zeros."""
-    return WeightedMovingAverage(
+    return cls(  # pytype: disable=wrong-keyword-args
         weight=jnp.zeros([], dtype=dtype),
         raw_value=jnp.zeros(shape, dtype=dtype),
     )
@@ -91,7 +91,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
   @classmethod
   def zeros_like(cls, value: TArrayTree) -> "WeightedMovingAverage[TArrayTree]":
     """Initializes a `WeightedMovingAverage` with zeros structure like `value`."""
-    return WeightedMovingAverage(
+    return cls(  # pytype: disable=wrong-keyword-args
         weight=jnp.array(
             0.0, dtype=types.get_float_dtype_and_check_consistency(value)
         ),

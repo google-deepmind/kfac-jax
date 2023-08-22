@@ -1195,6 +1195,14 @@ def register_normal_predictive_distribution(
   This corresponds to a squared error loss of the form
      ``weight/(2*var) * ||target - mean||^2``
 
+  NOTE: this function assumes you are *not* averaging over non-batch dimensions
+  when computing the loss. i.e. it assumes a loss of the form
+  ``mean(sum(target - prediction), axis=range(1,target.ndims), axis=0)``
+  and not
+  ``mean(target - prediction)``.
+  If your loss is of the latter form you can compensate for it by passing the
+  appropriate value to ``weight``.
+
   Args:
     mean: A tensor defining the mean vector of the distribution. The first
       dimension will usually be the batch size, but doesn't need to be (unless
@@ -1235,6 +1243,14 @@ def register_squared_error_loss(
   This assumes the squared error loss of the form ``||target - prediction||^2``,
   averaged across the mini-batch. If your loss uses a coefficient of 0.5
   you need to set the "weight" argument to reflect this.
+
+  NOTE: this function assumes you are *not* averaging over non-batch dimensions
+  when computing the loss. i.e. it assumes a loss of the form
+  ``mean(sum(target - prediction), axis=range(1,target.ndims), axis=0)``
+  and not
+  ``mean(target - prediction)``
+  If your loss is of the latter form you can compensate for it by passing the
+  appropriate value to ``weight``.
 
   Args:
     prediction: The prediction made by the network (i.e. its output). The first

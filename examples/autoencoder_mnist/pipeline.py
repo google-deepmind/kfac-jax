@@ -49,7 +49,7 @@ def get_config() -> config_dict.ConfigDict:
               ),
               batch_size=dict(
                   train=dict(
-                      total=60_000,
+                      total=60_000,  # the entire dataset
                       per_device=-1,
                   ),
                   eval=dict(
@@ -64,6 +64,9 @@ def get_config() -> config_dict.ConfigDict:
                       damping_adaptation_interval=5,
                       num_burnin_steps=5,
                       curvature_ema=0.95,
+                      # As mentioned in examples/README.md, we do NOT recommend
+                      # using these adaptive options for stochastic
+                      # optimization:
                       use_adaptive_damping=True,
                       use_adaptive_learning_rate=True,
                       use_adaptive_momentum=True,

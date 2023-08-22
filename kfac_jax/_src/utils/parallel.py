@@ -182,11 +182,10 @@ def sync_and_divide_value(
   return pmean_if_pmap(value, axis_name)
 
 
-jit_sync_and_divide_value = jax.jit(sync_and_divide_value, donate_argnums=0)
+jit_sync_and_divide_value = jax.jit(sync_and_divide_value)
 pmap_sync_and_divide_value = jax.pmap(
     functools.partial(sync_and_divide_value, axis_name="i"),
     axis_name="i",
-    donate_argnums=0,
 )
 
 

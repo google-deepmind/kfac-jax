@@ -142,7 +142,10 @@ class Optimizer(utils.WithStagedMethods):
   ):
     """Initializes the K-FAC optimizer with the provided settings.
 
-    A note on damping:
+    NOTE: Please read the docstring for this constructor carefully. Especially
+    the description of ``value_and_grad_func``.
+
+    A note on the "damping" parameter:
 
     One of the main complications of using second-order optimizers like K-FAC is
     the "damping" parameter. This parameter is multiplied by the identity matrix
@@ -159,27 +162,33 @@ class Optimizer(utils.WithStagedMethods):
     scale of the objective amongst other things.
 
     The optimizer provides a system for adjusting the damping automatically via
-    the ``use_adaptive_damping`` argument, although this system is not
-    completely reliable. Using a fixed value or a manually tuned schedule can
-    work as good or better for some problems, while it can be a very poor choice
-    for others (like deep autoencoders). Empirically we have found that using
-    a fixed value works well enough for common architectures like convnets and
-    transformers.
+    the ``use_adaptive_damping`` argument, although this system is not reliable,
+    especially for highly stochastic objectives. Using a fixed value or a
+    manually tuned schedule can work as good or better for some problems, while
+    it can be a very poor choice for others (like deep autoencoders).
+    Empirically we have found that using a fixed value works well enough for
+    common architectures like convnets and transformers.
 
     Args:
-      value_and_grad_func: Python callable. The function should return the value
-        of the loss to be optimized and its gradients, and optionally the model
-        state and auxiliary information (usually statistics to log). The
-        interface should be: ``out_args, loss_grads =
+      value_and_grad_func: Python callable. This function should return the
+        value of the loss to be optimized and its gradients, and optionally the
+        model state and auxiliary information (usually statistics to log). Note
+        that it should *not* be jitted/pmapped or otherwise compiled by JAX, as
+        this can lead to errors. (Compilation is done internally by the
+        optimizer.)
+        interface of this function should be should be: ``out_args, loss_grads =
         value_and_grad_func(*in_args)``. Here, ``in_args`` is ``(params,
         func_state, rng, batch)``, with ``rng`` omitted if
         ``value_func_has_rng`` is ``False``, and with ``func_state`` omitted if
         ``value_func_has_state`` is ``False``. Meanwhile, ``out_args`` is
-        ``(loss, func_state, aux)``, with ``func_state`` omitted if
-        ``value_func_has_state`` is ``False``, and with ``aux`` omitted if
-        ``value_func_has_aux`` is ``False``. If both ``value_func_has_state``
-        and ``value_func_has_aux`` are ``False``, ``out_args`` should just be
-        ``loss`` and not ``(loss,)``.
+        ``(loss, (func_state, aux))`` if ``value_func_has_state`` and
+        ``value_func_has_aux`` are both ``True``, ``(loss, func_state)`` if if
+        ``value_func_has_state`` is ``True`` and ``value_func_has_aux`` is
+        ``False``, ``(loss, aux)`` if ``value_func_has_state`` is ``False`` and
+        ``value_func_has_aux`` is ``True``, and finally ``loss`` if
+        ``value_func_has_state`` and ``value_func_has_aux`` are both ``False``.
+        This should be consistent with how JAX's ``value_and_grad`` API function
+        is typically used.
       l2_reg: Scalar. Set this value to tell the optimizer what L2
         regularization coefficient you are using (if any). Note the coefficient
         appears in the regularizer as ``coeff / 2 * sum(param**2)``. This adds
@@ -1128,6 +1137,10 @@ class Optimizer(utils.WithStagedMethods):
   )-> ReturnEither:
     """Performs a single update step using the optimizer.
 
+    NOTE: please do not jit/pmap or otherwise compile this function with JAX,
+    as this can lead to errors. Compilation is handled internally by the
+    optimizer.
+
     Args:
       params: The current parameters of the model.
       state: The current state of the optimizer.
@@ -1439,8 +1452,8 @@ def convert_value_and_grad_to_value_func(
   Returns:
     A function that returns only the loss value.
   """
-  def value_func(*args) -> Array:
-    out, _ = value_and_grad_func(*args)
+  def value_func(*args, **kwargs) -> Array:
+    out, _ = value_and_grad_func(*args, **kwargs)
     return out[0] if has_aux else out
 
   return value_func
