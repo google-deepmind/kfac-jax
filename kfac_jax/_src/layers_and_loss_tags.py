@@ -65,7 +65,7 @@ class LossTag(core.Primitive, Generic[T]):
     self._parameter_dependants = tuple(parameter_dependants)
     self._parameter_independants = tuple(parameter_independants)
 
-    jax.interpreters.xla.register_translation(self, self._xla_translation)
+    jax.interpreters.mlir.register_lowering(self, self._mlir_lowering)
     jax.interpreters.ad.primitive_jvps[self] = self._jvp
     # This line defines how does the tag behave under vmap. It is required for
     # any primitive that can be used inside a vmap. The reason why we want to
@@ -124,16 +124,12 @@ class LossTag(core.Primitive, Generic[T]):
     return (self.get_outputs(*operands, args_names=args_names),
             jax.core.no_effects)
 
-  def _xla_translation(
+  def _mlir_lowering(
       self,
-      xla_context: jax.interpreters.xla.TranslationContext,
-      avals_in: Sequence[core.AbstractValue],
-      avals_out: Sequence[core.AbstractValue],
-      *args: jax.interpreters.xla.XlaOp,
-      args_names: Sequence[str],
-  ) -> Tuple[jax.interpreters.xla.XlaOp, ...]:
+      context: jax.interpreters.mlir.LoweringRuleContext,
+      *args, args_names: Sequence[str],
+  ) -> Tuple[Any, ...]:
     """The XLA translation rule for this primitive (creates a no-op tuple)."""
-    del avals_in, avals_out  # not used
     return self.get_outputs(*args, args_names=args_names)
 
   def _jvp(
@@ -194,7 +190,7 @@ class LayerTag(core.Primitive):
     self._num_outputs = num_outputs
     self._num_inputs = num_inputs
 
-    jax.interpreters.xla.register_translation(self, self._xla_translation)  # pytype: disable=wrong-arg-types  # numpy-scalars
+    jax.interpreters.mlir.register_lowering(self, self._mlir_lowering)  # pytype: disable=wrong-arg-types  # numpy-scalars
     jax.interpreters.ad.deflinear(self, self._transpose)
     jax.interpreters.ad.primitive_transposes[self] = self._transpose
     # This line defines how does the tag behave under vmap. It is required for
@@ -235,16 +231,13 @@ class LayerTag(core.Primitive):
     assert self.num_outputs == len(outputs) == 1
     return outputs[0]
 
-  def _xla_translation(
+  def _mlir_lowering(
       self,
-      xla_context: jax.interpreters.xla.TranslationContext,
-      avals_in: Sequence[core.AbstractValue],
-      avals_out: Sequence[core.AbstractValue],
-      *args: jax.interpreters.xla.XlaOp,
+      context: jax.interpreters.mlir.LoweringRuleContext,
+      *args,
       **_: Any,
-  ) -> Tuple[Array, ...]:
+  ) -> Tuple[Any, ...]:
     """The XLA translation rule for this primitive - returns the ``outputs`` ."""
-    del xla_context, avals_in, avals_out  # not used
     # Need to return a sequence
     return (self.get_outputs(*args),)
 
