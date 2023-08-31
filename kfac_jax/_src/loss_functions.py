@@ -1230,7 +1230,7 @@ def register_normal_predictive_distribution(
     args = [mean, targets, variance, weight]
     args_names = ["mean", "targets", "variance", "weight"]
 
-  NormalMeanNegativeLogProbLoss_tag.bind(*args, args_names=args_names)
+  NormalMeanNegativeLogProbLoss_tag.bind(*args, args_names=tuple(args_names))
 
 
 def register_squared_error_loss(
@@ -1299,7 +1299,8 @@ def register_multi_bernoulli_predictive_distribution(
     args = [logits, targets, weight]
     args_names = ["logits", "targets", "weight"]
 
-  MultiBernoulliNegativeLogProbLoss_tag.bind(*args, args_names=args_names)
+  MultiBernoulliNegativeLogProbLoss_tag.bind(
+      *args, args_names=tuple(args_names))
 
 
 def register_sigmoid_cross_entropy_loss(
@@ -1393,7 +1394,7 @@ def register_categorical_predictive_distribution(
   args = args + [weight]
   args_names = args_names + ["weight"]
 
-  tag_cls.bind(*args, args_names=args_names)
+  tag_cls.bind(*args, args_names=tuple(args_names))
 
 
 def register_softmax_cross_entropy_loss(

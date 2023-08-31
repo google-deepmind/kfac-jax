@@ -141,7 +141,7 @@ class LossTag(core.Primitive, Generic[T]):
     """Computes the Jacobian-vector product for the primitive."""
     if len(arg_values) != len(arg_tangents):
       raise ValueError("Values and tangents are not the same length.")
-    primal_output = self.bind(*arg_values, args_names=args_names)
+    primal_output = self.bind(*arg_values, args_names=tuple(args_names))
     tangent_output = self.get_outputs(*arg_tangents, args_names=args_names)
     return primal_output, tangent_output
 
@@ -152,7 +152,7 @@ class LossTag(core.Primitive, Generic[T]):
       args_names: Sequence[str],
   ) -> Tuple[Array, Union[int, Tuple[int, ...]]]:
     """Defines how the primitive behaves under :func:`jax.vmap`."""
-    return self.bind(*batched_args, args_names=args_names), batched_dims
+    return self.bind(*batched_args, args_names=tuple(args_names)), batched_dims
 
 
 class LayerTag(core.Primitive):
