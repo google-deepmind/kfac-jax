@@ -48,7 +48,7 @@ _VERSION = _get_version()
 setuptools.setup(
     name="kfac-jax",
     version=_VERSION,
-    url="https://github.com/deepmind/kfac-jax",
+    url="https://github.com/google-deepmind/kfac-jax",
     license="Apache 2.0",
     author="DeepMind",
     description=(

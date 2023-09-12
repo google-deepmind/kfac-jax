@@ -2,7 +2,7 @@ Quickstart
 ==========
 
 Let's take a look at a simple example of training a neural network, defined
-using `Haiku <https://github.com/deepmind/dm-haiku/>`_, with the K-FAC
+using `Haiku <https://github.com/google-deepmind/dm-haiku/>`_, with the K-FAC
 optimizer:
 
 .. code-block:: python

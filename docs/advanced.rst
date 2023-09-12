@@ -135,7 +135,7 @@ steps:
     )
 
 See the `FermiNet project
-<https://github.com/deepmind/ferminet/blob/jax/ferminet/curvature_tags_and_blocks.py>`_
+<https://github.com/google-deepmind/ferminet/blob/jax/ferminet/curvature_tags_and_blocks.py>`_
 for another example of how to add a new layer tag using the above steps.
 
 Creating new curvature blocks
@@ -205,5 +205,5 @@ KFAC-JAX):
     )
 
 See the `FermiNet project
-<https://github.com/deepmind/ferminet/blob/jax/ferminet/curvature_tags_and_blocks.py>`_
+<https://github.com/google-deepmind/ferminet/blob/jax/ferminet/curvature_tags_and_blocks.py>`_
 for another example of how to add curvature block using the above steps.
