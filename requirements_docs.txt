@@ -7,5 +7,5 @@ pandoc==2.3
 IPython==7.16.1
 ipykernel==5.3.4
 myst_nb==0.13.1
-docutils==0.18.1
+docutils==0.17.0
 matplotlib==3.5.0
