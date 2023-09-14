@@ -102,6 +102,8 @@ extensions = [
     'myst_nb',  # This is used for the .ipynb notebooks
 ]
 
+bibtex_bibfiles = []
+
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
