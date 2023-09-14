@@ -139,6 +139,8 @@ class Optimizer(utils.WithStagedMethods):
       include_per_param_norms_in_stats: bool = False,
       distributed_precon_apply: bool = True,
       distributed_inverses: bool = True,
+      num_estimator_samples: int = 1,
+      should_vmap_estimator_samples: bool = False,
   ):
     """Initializes the K-FAC optimizer with the provided settings.
 
@@ -343,7 +345,14 @@ class Optimizer(utils.WithStagedMethods):
         different devices in a layer-wise fashion. If False, each device will
         (redundantly) perform the required computations for all of the layers.
         (Default: True)
+      num_estimator_samples: Number of samples (per case) to use when computing
+        stochastic curvature matrix estimates. This option is only used when
+        ``estimation_mode == 'fisher_gradients'`` or ``estimation_mode ==
+        '[fisher,ggn]_curvature_prop'``. (Default: 1)
+      should_vmap_estimator_samples: Whether to use ``jax.vmap`` to compute
+        samples when ``num_estimator_samples > 1``. (Default: False)
     """
+
     super().__init__(
         multi_device=multi_device,
         pmap_axis_name=pmap_axis_name if multi_device else None,
@@ -446,6 +455,8 @@ class Optimizer(utils.WithStagedMethods):
         patterns_to_skip=patterns_to_skip,
         distributed_multiplies=distributed_precon_apply,
         distributed_cache_updates=distributed_inverses,
+        num_samples=num_estimator_samples,
+        should_vmap_samples=should_vmap_estimator_samples,
         **(auto_register_kwargs or {}),
     )
     self._implicit = curvature_estimator.ImplicitExactCurvature(

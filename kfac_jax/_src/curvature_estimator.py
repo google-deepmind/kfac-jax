@@ -857,6 +857,8 @@ class BlockDiagonalCurvature(
       auto_register_tags: bool = True,
       distributed_multiplies: bool = True,
       distributed_cache_updates: bool = True,
+      num_samples: int = 1,
+      should_vmap_samples: bool = False,
       **auto_register_kwargs: Any,
   ):
     """Initializes the curvature instance.
@@ -884,6 +886,12 @@ class BlockDiagonalCurvature(
         update multiplication operations across the different devices in a
         block-wise fashion. If False, each device will (redundantly) perform
         the operations for all of the blocks.
+      num_samples: Number of samples (per case) to use when computing stochastic
+        curvature matrix estimates. This option is only used when
+        ``estimation_mode == 'fisher_gradients'`` or ``estimation_mode ==
+        '[fisher,ggn]_curvature_prop'``.
+      should_vmap_samples: Whether to use ``jax.vmap`` to compute samples
+        when ``num_samples > 1``.
       **auto_register_kwargs: Any keyword arguments to pass to into the auto
         registration function.
     """
@@ -904,6 +912,9 @@ class BlockDiagonalCurvature(
 
     self._distributed_multiplies = distributed_multiplies
     self._distributed_cache_updates = distributed_cache_updates
+
+    self._num_samples = num_samples
+    self._should_vmap_samples = should_vmap_samples
 
   def _check_finalized(self):
     if not self.finalized:
@@ -1253,14 +1264,55 @@ class BlockDiagonalCurvature(
           blocks_states=tuple(new_state),
       )
 
+    def maybe_do_multiple_updates(update_func):
+
+      if self._num_samples > 1 and self._should_vmap_samples:
+
+        def f(rng_i):
+          return update_func(state, rng_i, ema_old)
+
+        states = jax.vmap(f)(jax.random.split(rng, self._num_samples))
+
+        # This implementation is quick and hacky and might break in the future.
+        return jax.tree_util.tree_map(
+            lambda x: (  # pylint: disable=g-long-lambda
+                jnp.mean(x, axis=0) if jnp.issubdtype(x.dtype, jnp.floating)
+                else x[0]),
+            states)
+
+      elif self._num_samples > 1:
+
+        def f(carry, rng_i):
+
+          state_i, ema_old_i = carry
+          new_state_i = update_func(state_i, rng_i, ema_old_i)
+
+          return (new_state_i, jnp.ones_like(ema_old_i)), None
+
+        (new_state, _), _ = jax.lax.scan(
+            f,
+            init=(state, jnp.asarray(ema_old)),
+            xs=jax.random.split(rng, self._num_samples)
+        )
+        return new_state
+
+      else:
+        return update_func(state, rng, ema_old)
+
     if estimation_mode == "fisher_gradients":
 
-      keys = jax.random.split(rng, len(losses)) if len(losses) > 1 else [rng]
-      vjp_vec = tuple(
-          loss.grad_of_evaluate_on_sample(key, coefficient_mode="sqrt")
-          for loss, key in zip(losses, keys))
+      def update_func(state_i, rng_i, ema_old_i):
 
-      return update_blocks(vjp_vec, state, ema_old, ema_new)
+        keys = jax.random.split(
+            rng_i, len(losses)) if len(losses) > 1 else [rng_i]
+
+        vjp_vec = tuple(
+            loss.grad_of_evaluate_on_sample(key, coefficient_mode="sqrt")
+            for loss, key in zip(losses, keys))
+
+        return update_blocks(vjp_vec, state_i, ema_old_i, ema_new)
+
+      return maybe_do_multiple_updates(update_func)
 
     elif estimation_mode == "fisher_empirical":
 
@@ -1272,24 +1324,31 @@ class BlockDiagonalCurvature(
 
     elif estimation_mode in ("fisher_curvature_prop", "ggn_curvature_prop"):
 
-      keys = jax.random.split(rng, len(losses)) if len(losses) > 1 else [rng]
-      vjp_vec = []
+      def update_func(state_i, rng_i, ema_old_i):
 
-      for loss, key in zip(losses, keys):
+        keys = jax.random.split(
+            rng_i, len(losses)) if len(losses) > 1 else [rng_i]
 
-        if estimation_mode == "fisher_curvature_prop":
-          shape = loss.fisher_factor_inner_shape
-          random_b = jax.random.bernoulli(key, shape=shape)
-          vjp_vec.append(loss.multiply_fisher_factor(random_b * 2.0 - 1.0))
+        vjp_vec = []
 
-        else:
-          shape = loss.ggn_factor_inner_shape
-          random_b = jax.random.bernoulli(key, shape=shape)
-          vjp_vec.append(loss.multiply_ggn_factor(random_b * 2.0 - 1.0))
+        for loss, key in zip(losses, keys):
 
-      return update_blocks(tuple(vjp_vec), state, ema_old, ema_new)
+          if estimation_mode == "fisher_curvature_prop":
+            shape = loss.fisher_factor_inner_shape
+            random_b = jax.random.bernoulli(key, shape=shape)
+            vjp_vec.append(loss.multiply_fisher_factor(random_b * 2.0 - 1.0))
+
+          else:
+            shape = loss.ggn_factor_inner_shape
+            random_b = jax.random.bernoulli(key, shape=shape)
+            vjp_vec.append(loss.multiply_ggn_factor(random_b * 2.0 - 1.0))
+
+        return update_blocks(tuple(vjp_vec), state_i, ema_old_i, ema_new)
+
+      return maybe_do_multiple_updates(update_func)
 
     elif estimation_mode in ("fisher_exact", "ggn_exact"):
+
       # We use the following trick to simulate summation. The equation is:
       #   estimate = ema_old * estimate + ema_new * (sum_i estimate_index_i^2)
       #   weight = ema_old * weight + ema_new

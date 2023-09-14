@@ -71,6 +71,8 @@ class Preconditioner:
       ] = kfac_jax.utils.default_batch_size_extractor,
       distributed_inverses: bool = True,
       distributed_precon_apply: bool = True,
+      num_samples: int = 1,
+      should_vmap_samples: bool = False,
   ):
     """Initializes the curvature estimator and preconditioner.
 
@@ -133,6 +135,12 @@ class Preconditioner:
         of the preconditioner across the different devices in a layer-wise
         fashion. If False, each device will (redundantly) perform the required
         operations for all of the layers. (Default: True)
+      num_samples: Number of samples (per case) to use when computing stochastic
+        curvature matrix estimates. This option is only used when
+        ``estimation_mode == 'fisher_gradients'`` or ``estimation_mode ==
+        '[fisher,ggn]_curvature_prop'``. (Default: 1)
+      should_vmap_samples: Whether to use ``jax.vmap`` to compute samples
+        when ``num_samples > 1``. (Default: False)
     """
     self._l2_reg = l2_reg
     self._damping = damping
@@ -161,6 +169,8 @@ class Preconditioner:
         patterns_to_skip=patterns_to_skip,
         distributed_multiplies=distributed_precon_apply,
         distributed_cache_updates=distributed_inverses,
+        num_samples=num_samples,
+        should_vmap_samples=should_vmap_samples,
         **(auto_register_kwargs or {}),
     )
 
