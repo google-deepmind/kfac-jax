@@ -628,7 +628,7 @@ def patches_moments_explicit(
       else:
         wf_n = weighting_array[in_spec.n_axis]
         wf_spatial = [weighting_array.shape[a] for a in in_spec.spatial_axes]
-        wf_sizes = in_spec.create_shape(wf_n, jnp.ones([]), *wf_spatial)
+        wf_sizes = in_spec.create_shape(wf_n, jnp.ones([]), *wf_spatial)  # pytype: disable=wrong-arg-types  # jnp-type
         wf_i = _slice_array(weighting_array, index, wf_sizes)
     else:
       wf_i = None

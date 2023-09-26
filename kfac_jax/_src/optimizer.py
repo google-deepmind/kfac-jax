@@ -865,7 +865,7 @@ class Optimizer(utils.WithStagedMethods):
       else:
         quad_change = jnp.nan
 
-      return coefficients, quad_change
+      return coefficients, quad_change  # pytype: disable=bad-return-type  # jnp-type
 
   @utils.auto_scope_method
   def _update_damping(

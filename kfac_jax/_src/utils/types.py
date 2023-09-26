@@ -81,4 +81,4 @@ def get_float_dtype_and_check_consistency(obj: ArrayTree) -> DType:
     else:
       raise ValueError("Non-float dtype detected.")
 
-  return dtype
+  return dtype  # pytype: disable=bad-return-type  # jnp-type
