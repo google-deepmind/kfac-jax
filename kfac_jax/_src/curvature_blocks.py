@@ -880,7 +880,6 @@ class Full(CurvatureBlock, abc.ABC):
     vector = self.parameters_list_to_single_vector(vector)
 
     if power == 1:
-
       result = jnp.matmul(state.matrix.value, vector) + identity_weight * vector
 
     elif not use_cached:
@@ -1207,22 +1206,6 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       s, _ = zip(*s_q)
 
     return utils.outer_product(*s)
-
-  @utils.auto_scope_method
-  def update_curvature_matrix_estimate(
-      self,
-      state: "KroneckerFactored.State",
-      estimation_data: Mapping[str, Sequence[Array]],
-      ema_old: Numeric,
-      ema_new: Numeric,
-      batch_size: Numeric,
-  ) -> "KroneckerFactored.State":
-    assert len(state.factors) == len(self.axis_groups)
-
-    # This function call will return a copy of state:
-    return self._update_curvature_matrix_estimate(
-        state, estimation_data, ema_old, ema_new, batch_size
-    )
 
   def _update_cache(  # pytype: disable=signature-mismatch  # numpy-scalars
       self,

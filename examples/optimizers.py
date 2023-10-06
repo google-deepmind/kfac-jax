@@ -290,6 +290,7 @@ class Preconditioner:
       sync: Union[Array, bool] = True
   ) -> EstimatorState:
     """Updates the curvature estimator state."""
+
     state = self.estimator.update_curvature_matrix_estimate(
         state=estimator_state,
         ema_old=ema_old,
@@ -316,7 +317,9 @@ class Preconditioner:
       sync: Union[Array, bool] = True,
   ) -> PreconditionState:
     """Updates the curvature estimates if it is the right iteration."""
+
     ema_old = decay_old_ema * self._curvature_ema + (1.0 - decay_old_ema) * 1.0
+
     return self._maybe_update_estimator_state(
         state,
         self.should_update_estimate_curvature(state),
@@ -528,11 +531,16 @@ class OptaxWrapper:
         donate_argnums=list(range(5)),
         in_axes=(0,) * 5 + (None,),
     )
-
     self._pmap_init = jax.pmap(
         lambda p, *_: OptaxAndPreconditionState(self._optax_optimizer.init(p)),
         axis_name=self.pmap_axis_name,
     )
+    self._pmap_rng_split = jax.pmap(
+        lambda rng, num: tuple(jax.random.split(rng, num)),
+        axis_name=self.pmap_axis_name,
+        static_broadcasted_argnums=1
+    )
+
     if self._preconditioner is not None:
       if not isinstance(self._preconditioner, Preconditioner):
         raise ValueError(
@@ -587,9 +595,12 @@ class OptaxWrapper:
       Tuple[Params, OptaxAndPreconditionState, Mapping[str, Array]],
   ]:
     """A single step of optax."""
+
+    rng_func, rng_precon = jax.random.split(rng)
+
     batch = self._batch_process_func(batch)
     func_args = kfac_jax.optimizer.make_func_args(
-        params, func_state, rng, batch,
+        params, func_state, rng_func, batch,
         has_state=self._value_func_has_state,
         has_rng=self._value_func_has_rng
     )
@@ -599,7 +610,7 @@ class OptaxWrapper:
       precond_state = self._preconditioner.maybe_update(
           precond_state,
           func_args,
-          rng,
+          rng_precon,
       )
       precond_state = self._preconditioner.increment_count(precond_state)
     out, grads = self._value_and_grad_func(*func_args)
@@ -666,16 +677,22 @@ class OptaxWrapper:
       Tuple[Params, Any, Mapping[str, Array]],
   ]:
     """A step with similar interface to KFAC."""
+
+    rng_init, rng_step = self._pmap_rng_split(rng, 2)
+
     batch = next(data_iterator)
+
     if self._preconditioner is not None and state.precond_state is None:
+
       precond_state = self._pmap_init_preconditioner(
-          params, rng, batch, func_state
+          params, rng_init, batch, func_state
       )
       state = OptaxAndPreconditionState(state.optax_state, precond_state)
+
     return self._pmap_step(
         params,
         state,
-        rng,
+        rng_step,
         batch,
         func_state,
         global_step_int,
