@@ -996,6 +996,9 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       name: str,
       axis_groups: Optional[Sequence[Sequence[int]]] = None,
   ):
+
+    # Even though the superclass constructor will set this later, we need to do
+    # it now since it's used below.
     self._layer_tag_eq = layer_tag_eq
 
     if axis_groups is None:
@@ -1265,7 +1268,7 @@ class TwoKroneckerFactored(KroneckerFactored):
   @property
   def has_bias(self) -> bool:
     """Whether this layer's equation has a bias."""
-    return len(self._layer_tag_eq.invars) == 4
+    return len(self.parameter_variables) == 2
 
   def parameters_shaped_list_to_array(
       self,
@@ -1377,7 +1380,7 @@ class DenseDiagonal(Diagonal):
   @property
   def has_bias(self) -> bool:
     """Whether the layer has a bias parameter."""
-    return len(self.parameters_shapes) == 2
+    return len(self.parameter_variables) == 2
 
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
@@ -1523,7 +1526,7 @@ class Conv2DDiagonal(Diagonal):
 
   @property
   def has_bias(self) -> bool:
-    return len(self.parameters_shapes) == 2
+    return len(self.parameter_variables) == 2
 
   def conv2d_tangent_squared(
       self,

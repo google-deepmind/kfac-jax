@@ -1252,6 +1252,12 @@ def register_squared_error_loss(
   If your loss is of the latter form you can compensate for it by passing the
   appropriate value to ``weight``.
 
+  NOTE: even though ``prediction`` and ``targets`` are interchangeable in the
+  definition of the squared error loss, they are not interchangeable in this
+  function. ``prediction`` must be the output of your parameterized function
+  (e.g. neural network), and ``targets`` must not depend on the parameters.
+  Mixing the two up could lead to a silent failure of the curvature estimation.
+
   Args:
     prediction: The prediction made by the network (i.e. its output). The first
       dimension will usually be the batch size, but doesn't need to be (unless

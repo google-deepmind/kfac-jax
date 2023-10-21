@@ -21,7 +21,15 @@ from typing import Any, Callable, Mapping, Optional, Sequence, TypeVar, Tuple, U
 from absl import logging
 import immutabledict
 import jax
-import jax.numpy as jnp
+
+jax_version = (
+    jax.__version_info__ if hasattr(jax, "__version_info__")
+    else tuple(map(int, jax.__version__.split("."))))
+
+if jax_version > (0, 4, 11):
+  import jax.extend as jax_extend  # pylint: disable=g-import-not-at-top
+
+import jax.numpy as jnp  # pylint: disable=g-import-not-at-top
 from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import utils
 import numpy as np
@@ -50,9 +58,15 @@ TagCtor = Callable[[Vars, Vars, JaxprEqns, MakeVarFunc], JaxprEqn]
 
 def eval_jaxpr_eqn(eqn: JaxprEqn, in_values: Vars) -> Var:
   """Computes the outputs of the given Jaxpr equation."""
+
   subfuns, bind_params = eqn.primitive.get_bind_params(eqn.params)
-  with jax.core.source_info_util.user_context(
-      eqn.source_info.traceback):
+
+  if jax_version > (0, 4, 11):
+    user_context = jax_extend.source_info_util.user_context
+  else:
+    user_context = jax.core.source_info_util.user_context
+
+  with user_context(eqn.source_info.traceback):
     return eqn.primitive.bind(*subfuns, *in_values, **bind_params)
 
 
@@ -1562,6 +1576,7 @@ def auto_register_tags(
   patterns = () if register_only_generic else  tuple(
       pattern for pattern in graph_patterns
       if pattern.name not in patterns_to_skip)
+
   func_graph, tagged_locations = _auto_register_tags(
       graph=graph,
       graph_matcher_rules=graph_matcher_rules,

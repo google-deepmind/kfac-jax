@@ -127,9 +127,11 @@ class LossTag(core.Primitive, Generic[T]):
   def _mlir_lowering(
       self,
       context: jax.interpreters.mlir.LoweringRuleContext,
-      *args, args_names: Sequence[str],
+      *args,
+      args_names: Sequence[str],
   ) -> Tuple[Any, ...]:
     """The XLA translation rule for this primitive (creates a no-op tuple)."""
+    del context
     return self.get_outputs(*args, args_names=args_names)
 
   def _jvp(
@@ -219,10 +221,12 @@ class LayerTag(core.Primitive):
       Tuple[T, ...]
   ]:
     """Splits the operands of the primitive into ``(outputs, inputs, params)``."""
+
     outputs = tuple(all_inputs[:self.num_outputs])
     inputs = tuple(all_inputs[self.num_outputs:self.num_outputs +
                               self.num_inputs])
     params = tuple(all_inputs[self.num_outputs + self.num_inputs:])
+
     return outputs, inputs, params
 
   def get_outputs(self, *operands: Array, **_: Any) -> Array:
@@ -278,12 +282,11 @@ def generic_get_outputs(
     *operands: Array,
 ) -> Array:
   """Special logic for generic tag's ``get_outputs``."""
-  # The generic tags have no `inputs` and `outputs` so instead they return just
-  # the parameters.
   assert self.num_inputs == self.num_outputs == 0
   params = self.split_all_inputs(operands)[2]
-  if len(params) != 1:
-    raise ValueError("A generic tag can have only one parameter.")
+
+  # The generic tags have no `inputs` and `outputs` so instead they return just
+  # the first parameter array.
   return params[0]
 
 
@@ -292,9 +295,9 @@ setattr(generic, "get_outputs",
         types.MethodType(generic_get_outputs, generic))
 
 
-def register_generic(parameter: Array) -> Array:
+def register_generic(*parameters: Array) -> Array:
   """Registers a generic tag around the provided parameter array."""
-  return generic.bind(parameter)
+  return generic.bind(*parameters)
 
 
 dense = LayerTag(name="dense_tag", num_inputs=1, num_outputs=1)

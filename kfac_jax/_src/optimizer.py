@@ -177,20 +177,19 @@ class Optimizer(utils.WithStagedMethods):
         model state and auxiliary information (usually statistics to log). Note
         that it should *not* be jitted/pmapped or otherwise compiled by JAX, as
         this can lead to errors. (Compilation is done internally by the
-        optimizer.)
-        interface of this function should be should be: ``out_args, loss_grads =
-        value_and_grad_func(*in_args)``. Here, ``in_args`` is ``(params,
-        func_state, rng, batch)``, with ``rng`` omitted if
-        ``value_func_has_rng`` is ``False``, and with ``func_state`` omitted if
-        ``value_func_has_state`` is ``False``. Meanwhile, ``out_args`` is
-        ``(loss, (func_state, aux))`` if ``value_func_has_state`` and
-        ``value_func_has_aux`` are both ``True``, ``(loss, func_state)`` if if
-        ``value_func_has_state`` is ``True`` and ``value_func_has_aux`` is
-        ``False``, ``(loss, aux)`` if ``value_func_has_state`` is ``False`` and
-        ``value_func_has_aux`` is ``True``, and finally ``loss`` if
-        ``value_func_has_state`` and ``value_func_has_aux`` are both ``False``.
-        This should be consistent with how JAX's ``value_and_grad`` API function
-        is typically used.
+        optimizer.) The interface of this function should be should be:
+        ``out_args, loss_grads = value_and_grad_func(*in_args)``. Here,
+        ``in_args`` is ``(params, func_state, rng, batch)``, with ``rng``
+        omitted if ``value_func_has_rng`` is ``False``, and with ``func_state``
+        omitted if ``value_func_has_state`` is ``False``. Meanwhile,
+        ``out_args`` is ``(loss, (func_state, aux))`` if
+        ``value_func_has_state`` and ``value_func_has_aux`` are both ``True``,
+        ``(loss, func_state)`` if ``value_func_has_state`` is ``True`` and
+        ``value_func_has_aux`` is ``False``, ``(loss, aux)`` if
+        ``value_func_has_state`` is ``False`` and ``value_func_has_aux`` is
+        ``True``, and finally ``loss`` if ``value_func_has_state`` and
+        ``value_func_has_aux`` are both ``False``. This should be consistent
+        with how JAX's ``value_and_grad`` API function is typically used.
       l2_reg: Scalar. Set this value to tell the optimizer what L2
         regularization coefficient you are using (if any). Note the coefficient
         appears in the regularizer as ``coeff / 2 * sum(param**2)``. This adds
@@ -233,9 +232,9 @@ class Optimizer(utils.WithStagedMethods):
         argument. Note that the effectiveness of this technique seems to vary
         between problems. (Default: ``False``)
       damping_schedule: Callable. A schedule for the damping. This should take
-        as input the current step number, and optionally the amount
-        of data seen so far as a keyword argument ``data_seen``, and return a
-        single array that represents the learning rate. (Default: ``None``)
+        as input the current step number, and optionally the amount of data seen
+        so far as a keyword argument ``data_seen``, and return a single array
+        that represents the learning rate. (Default: ``None``)
       initial_damping: Scalar or None. This specifies the initial value of the
         damping that the optimizer will use when using automatic damping
         adaptation. (Default: ``None``)

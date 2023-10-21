@@ -895,7 +895,9 @@ class BlockDiagonalCurvature(
       **auto_register_kwargs: Any keyword arguments to pass to into the auto
         registration function.
     """
+
     super().__init__(func, params_index, default_estimation_mode)
+
     self._index_to_block_ctor = index_to_block_ctor or dict()
     self._layer_tag_to_block_ctor = layer_tag_to_block_ctor or dict()
     self._auto_register_tags = auto_register_tags
@@ -923,6 +925,7 @@ class BlockDiagonalCurvature(
 
   def _create_blocks(self):
     """Creates all the curvature blocks instances in ``self._blocks``."""
+
     assert self._jaxpr is not None
 
     blocks_list = []
@@ -1296,8 +1299,12 @@ class BlockDiagonalCurvature(
         )
         return new_state
 
-      else:
+      elif self._num_samples == 1:
         return update_func(state, rng, ema_old)
+
+      else:
+        # Don't update the preconditioner at all.
+        return state
 
     if estimation_mode == "fisher_gradients":
 
