@@ -141,6 +141,7 @@ class Optimizer(utils.WithStagedMethods):
       distributed_inverses: bool = True,
       num_estimator_samples: int = 1,
       should_vmap_estimator_samples: bool = False,
+      norm_to_scale_identity_weight_per_block: Optional[str] = None,
   ):
     """Initializes the K-FAC optimizer with the provided settings.
 
@@ -350,6 +351,11 @@ class Optimizer(utils.WithStagedMethods):
         '[fisher,ggn]_curvature_prop'``. (Default: 1)
       should_vmap_estimator_samples: Whether to use ``jax.vmap`` to compute
         samples when ``num_estimator_samples > 1``. (Default: False)
+      norm_to_scale_identity_weight_per_block: The name of a norm to use to
+        compute extra per-block scaling for the damping. See psd_matrix_norm()
+        in utils/math.py for the definition of these. Note that this will not
+        effect the exact quadratic model that is used as part of the "adaptive"
+        learning rate, momentum, and damping methods. (Default: None)
     """
 
     super().__init__(
@@ -443,6 +449,16 @@ class Optimizer(utils.WithStagedMethods):
 
     self._use_cached_inverses = (self._inverse_update_period != 1)
     self._use_exact_inverses = use_exact_inverses
+
+    self._norm_to_scale_identity_weight_per_block = (
+        norm_to_scale_identity_weight_per_block
+    )
+
+    if (norm_to_scale_identity_weight_per_block is not None
+        and norm_to_scale_identity_weight_per_block != "none"):
+
+      assert (not use_adaptive_learning_rate and not use_adaptive_momentum
+              and not use_adaptive_damping)  # not currently supported
 
     # Curvature estimator
     self._estimator = curvature_estimator.BlockDiagonalCurvature(
@@ -783,6 +799,7 @@ class Optimizer(utils.WithStagedMethods):
         exact_power=self._use_exact_inverses,
         use_cached=self._use_cached_inverses,
         pmap_axis_name=self.pmap_axis_name,
+        norm_to_scale_identity_weight_per_block=self._norm_to_scale_identity_weight_per_block,
     )
 
     if self._norm_constraint is not None:
@@ -1275,6 +1292,7 @@ class Optimizer(utils.WithStagedMethods):
           exact_power=True,
           use_cached=False,
           pmap_axis_name=self.pmap_axis_name,
+          norm_to_scale_identity_weight_per_block=self._norm_to_scale_identity_weight_per_block,
       )
 
     c_vectors = [c_times_v(v_i) for v_i in vectors]

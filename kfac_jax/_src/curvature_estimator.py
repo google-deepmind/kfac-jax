@@ -546,8 +546,8 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
   The cached values are only updated once you call the method
   :func:`~CurvatureEstimator.update_cache`. Multiple methods contain the keyword
   argument ``use_cached`` which specify whether you want to compute the
-  corresponding expression using the current curvature estimate or used a cached
-  version.
+  corresponding expression using the current curvature estimate or using a
+  cached version.
 
   Attributes:
     func: The model evaluation function.
@@ -643,6 +643,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       exact_power: bool,
       use_cached: bool,
       pmap_axis_name: Optional[str],
+      norm_to_scale_identity_weight_per_block: Optional[str] = None,
   ) -> utils.Params:
     """Computes ``(CurvatureMatrix + identity_weight I)**power`` times ``vector``.
 
@@ -665,6 +666,9 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       pmap_axis_name: The name of any pmap axis, which will be used for
           aggregating any computed values over multiple devices, as well as
           parallelizing the computation over devices in a block-wise fashion.
+      norm_to_scale_identity_weight_per_block: The name of a norm to use to
+          compute extra per-block scaling for identity_weight. See
+          psd_matrix_norm() in utils/math.py for the definition of these.
 
     Returns:
       A parameter structured vector containing the product.
@@ -678,6 +682,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       exact_power: bool,
       use_cached: bool,
       pmap_axis_name: Optional[str],
+      norm_to_scale_identity_weight_per_block: Optional[str] = None,
   ) -> utils.Params:
     """Computes ``(CurvatureMatrix + identity_weight I)`` times ``vector``."""
 
@@ -688,7 +693,8 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         power=1,
         exact_power=exact_power,
         use_cached=use_cached,
-        pmap_axis_name=pmap_axis_name
+        pmap_axis_name=pmap_axis_name,
+        norm_to_scale_identity_weight_per_block=norm_to_scale_identity_weight_per_block,
     )
 
   def multiply_inverse(
@@ -699,6 +705,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       exact_power: bool,
       use_cached: bool,
       pmap_axis_name: Optional[str],
+      norm_to_scale_identity_weight_per_block: Optional[str] = None,
   ) -> utils.Params:
     """Computes ``(CurvatureMatrix + identity_weight I)^-1`` times ``vector``."""
 
@@ -709,7 +716,8 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         power=-1,
         exact_power=exact_power,
         use_cached=use_cached,
-        pmap_axis_name=pmap_axis_name
+        pmap_axis_name=pmap_axis_name,
+        norm_to_scale_identity_weight_per_block=norm_to_scale_identity_weight_per_block,
     )
 
   @abc.abstractmethod
@@ -908,6 +916,7 @@ class BlockDiagonalCurvature(
         auto_register_tags=auto_register_tags,
         **auto_register_kwargs
     )
+
     # Initialized during finalization
     self._jaxpr: Optional[tracer.ProcessedJaxpr] = None
     self._blocks: Optional[Tuple[curvature_blocks.CurvatureBlock]] = None
@@ -1118,9 +1127,12 @@ class BlockDiagonalCurvature(
       state: "BlockDiagonalCurvature.State",
       pmap_axis_name: Optional[str],
   ) -> "BlockDiagonalCurvature.State":
+
     block_states = []
+
     for block, block_state in zip(self.blocks, state.blocks_states):
       block_states.append(block.sync(block_state.copy(), pmap_axis_name))
+
     return BlockDiagonalCurvature.State(
         synced=jnp.asarray(True),
         blocks_states=tuple(block_states),
@@ -1132,6 +1144,7 @@ class BlockDiagonalCurvature(
       state: "BlockDiagonalCurvature.State",
       pmap_axis_name: Optional[str],
   ) -> "BlockDiagonalCurvature.State":
+
     return jax.lax.cond(
         state.synced,
         lambda s: s,
@@ -1149,6 +1162,7 @@ class BlockDiagonalCurvature(
       exact_power: bool,
       use_cached: bool,
       pmap_axis_name: Optional[str],
+      norm_to_scale_identity_weight_per_block: Optional[str] = None,
   ) -> utils.Params:
 
     blocks_vectors = self.params_vector_to_blocks_vectors(
@@ -1156,21 +1170,35 @@ class BlockDiagonalCurvature(
 
     identity_weight = utils.to_tuple_or_repeat(identity_weight, self.num_blocks)
 
+    def make_thunk(block, block_state, block_vector, block_identity_weight):
+
+      def thunk():
+
+        weight = block_identity_weight
+
+        if (norm_to_scale_identity_weight_per_block is not None
+            and norm_to_scale_identity_weight_per_block != "none"):
+
+          weight *= block.norm(
+              block_state, norm_to_scale_identity_weight_per_block)
+
+        return block.multiply_matpower(
+            state=block_state,
+            vector=block_vector,
+            identity_weight=weight,
+            power=power,
+            exact_power=exact_power,
+            use_cached=use_cached,
+        )
+
+      return thunk
+
     thunks = []
     for block, block_state, block_vector, block_identity_weight in zip(
         self.blocks, state.blocks_states, blocks_vectors, identity_weight):
 
       thunks.append(
-          functools.partial(
-              block.multiply_matpower,
-              state=block_state,
-              vector=block_vector,
-              identity_weight=block_identity_weight,
-              power=power,
-              exact_power=exact_power,
-              use_cached=use_cached,
-              )
-          )
+          make_thunk(block, block_state, block_vector, block_identity_weight))
 
     if self._distributed_multiplies and pmap_axis_name is not None:
 
@@ -1419,23 +1447,39 @@ class BlockDiagonalCurvature(
       approx_powers: Optional[curvature_blocks.ScalarOrSequence],
       eigenvalues: bool,
       pmap_axis_name: Optional[str],
+      norm_to_scale_identity_weight_per_block: Optional[str] = None,
   ) -> "BlockDiagonalCurvature.State":
+
     identity_weight = utils.to_tuple_or_repeat(identity_weight, self.num_blocks)
+
+    def make_thunk(block, block_state, block_identity_weight):
+
+      def thunk():
+
+        weight = block_identity_weight
+
+        if (norm_to_scale_identity_weight_per_block is not None
+            and norm_to_scale_identity_weight_per_block != "none"):
+
+          weight *= block.norm(
+              block_state, norm_to_scale_identity_weight_per_block)
+
+        return block.update_cache(
+            state=block_state,
+            identity_weight=block_identity_weight,
+            exact_powers=exact_powers,
+            approx_powers=approx_powers,
+            eigenvalues=eigenvalues,
+        )
+
+      return thunk
 
     thunks = []
     for block, block_state, block_identity_weight in zip(self.blocks,
                                                          state.blocks_states,
                                                          identity_weight):
-      thunks.append(
-          functools.partial(
-              block.update_cache,
-              state=block_state,
-              identity_weight=block_identity_weight,
-              exact_powers=exact_powers,
-              approx_powers=approx_powers,
-              eigenvalues=eigenvalues,
-              )
-          )
+
+      thunks.append(make_thunk(block, block_state, block_identity_weight))
 
     if self._distributed_cache_updates and pmap_axis_name is not None:
 

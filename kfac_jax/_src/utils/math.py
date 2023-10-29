@@ -342,18 +342,21 @@ def psd_inv_cholesky(matrix: Array) -> Array:
 
 def psd_matrix_norm(
     matrix: Array,
-    norm_type: str = "avg_trace",
+    norm_type: str = "avg_diag",
     method_2norm: str = "lobpcg",
     rng_key: Optional[PRNGKey] = None
-) -> Array:
+) -> Numeric:
   """Computes one of several different matrix norms for PSD matrices.
+
+  NOTE: not all the functions options provided here are actually norms, but most
+  are.
 
   Args:
     matrix: a square matrix represented as a 2D array, a 1D vector giving the
       diagonal, or a 0D scalar (which gets interpreted as a 1x1 matrix). Must be
       positive semi-definite (PSD).
     norm_type: a string specifying the type of matrix norm. Can be "2_norm" for
-      the matrix 2-norm aka the spectral norm, "avg_trace" for the average of
+      the matrix 2-norm aka the spectral norm, "avg_diag" for the average of
       diagonal entries, "1_norm" for the matrix 1-norm, or "avg_fro" for the
       Frobenius norm divided by the square root of the number of rows.
     method_2norm: a string specifying the method used to compute 2-norms. Can
@@ -386,6 +389,7 @@ def psd_matrix_norm(
             matrix, v, m=300, tol=1e-8)[0][0]
 
       elif method_2norm == "power_iteration":
+
         return optax.power_iteration(
             matrix, num_iters=300, error_tolerance=1e-7)[1]
 
@@ -395,7 +399,7 @@ def psd_matrix_norm(
     else:
       raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
 
-  elif norm_type == "avg_trace":
+  elif norm_type == "avg_diag":
 
     if matrix.ndim == 0:
       return matrix
@@ -409,7 +413,65 @@ def psd_matrix_norm(
     else:
       raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
 
-  elif norm_type == "1_norm":
+  elif norm_type == "median_diag":
+
+    if matrix.ndim == 0:
+      return matrix
+
+    elif matrix.ndim == 1:
+      return jnp.median(matrix)
+
+    elif matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]:
+      return jnp.median(jnp.diag(matrix))
+
+    else:
+      raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
+
+  elif norm_type == "trace":
+
+    if matrix.ndim == 0:
+      return matrix
+
+    elif matrix.ndim == 1:
+      return jnp.sum(matrix)
+
+    elif matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]:
+      return jnp.trace(matrix)
+
+    else:
+      raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
+
+  elif norm_type == "median_eig":
+
+    if matrix.ndim == 0:
+      return matrix
+
+    elif matrix.ndim == 1:
+      return jnp.median(matrix)
+
+    elif matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]:
+      # call safe_psd_eigh instead?
+      s, _ = jnp.linalg.eigh(matrix)
+      return jnp.median(s)
+
+    else:
+      raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
+
+  elif norm_type == "one_over_dim":  # this isn't a norm
+
+    if matrix.ndim == 0:
+      return 1.0
+
+    elif matrix.ndim == 1:
+      return 1.0 / matrix.shape[0]
+
+    elif matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]:
+      return 1.0 / matrix.shape[0]
+
+    else:
+      raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
+
+  elif norm_type == "1_norm":  # equiv to inf norm for symmetric matrices
 
     if matrix.ndim == 0:
       return matrix
@@ -437,8 +499,21 @@ def psd_matrix_norm(
     else:
       raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
 
-  else:
-    raise ValueError(f"Unrecognized norm type: '{norm_type}'")
+  elif norm_type == "fro":
+
+    if matrix.ndim == 0:
+      return matrix
+
+    elif matrix.ndim == 1:
+      return jnp.linalg.norm(matrix)
+
+    elif matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]:
+      return jnp.linalg.norm(matrix)
+
+    else:
+      raise ValueError(f"Unsupported shape for factor array: {matrix.shape}")
+
+  raise ValueError(f"Unrecognized norm type: '{norm_type}'")
 
 
 def pi_adjusted_kronecker_factors(
@@ -475,15 +550,15 @@ def pi_adjusted_kronecker_factors(
   # scalar factors `c_i` into a single overall scaling coefficient and
   # distribute the damping to each single non-scalar factor `u_i` equally.
 
-  norm_type = "avg_trace"
+  norm_type = "avg_diag"
 
   norms = [psd_matrix_norm(f, norm_type=norm_type) for f in factors]
 
   # Compute the normalized factors `u_i`, such that Trace(u_i) / dim(u_i) = 1
   us = [fi / ni for fi, ni in zip(factors, norms)]
 
-  # kron(arrays) = c * kron(us)
-
+  # Compute the overall norm for the whole Kronecker product. We should have
+  # kron(arrays) == c * kron(us).
   c = jnp.prod(jnp.array(norms))
 
   damping = damping.astype(c.dtype)  # pytype: disable=attribute-error  # numpy-scalars
@@ -508,10 +583,10 @@ def pi_adjusted_kronecker_factors(
 
     for u in us:
 
-      if u.size == 1:
+      if u.size == 1:  # scalar case
         u_hat = jnp.ones_like(u)  # damping not used in the scalar factors
 
-      elif u.ndim == 2:
+      elif u.ndim == 2:  # matrix case
         u_hat = u + d_hat * jnp.eye(u.shape[0], dtype=u.dtype)
 
       else:  # diagonal case

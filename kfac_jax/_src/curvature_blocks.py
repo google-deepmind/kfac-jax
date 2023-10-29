@@ -254,6 +254,12 @@ class CurvatureBlock(utils.Finalizable):
     Returns:
       A scalar value to be multiplied with any unscaled block representation.
     """
+
+    # TODO(jamesmartens,botev): This way of handling state dependent scale is
+    # a bit hacky and leads to complexity in other parts of the code that must
+    # be aware of how this part works. Should try to replace this with something
+    # better.
+
     if use_cache:
       return self.fixed_scale()
 
@@ -365,7 +371,9 @@ class CurvatureBlock(utils.Finalizable):
     Returns:
       A tuple of arrays, representing the result of the matrix-vector product.
     """
+
     scale = self.scale(state, use_cached)
+
     result = self._multiply_matpower_unscaled(
         state=state,
         vector=vector,
@@ -541,6 +549,19 @@ class CurvatureBlock(utils.Finalizable):
   def _to_dense_unscaled(self, state: "CurvatureBlock.State") -> Array:
     """A dense representation of the curvature, ignoring ``self.scale``."""
 
+  def norm(self, state: "CurvatureBlock.State", norm_type: str) -> Numeric:
+    """Computes the norm of the curvature block, according to ``norm_type``."""
+
+    return self.scale(state, False) * self._norm_unscaled(state, norm_type)
+
+  @abc.abstractmethod
+  def _norm_unscaled(
+      self,
+      state: "CurvatureBlock.State",
+      norm_type: str
+  ) -> Numeric:
+    """Like ``norm`` but with ``self.scale`` not included."""
+
 
 class ScaledIdentity(CurvatureBlock):
   """A block that assumes that the curvature is a scaled identity matrix."""
@@ -596,9 +617,13 @@ class ScaledIdentity(CurvatureBlock):
       use_cached: bool,
   ) -> Tuple[Array, ...]:
 
-    del exact_power, use_cached  # Unused
+    del exact_power  # Unused
 
-    identity_weight = identity_weight + 1.0
+    # state_dependent_scale needs to be included because it won't be by the
+    # caller of this function (multiply_matpower) when use_cached=True
+    scale = self.state_dependent_scale(state) if use_cached else 1.0
+
+    identity_weight = identity_weight + scale
 
     if power == 1:
       return jax.tree_util.tree_map(lambda x: identity_weight * x, vector)
@@ -643,6 +668,14 @@ class ScaledIdentity(CurvatureBlock):
   def _to_dense_unscaled(self, state: CurvatureBlock.State) -> Array:
     del state  # not used
     return jnp.eye(self.dim)
+
+  def _norm_unscaled(
+      self,
+      state: CurvatureBlock.State,
+      norm_type: str
+  ) -> Numeric:
+
+    return utils.psd_matrix_norm(jnp.ones([self.dim]), norm_type=norm_type)
 
 
 class Diagonal(CurvatureBlock, abc.ABC):
@@ -701,7 +734,12 @@ class Diagonal(CurvatureBlock, abc.ABC):
       use_cached: bool,
   ) -> Tuple[Array, ...]:
 
-    factors = tuple(f.value + identity_weight for f in state.diagonal_factors)
+    # state_dependent_scale needs to be included because it won't be by the
+    # caller of this function (multiply_matpower) when use_cached=True
+    scale = self.state_dependent_scale(state) if use_cached else 1.0
+
+    factors = tuple(scale * f.value + identity_weight
+                    for f in state.diagonal_factors)
 
     assert len(factors) == len(vector)
 
@@ -728,6 +766,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
       approx_powers: Set[Scalar],
       eigenvalues: bool,
   ) -> "Diagonal.State":
+
     return state.copy()
 
   def _to_dense_unscaled(self, state: "Diagonal.State") -> Array:
@@ -738,6 +777,16 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
     # Construct diagonal matrix
     return jnp.diag(jnp.concatenate(factors, axis=0))
+
+  def _norm_unscaled(
+      self,
+      state: CurvatureBlock.State,
+      norm_type: str
+  ) -> Numeric:
+
+    return utils.product(
+        utils.psd_matrix_norm(f.value.flatten(), norm_type=norm_type)
+        for f in state.diagonal_factors)
 
 
 class Full(CurvatureBlock, abc.ABC):
@@ -776,6 +825,7 @@ class Full(CurvatureBlock, abc.ABC):
     if eigen_decomposition_threshold is None:
       threshold = get_default_eigen_decomposition_threshold()
       self._eigen_decomposition_threshold = threshold
+
     else:
       self._eigen_decomposition_threshold = eigen_decomposition_threshold
 
@@ -788,10 +838,12 @@ class Full(CurvatureBlock, abc.ABC):
     """Converts values corresponding to parameters of the block to vector."""
 
     if len(parameters_shaped_list) != self.number_of_parameters:
+
       raise ValueError(f"Expected a list of {self.number_of_parameters} values,"
                        f" but got {len(parameters_shaped_list)} instead.")
 
     for array, shape in zip(parameters_shaped_list, self.parameters_shapes):
+
       if array.shape != shape:
         raise ValueError(f"Expected a value of shape {shape}, but got "
                          f"{array.shape} instead.")
@@ -815,6 +867,7 @@ class Full(CurvatureBlock, abc.ABC):
     index = 0
 
     for shape in self.parameters_shapes:
+
       size = utils.product(shape)
       parameters_shaped_list.append(vector[index: index + size].reshape(shape))
       index += size
@@ -880,7 +933,17 @@ class Full(CurvatureBlock, abc.ABC):
     vector = self.parameters_list_to_single_vector(vector)
 
     if power == 1:
-      result = jnp.matmul(state.matrix.value, vector) + identity_weight * vector
+
+      result = jnp.matmul(state.matrix.value, vector)
+
+      if use_cached:
+        # state_dependent_scale needs to be included here because it won't be by
+        # the caller of this function (multiply_matpower) when use_cached=True.
+        # This is not an issue for other powers because they bake in
+        # state_dependent_scale.
+        result *= self.state_dependent_scale(state)
+
+      result += identity_weight * vector
 
     elif not use_cached:
 
@@ -911,8 +974,10 @@ class Full(CurvatureBlock, abc.ABC):
       state: "Full.State",
       use_cached: bool,
   ) -> Array:
+
     if not use_cached:
       return utils.safe_psd_eigh(state.matrix.value)[0]
+
     else:
       return state.cache["eigenvalues"]
 
@@ -957,12 +1022,21 @@ class Full(CurvatureBlock, abc.ABC):
     return state
 
   def _to_dense_unscaled(self, state: "Full.State") -> Array:
+
     # Permute the matrix according to the parameters canonical order
     return utils.block_permuted(
         state.matrix.value,
         block_sizes=[utils.product(shape) for shape in self.parameters_shapes],
         block_order=self.parameters_canonical_order
     )
+
+  def _norm_unscaled(
+      self,
+      state: CurvatureBlock.State,
+      norm_type: str
+  ) -> Numeric:
+
+    return utils.psd_matrix_norm(state.matrix.value, norm_type=norm_type)
 
 
 class KroneckerFactored(CurvatureBlock, abc.ABC):
@@ -1073,6 +1147,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       approx_powers_to_cache: Set[Scalar],
       cache_eigenvalues: bool,
   ) -> "KroneckerFactored.State":
+
     cache = {}
     factors = []
 
@@ -1088,10 +1163,12 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
         cache[f"{i}_factor_eigen_vectors"] = jnp.zeros((d, d), dtype=self.dtype)
 
       for power in approx_powers_to_cache:
+
         if power != -1:
           raise NotImplementedError(
               f"Approximations for power {power} is not yet implemented."
           )
+
         if str(power) not in cache:
           cache[str(power)] = {}
 
@@ -1125,6 +1202,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       exact_power: bool,
       use_cached: bool,
   ) -> Tuple[Array, ...]:
+
     assert len(state.factors) == len(self.axis_groups)
 
     vector = self.parameter_shaped_list_to_grouped_array(vector)
@@ -1133,8 +1211,14 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
       factors = [f.value for f in state.factors]
 
+      # state_dependent_scale needs to be included here because it won't be by
+      # the caller of this function (multiply_matpower) when use_cached=True.
+      # This is not an issue for other powers because they bake in
+      # state_dependent_scale.
+      scale = self.state_dependent_scale(state) if use_cached else 1.0
+
       if exact_power:
-        result = utils.kronecker_product_axis_mul_v(factors, vector)
+        result = scale * utils.kronecker_product_axis_mul_v(factors, vector)
         result = result + identity_weight * vector
 
       else:
@@ -1142,9 +1226,9 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
         # norm in its computation, it might make sense to cache it. But we
         # currently don't do that.
 
-        result = utils.kronecker_product_axis_mul_v(
-            utils.pi_adjusted_kronecker_factors(*factors,
-                                                damping=identity_weight),
+        result = scale * utils.kronecker_product_axis_mul_v(
+            utils.pi_adjusted_kronecker_factors(
+                *factors, damping=identity_weight / scale),
             vector)
 
     elif exact_power:
@@ -1177,6 +1261,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
         )
 
       if use_cached:
+
         factors = [
             state.cache[str(power)][f"{i}_factor"]
             for i in range(len(state.factors))
@@ -1218,6 +1303,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       approx_powers: Numeric,
       eigenvalues: bool,
   ) -> "KroneckerFactored.State":
+
     assert len(state.factors) == len(self.axis_groups)
 
     # Copy this first since we mutate it later in this function.
@@ -1227,8 +1313,11 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
     factor_scale = jnp.power(scale, 1.0 / len(self.axis_groups))
 
     if eigenvalues or exact_powers:
+
       s_q = [utils.safe_psd_eigh(factor.value) for factor in state.factors]
+
       s, q = zip(*s_q)
+
       for i in range(len(state.factors)):
         state.cache[f"{i}_factor_eigenvalues"] = factor_scale * s[i]
 
@@ -1236,23 +1325,35 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
           state.cache[f"{i}_factor_eigen_vectors"] = q[i]
 
     for power in approx_powers:
+
       if power != -1:
         raise NotImplementedError(
             f"Approximations for power {power} is not yet implemented."
         )
 
       cache = state.cache[str(power)]
+
       # This computes the approximate inverse factors using the generalization
       # of the pi-adjusted inversion from the original KFAC paper.
-
       inv_factors = utils.pi_adjusted_kronecker_inverse(
           *[factor.value for factor in state.factors],
           damping=identity_weight,
       )
+
       for i in range(len(state.factors)):
         cache[f"{i}_factor"] = inv_factors[i] / factor_scale
 
     return state
+
+  def _norm_unscaled(
+      self,
+      state: CurvatureBlock.State,
+      norm_type: str
+  ) -> Numeric:
+
+    return utils.product(
+        utils.psd_matrix_norm(f.value, norm_type=norm_type)
+        for f in state.factors)
 
 
 class TwoKroneckerFactored(KroneckerFactored):
@@ -1274,29 +1375,35 @@ class TwoKroneckerFactored(KroneckerFactored):
       self,
       parameters_shaped_list: Sequence[Array],
   ) -> Array:
+
     for p, s in zip(parameters_shaped_list, self.parameters_shapes):
       assert p.shape == s
 
     if self.has_bias:
       w, b = parameters_shaped_list
       return jnp.concatenate([w.reshape([-1, w.shape[-1]]), b[None]], axis=0)
+
     else:
       # This correctly reshapes the parameters of both dense and conv2d blocks
       [w] = parameters_shaped_list
       return w.reshape([-1, w.shape[-1]])
 
   def array_to_parameters_shaped_list(self, array: Array) -> Tuple[Array, ...]:
+
     if self.has_bias:
       w, b = array[:-1], array[-1]
       return w.reshape(self.parameters_shapes[0]), b
+
     else:
       return tuple([array.reshape(self.parameters_shapes[0])])
 
   def _to_dense_unscaled(self, state: "KroneckerFactored.State") -> Array:
+
     assert 0 < self.number_of_parameters <= 2
     inputs_factor = state.factors[0].value
 
     if self.has_bias and self.parameters_canonical_order[0] != 0:
+
       # Permute the matrix according to the parameters canonical order
       inputs_factor = utils.block_permuted(
           state.factors[0].value,
@@ -1330,6 +1437,7 @@ class NaiveDiagonal(Diagonal):
 
     for factor, dw in zip(state.diagonal_factors,
                           estimation_data["params_tangent"]):
+
       factor.update(dw * dw / batch_size, ema_old, ema_new)
 
     return state
