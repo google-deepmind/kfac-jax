@@ -1397,7 +1397,7 @@ class Optimizer(utils.WithStagedMethods):
 
         w = - lax.cond(jnp.all(to_check == 0),
                        lambda: jnp.stack([b[0] / A_damped[0, 0], b[1]]),
-                       lambda: jnp.linalg.solve(A_damped, b))
+                       lambda: utils.psd_solve(A_damped, b))
       else:
         raise NotImplementedError()
 

@@ -20,6 +20,8 @@ from typing import Optional, Sequence, Any, Set, Tuple, Union, Dict, Mapping
 
 import jax
 import jax.numpy as jnp
+import jax.scipy
+
 from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import patches_second_moment as psm
 from kfac_jax._src import tag_graph_matcher as tgm
@@ -950,8 +952,9 @@ class Full(CurvatureBlock, abc.ABC):
       matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)
 
       if power == -1:
-        result = jnp.linalg.solve(matrix, vector)
+        result = utils.psd_solve(matrix, vector)
       else:
+        # TODO(jamesmartens,botev): investigate this for determinism on GPUs
         result = jnp.matmul(jnp.linalg.matrix_power(matrix, power), vector)
 
     else:
@@ -1012,7 +1015,7 @@ class Full(CurvatureBlock, abc.ABC):
       for power in exact_powers:
 
         if power == -1:
-          state.cache[str(power)] = utils.psd_inv_cholesky(
+          state.cache[str(power)] = utils.psd_inv(
               state.matrix.value + identity_weight * jnp.eye(self.dim)) / scale
         else:
           matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)
@@ -1114,15 +1117,26 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
   @property
   def grouped_array_shape(self) -> Shape:
     """The shape of the single axis grouped array."""
-    return tuple(
-        utils.product([self.array_shape[i] for i in group])
-        for group in self.axis_groups
-    )
+
+    shape = []
+    for group in self.axis_groups:
+
+      size = utils.product([self.array_shape[i] for i in group])
+
+      # filter out groups of size 1
+      if size != 1:
+        shape.append(size)
+
+    # need at least one group
+    if not shape:
+      shape = [1]
+
+    return tuple(shape)
 
   @property
   def grouped_array_ndim(self) -> int:
     """The number of dimensions of the grouped array."""
-    return len(self.axis_groups)
+    return len(self.grouped_array_shape)
 
   def parameter_shaped_list_to_grouped_array(
       self,
@@ -1152,6 +1166,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
     factors = []
 
     for i, d in enumerate(self.grouped_array_shape):
+
       factors.append(
           utils.WeightedMovingAverage.zeros_array((d, d), self.dtype)
       )
@@ -1203,7 +1218,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       use_cached: bool,
   ) -> Tuple[Array, ...]:
 
-    assert len(state.factors) == len(self.axis_groups)
+    assert len(state.factors) == self.grouped_array_ndim
 
     vector = self.parameter_shaped_list_to_grouped_array(vector)
 
@@ -1282,7 +1297,8 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       state: "KroneckerFactored.State",
       use_cached: bool,
   ) -> Array:
-    assert len(state.factors) == len(self.axis_groups)
+
+    assert len(state.factors) == self.grouped_array_ndim
 
     if use_cached:
       s = [
@@ -1304,7 +1320,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       eigenvalues: bool,
   ) -> "KroneckerFactored.State":
 
-    assert len(state.factors) == len(self.axis_groups)
+    assert len(state.factors) == self.grouped_array_ndim
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()

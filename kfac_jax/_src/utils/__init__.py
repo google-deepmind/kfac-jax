@@ -96,6 +96,8 @@ del parallel
 # math
 set_special_case_zero_inv = math.set_special_case_zero_inv
 get_special_case_zero_inv = math.get_special_case_zero_inv
+set_use_cholesky_inversion = math.set_use_cholesky_inversion
+get_use_cholesky_inversion = math.get_use_cholesky_inversion
 product = math.product
 outer_product = math.outer_product
 scalar_mul = math.scalar_mul
@@ -108,7 +110,8 @@ vector_of_inner_products = math.vector_of_inner_products
 block_permuted = math.block_permuted
 norm = math.norm
 per_parameter_norm = math.per_parameter_norm
-psd_inv_cholesky = math.psd_inv_cholesky
+psd_inv = math.psd_inv
+psd_solve = math.psd_solve
 pi_adjusted_kronecker_factors = math.pi_adjusted_kronecker_factors
 pi_adjusted_kronecker_inverse = math.pi_adjusted_kronecker_inverse
 kronecker_product_axis_mul_v = math.kronecker_product_axis_mul_v

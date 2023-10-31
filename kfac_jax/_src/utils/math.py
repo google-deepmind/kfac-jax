@@ -42,6 +42,13 @@ _ALPHABET = string.ascii_lowercase
 # factors.
 _SPECIAL_CASE_ZERO_INV: bool = True
 
+# Cholesky inverses are deterministic on GPUs and somewhat faster to compute,
+# but tend to perform a bit worse and not tolerate very low damping values.
+# If disabling Cholesky inverses and using GPUs, one must make sure to set
+# distributed_inverses=True, since otherwise the devices can potentially become
+# out of sync, which is a silent and very serious failure
+_USE_CHOLESKY_INVERSION: bool = True
+
 
 def set_special_case_zero_inv(value: bool):
   """Sets whether `pi_adjusted_inverse` handles zero and nan matrices."""
@@ -52,6 +59,17 @@ def set_special_case_zero_inv(value: bool):
 def get_special_case_zero_inv() -> bool:
   """Returns whether `pi_adjusted_inverse` handles zero and nan matrices."""
   return _SPECIAL_CASE_ZERO_INV
+
+
+def set_use_cholesky_inversion(value: bool):
+  """Sets whether `pi_adjusted_inverse` handles zero and nan matrices."""
+  global _USE_CHOLESKY_INVERSION
+  _USE_CHOLESKY_INVERSION = value
+
+
+def get_use_cholesky_inversion() -> bool:
+  """Returns whether `pi_adjusted_inverse` handles zero and nan matrices."""
+  return _USE_CHOLESKY_INVERSION
 
 
 def product(iterable_object: Iterable[TNumeric]) -> TNumeric:
@@ -329,15 +347,30 @@ def per_parameter_norm(obj: ArrayTree, key_prefix: str) -> ArrayTree:
   }
 
 
-def psd_inv_cholesky(matrix: Array) -> Array:
-  """Computes the inverse of `matrix`, with matrix assumed PSD."""
+def psd_inv(matrix: Array) -> Array:
+  """Computes the inverse of `matrix`, which is assumed PSD."""
 
   if matrix.shape[:1] != matrix.shape[1:]:
     raise ValueError(f"Expected square matrix, but got shape {matrix.shape}.")
 
-  identity = jnp.eye(matrix.shape[0], dtype=matrix.dtype)
+  if get_use_cholesky_inversion():
+    identity = jnp.eye(matrix.shape[0], dtype=matrix.dtype)
+    return linalg.solve(matrix, identity, assume_a="pos")
+  else:
+    return linalg.inv(matrix)
 
-  return linalg.solve(matrix, identity, assume_a="pos")
+
+def psd_solve(matrix: Array, vector: Array) -> Array:
+  """Computes the solution of `matrix * x = vector`, for a PSD `matrix`."""
+
+  if matrix.shape[:1] != matrix.shape[1:]:
+    raise ValueError(f"Expected square matrix, but got shape {matrix.shape}.")
+
+  if get_use_cholesky_inversion():
+    return linalg.solve(matrix, vector, assume_a="pos")
+
+  else:
+    return linalg.solve(matrix, vector)
 
 
 def psd_matrix_norm(
@@ -552,46 +585,40 @@ def pi_adjusted_kronecker_factors(
 
   norm_type = "avg_diag"
 
-  norms = [psd_matrix_norm(f, norm_type=norm_type) for f in factors]
+  norms = jnp.array([psd_matrix_norm(f, norm_type=norm_type) for f in factors])
 
   # Compute the normalized factors `u_i`, such that Trace(u_i) / dim(u_i) = 1
   us = [fi / ni for fi, ni in zip(factors, norms)]
 
-  # Compute the overall norm for the whole Kronecker product. We should have
-  # kron(arrays) == c * kron(us).
-  c = jnp.prod(jnp.array(norms))
+  # 0-dim scalar factors are not allowed
+  assert not any(f.ndim == 0 for f in factors)
 
-  damping = damping.astype(c.dtype)  # pytype: disable=attribute-error  # numpy-scalars
+  k = len(factors)
 
   def regular_case() -> Tuple[Array, ...]:
 
-    non_scalars = sum(1 if f.size != 1 else 0 for f in factors)
+    # Distribute c and damping/c among k factors, where c = jnp.prod(norms),
+    # satisfying kron(factors) = c * kron(us).
 
-    # We distribute the overall scale over each factor, including scalars
-    if non_scalars == 0:
+    c_k = jnp.exp(jnp.mean(jnp.log(norms)))
 
-      # In the case where all factors are scalar we need to add the damping
-      c_k = jnp.power(c + damping, 1.0 / len(factors))
+    # NOTE: c_k (geometric mean of norms) can also be calculated by
+    # c ** (1/k) = jnp.prod(norms) ** (1 / len(norms)), but this alternative
+    # can make the result zero due to the multiplication of (potentially) small
+    # values, i.e. jnp.prod(norms).
 
-    else:
-      c_k = jnp.power(c, 1.0 / len(factors))
-
-      # We distribute the damping only inside the non-scalar factors
-      d_hat = jnp.power(damping / c, 1.0 / non_scalars)
+    d_k = jnp.power(damping, 1.0 / k) / c_k
 
     u_hats = []
 
     for u in us:
 
-      if u.size == 1:  # scalar case
-        u_hat = jnp.ones_like(u)  # damping not used in the scalar factors
-
-      elif u.ndim == 2:  # matrix case
-        u_hat = u + d_hat * jnp.eye(u.shape[0], dtype=u.dtype)
+      if u.ndim == 2:
+        u_hat = u + d_k * jnp.eye(u.shape[0], dtype=u.dtype)
 
       else:  # diagonal case
         assert u.ndim == 1
-        u_hat = u + d_hat
+        u_hat = u + d_k
 
       u_hats.append(u_hat * c_k)
 
@@ -602,7 +629,7 @@ def pi_adjusted_kronecker_factors(
     # In the special case where for some reason one of the factors is zero, then
     # the we write each factor as `damping^(1/k) * I`.
 
-    c_k = jnp.power(damping, 1.0 / len(factors))
+    c_k = jnp.power(damping, 1.0 / k)
 
     u_hats = []
 
@@ -611,7 +638,8 @@ def pi_adjusted_kronecker_factors(
       if u.ndim == 2:
         u_hat = jnp.eye(u.shape[0], dtype=u.dtype)
 
-      else:
+      else:  # diagonal case
+        assert u.ndim == 1
         u_hat = jnp.ones_like(u)
 
       u_hats.append(u_hat * c_k)
@@ -619,11 +647,7 @@ def pi_adjusted_kronecker_factors(
     return tuple(u_hats)
 
   if get_special_case_zero_inv():
-
-    return lax.cond(
-        jnp.greater(c, 0.0),
-        regular_case,
-        zero_case)
+    return lax.cond(jnp.greater(jnp.min(norms), 0.0), regular_case, zero_case)
 
   else:
     return regular_case()
@@ -648,7 +672,7 @@ def invert_psd_matrices(
   def invert_psd_matrix(m):
 
     if m.ndim == 2:
-      return psd_inv_cholesky(m)
+      return psd_inv(m)
 
     assert m.ndim <= 1
     return 1.0 / m
