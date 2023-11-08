@@ -1117,21 +1117,10 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
   @property
   def grouped_array_shape(self) -> Shape:
     """The shape of the single axis grouped array."""
-
-    shape = []
-    for group in self.axis_groups:
-
-      size = utils.product([self.array_shape[i] for i in group])
-
-      # filter out groups of size 1
-      if size != 1:
-        shape.append(size)
-
-    # need at least one group
-    if not shape:
-      shape = [1]
-
-    return tuple(shape)
+    return tuple(
+        utils.product([self.array_shape[i] for i in group])
+        for group in self.axis_groups
+    )
 
   @property
   def grouped_array_ndim(self) -> int:
