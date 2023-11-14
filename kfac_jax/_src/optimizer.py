@@ -115,7 +115,9 @@ class Optimizer(utils.WithStagedMethods):
       always_use_exact_qmodel_for_damping_adjustment: bool = False,
       norm_constraint: Optional[Numeric] = None,
       num_burnin_steps: int = 10,
-      estimation_mode: str = "fisher_gradients",
+      estimation_mode: Optional[str] = None,
+      custom_estimator_ctor: Optional[
+          Callable[..., curvature_estimator.BlockDiagonalCurvature]] = None,
       curvature_ema: Numeric = 0.95,
       curvature_update_period: int = 1,
       inverse_update_period: int = 5,
@@ -123,6 +125,7 @@ class Optimizer(utils.WithStagedMethods):
       batch_process_func: Optional[Callable[[Batch], Batch]] = None,
       register_only_generic: bool = False,
       patterns_to_skip: Sequence[str] = (),
+      use_automatic_registration: bool = True,
       auto_register_kwargs: Optional[Dict[str, Any]] = None,
       layer_tag_to_block_ctor: Optional[
           Dict[str, curvature_estimator.CurvatureBlockCtor]
@@ -280,8 +283,13 @@ class Optimizer(utils.WithStagedMethods):
         parameters. (Default: ``10``)
       estimation_mode: String. The type of estimator to use for the curvature
         matrix. See the documentation for :class:`~CurvatureEstimator` for a
-        detailed description of the possible options. (Default:
-        ``fisher_gradients``).
+        detailed description of the possible options. If None will use default
+        estimation_mode mode of the used CurvatureEstimator subclass, which is
+        typically "fisher_gradients". (Default: ``None``)
+      custom_estimator_ctor: Optional constructor for subclass of
+        :class:`~BlockDiagonalCurvature`. If specified, the optimizer
+        will use this conastructor instead of the default
+        :class:`~BlockDiagonalCurvature`. (Default: ``None``)
       curvature_ema: The decay factor used when calculating the covariance
         estimate moving averages. (Default: ``0.95``)
       curvature_update_period: Int. The number of steps in between updating the
@@ -300,6 +308,8 @@ class Optimizer(utils.WithStagedMethods):
         to automatically pick up any kind of layer tags. (Default: ``False``)
       patterns_to_skip: Tuple. A list of any patterns that should be skipped by
         the graph matcher when auto-tagging. (Default: ``()``)
+      use_automatic_registration: Bool. If ``True``, the optimizer will try to
+        automatically register the layers of your network. (Default: ``True``)
       auto_register_kwargs: Any additional kwargs to be passed down to
         :func:`~auto_register_tags`, which is called by the curvature estimator.
         (Default: ``None``)
@@ -398,6 +408,7 @@ class Optimizer(utils.WithStagedMethods):
 
     if momentum_schedule is not None:
 
+      # TODO(jamesmartens,botev): invesigate if we actually need this anymore.
       def schedule_with_first_step_zero(
           global_step: Array,
           data_seen: Optional[Numeric] = None,
@@ -428,7 +439,6 @@ class Optimizer(utils.WithStagedMethods):
         always_use_exact_qmodel_for_damping_adjustment)
     self._norm_constraint = norm_constraint
     self._num_burnin_steps = num_burnin_steps
-    self._estimation_mode = estimation_mode
     self._curvature_ema = curvature_ema
     if curvature_update_period > inverse_update_period:
       raise ValueError(
@@ -460,8 +470,11 @@ class Optimizer(utils.WithStagedMethods):
       assert (not use_adaptive_learning_rate and not use_adaptive_momentum
               and not use_adaptive_damping)  # not currently supported
 
+    estimator_ctor = (
+        custom_estimator_ctor or curvature_estimator.BlockDiagonalCurvature)
+
     # Curvature estimator
-    self._estimator = curvature_estimator.BlockDiagonalCurvature(
+    self._estimator = estimator_ctor(
         func=self._value_func,
         default_estimation_mode=estimation_mode,
         params_index=0,
@@ -472,6 +485,7 @@ class Optimizer(utils.WithStagedMethods):
         distributed_cache_updates=distributed_inverses,
         num_samples=num_estimator_samples,
         should_vmap_samples=should_vmap_estimator_samples,
+        auto_register_tags=use_automatic_registration,
         **(auto_register_kwargs or {}),
     )
     self._implicit = curvature_estimator.ImplicitExactCurvature(
@@ -711,6 +725,7 @@ class Optimizer(utils.WithStagedMethods):
       sync: Union[Array, bool] = True
   ) -> curvature_estimator.BlockDiagonalCurvature.State:
     """Updates the curvature estimator state."""
+
     state = self.estimator.update_curvature_matrix_estimate(
         state=estimator_state,
         ema_old=ema_old,

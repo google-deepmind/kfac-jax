@@ -61,12 +61,14 @@ class LossTag(core.Primitive, Generic[T]):
         inputs to the tag.
     """
     super().__init__(cls.__name__ + "_tag")
+
     self._cls = cls
     self._parameter_dependants = tuple(parameter_dependants)
     self._parameter_independants = tuple(parameter_independants)
 
     jax.interpreters.mlir.register_lowering(self, self._mlir_lowering)
     jax.interpreters.ad.primitive_jvps[self] = self._jvp
+
     # This line defines how does the tag behave under vmap. It is required for
     # any primitive that can be used inside a vmap. The reason why we want to
     # allow this is two fold - one to not break user code when the tags are not
@@ -93,13 +95,18 @@ class LossTag(core.Primitive, Generic[T]):
       *args: T,
       args_names: Sequence[str],
   ) -> Tuple[T, ...]:
+
     assert len(args) == len(args_names)
+
     arg_map = dict(zip(args_names, args))
+
     return tuple(arg_map[name] for name in self.parameter_dependants_names)
 
   def loss(self, *args: Array, args_names: Sequence[str]) -> T:
     """Constructs an instance of the corresponding :class:`~LossFunction` class."""
+
     assert len(args) == len(args_names)
+
     arg_map = dict(zip(args_names, args))
     return self._cls(**arg_map)
 
@@ -109,7 +116,9 @@ class LossTag(core.Primitive, Generic[T]):
       args_names: Sequence[str],
   ) -> Tuple[ArrayOrXla, ...]:
     """Verifies that the number of arguments matches expectations."""
+
     assert len(args) == len(args_names)
+
     return tuple(arg for name, arg in zip(args_names, args)
                  if name in self.parameter_dependants_names)
 
@@ -121,6 +130,7 @@ class LossTag(core.Primitive, Generic[T]):
       *operands: Array,
       args_names: Sequence[str],
   ) -> Tuple[Arrays, jax.core.Effects]:
+
     return (self.get_outputs(*operands, args_names=args_names),
             jax.core.no_effects)
 
@@ -131,7 +141,9 @@ class LossTag(core.Primitive, Generic[T]):
       args_names: Sequence[str],
   ) -> Tuple[Any, ...]:
     """The XLA translation rule for this primitive (creates a no-op tuple)."""
+
     del context
+
     return self.get_outputs(*args, args_names=args_names)
 
   def _jvp(
@@ -141,10 +153,13 @@ class LossTag(core.Primitive, Generic[T]):
       args_names: Sequence[str],
   ) -> Tuple[Arrays, Arrays]:
     """Computes the Jacobian-vector product for the primitive."""
+
     if len(arg_values) != len(arg_tangents):
       raise ValueError("Values and tangents are not the same length.")
+
     primal_output = self.bind(*arg_values, args_names=tuple(args_names))
     tangent_output = self.get_outputs(*arg_tangents, args_names=args_names)
+
     return primal_output, tangent_output
 
   def _batching(
@@ -154,7 +169,9 @@ class LossTag(core.Primitive, Generic[T]):
       args_names: Sequence[str],
   ) -> Tuple[Array, Union[int, Tuple[int, ...]]]:
     """Defines how the primitive behaves under :func:`jax.vmap`."""
-    return self.bind(*batched_args, args_names=tuple(args_names)), batched_dims
+
+    return (self.bind(*batched_args, args_names=tuple(args_names)),
+            batched_dims[:1])
 
 
 class LayerTag(core.Primitive):

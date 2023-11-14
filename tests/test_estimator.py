@@ -99,7 +99,7 @@ class TestEstimator(parameterized.TestCase):
       self.assertEqual(xi.shape, yi.shape)
       if check_dtypes:
         self.assertEqual(xi.dtype, yi.dtype)
-      np.testing.assert_allclose(xi, yi, rtol=rtol, atol=atol)
+      np.testing.assert_allclose(xi, yi, rtol=rtol, atol=atol, equal_nan=False)
 
   @parameterized.parameters(NON_LINEAR_MODELS_AND_CURVATURE_TYPE)
   def test_explicit_exact_full(
@@ -210,6 +210,7 @@ class TestEstimator(parameterized.TestCase):
     # Compute curvature matrix using the explicit exact curvature
     full_estimator = kfac_jax.ExplicitExactCurvature(
         model_func, default_estimation_mode="fisher_exact",
+        param_order=block_estimator.param_order
     )
     state = compute_exact_approx_curvature(
         full_estimator,

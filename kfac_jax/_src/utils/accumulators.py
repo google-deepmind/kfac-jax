@@ -32,6 +32,7 @@ TArrayTree = types.TArrayTree
 @misc.register_state_class
 class WeightedMovingAverage(Generic[TArrayTree], misc.State):
   """A wrapped class for an arbitrary weighted moving average."""
+
   weight: Numeric
   raw_value: Optional[TArrayTree]
 
@@ -47,33 +48,44 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
       new_weight: Numeric,
   ):
     """Updates the underlying array and weight accordingly."""
-    if self.raw_value is None:
-      self.raw_value = value
-      self.weight = jnp.asarray(new_weight).astype(self.weight.dtype)
 
-    else:
-      self.weight = self.weight * old_weight_multiplier + new_weight
-      self.raw_value = jax.tree_util.tree_map(
-          lambda x, y: x * old_weight_multiplier + y * new_weight,
-          self.raw_value,
-          value,
-      )
+    assert self.raw_value is not None
+
+    # A negative value of new_weight means we should only update the value
+    # (with -new_weight) and not the total running weight. This roughly
+    # corresponds to summation instead of averaging, and is useful in a few
+    # contexts.
+    new_weight_for_value = jnp.abs(new_weight)
+    new_weight_for_weight = jax.nn.relu(new_weight)
+
+    self.weight = self.weight * old_weight_multiplier + new_weight_for_weight
+
+    self.raw_value = jax.tree_util.tree_map(
+        lambda x, y: x * old_weight_multiplier + y * new_weight_for_value,
+        self.raw_value,
+        value,
+    )
 
   def sync(self, pmap_axis_name: Optional[str]):
     """Syncs the underlying array across devices."""
+
     if self.raw_value is None:
       raise ValueError("`raw_value` has not been set yet.")
+
     self.raw_value = parallel.pmean_if_pmap(self.raw_value, pmap_axis_name)
 
   def clear(self, value_to_none: bool = False):
     """Resets the weighted average."""
+
     self.weight = jnp.zeros_like(self.weight)
     self.raw_value = None if value_to_none else jnp.zeros_like(self.raw_value)
 
   def value_and_clear(self) -> TArrayTree:
     """Retrieves the value of the weighted average and clears it."""
+
     value = self.value
     self.clear()
+
     return value
 
   @classmethod
@@ -83,6 +95,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
       dtype: Optional[DType] = None,
   ) -> "WeightedMovingAverage[Array]":
     """Initializes a `WeightedMovingAverage` with a single array of zeros."""
+
     return cls(  # pytype: disable=wrong-keyword-args
         weight=jnp.zeros([], dtype=dtype),
         raw_value=jnp.zeros(shape, dtype=dtype),
@@ -91,18 +104,13 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
   @classmethod
   def zeros_like(cls, value: TArrayTree) -> "WeightedMovingAverage[TArrayTree]":
     """Initializes a `WeightedMovingAverage` with zeros structure like `value`."""
+
     return cls(  # pytype: disable=wrong-keyword-args
         weight=jnp.array(
             0.0, dtype=types.get_float_dtype_and_check_consistency(value)
         ),
         raw_value=jax.tree_util.tree_map(jnp.zeros_like, value),
     )
-
-  @classmethod
-  def empty(cls, dtype: Optional[DType] = None) -> "WeightedMovingAverage[Any]":
-    """Returns an empty moving average instance."""
-    weight = jnp.zeros([]) if dtype is None else jnp.zeros([], dtype=dtype)
-    return WeightedMovingAverage(weight=weight, raw_value=None)
 
 
 class MultiChunkAccumulator(Generic[TArrayTree]):
@@ -161,8 +169,10 @@ class MultiChunkAccumulator(Generic[TArrayTree]):
 
   def value_and_clear(self) -> TArrayTree:
     """Retrieves the normalized value of the accumulator and clears it."""
+
     value = self.value
     self.clear()
+
     return value
 
   def add(self, value_obj: TArrayTree, weight: Numeric = 1):
@@ -254,7 +264,9 @@ class MultiChunkAccumulator(Generic[TArrayTree]):
 
   def copy(self):
     """Returns a copy of the PyTree structure (but not the JAX arrays)."""
+
     (flattened, structure) = jax.tree_util.tree_flatten(self)
+
     return jax.tree_util.tree_unflatten(structure, flattened)
 
 

@@ -1466,14 +1466,31 @@ class NaiveFull(Full):
       batch_size: Numeric,
   ) -> Full.State:
 
+    # This method supports the case where the param tangents have an extra
+    # leading dimension that should be summed over (after the outer products).
+    # TODO(jamesmartens): add support for this to NaiveDiagonal
+
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    params_grads = jax.tree_util.tree_leaves(estimation_data["params_tangent"])
-    params_grads = jax.tree_map(lambda x: x.flatten(), params_grads)
-    grads = jnp.concatenate(params_grads, axis=0)
+    params_tangents = jax.tree_util.tree_leaves(
+        estimation_data["params_tangent"])
 
-    state.matrix.update(jnp.outer(grads, grads) / batch_size, ema_old, ema_new)
+    params_tangents_flattened = []
+
+    assert len(params_tangents) == self.number_of_parameters
+
+    for p_shape, pt in zip(self.parameters_shapes, params_tangents):
+
+      assert pt.shape[-len(p_shape):] == p_shape
+      p_size = utils.product(p_shape)
+
+      params_tangents_flattened.append(pt.reshape([-1, p_size]))
+
+    tangents = jnp.concatenate(params_tangents_flattened, axis=1)
+
+    stats = jnp.einsum("ay,az->yz", tangents, tangents) / batch_size
+    state.matrix.update(stats, ema_old, ema_new)
 
     return state
 
@@ -1547,8 +1564,10 @@ class DenseFull(Full):
     assert utils.first_dim_is_size(batch_size, x, dy)
 
     params_tangents = x[:, :, None] * dy[:, None, :]
+
     if self.number_of_parameters == 2:
       params_tangents = jnp.concatenate([params_tangents, dy[:, None]], axis=1)
+
     params_tangents = jnp.reshape(params_tangents, [batch_size, -1])
 
     matrix_update = jnp.matmul(params_tangents.T, params_tangents) / batch_size

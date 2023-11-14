@@ -857,7 +857,7 @@ class BlockDiagonalCurvature(
       self,
       func: utils.Func,
       params_index: int = 0,
-      default_estimation_mode: str = "fisher_gradients",
+      default_estimation_mode: Optional[str] = None,
       layer_tag_to_block_ctor:
       Optional[Mapping[str, CurvatureBlockCtor]] = None,
       index_to_block_ctor:
@@ -876,7 +876,8 @@ class BlockDiagonalCurvature(
       params_index: The index of the parameters argument in arguments list of
         ``func``.
       default_estimation_mode: The estimation mode which to use by default when
-        calling ``self.update_curvature_matrix_estimate``.
+        calling ``self.update_curvature_matrix_estimate``. If ``None`` this will
+        be ``'fisher_gradients'``.
       layer_tag_to_block_ctor: An optional dict mapping tags to specific classes
         of block approximations, which to override the default ones.
       index_to_block_ctor: An optional dict mapping a specific block parameter
@@ -904,7 +905,8 @@ class BlockDiagonalCurvature(
         registration function.
     """
 
-    super().__init__(func, params_index, default_estimation_mode)
+    super().__init__(
+        func, params_index, default_estimation_mode or "fisher_gradients")
 
     self._index_to_block_ctor = index_to_block_ctor or dict()
     self._layer_tag_to_block_ctor = layer_tag_to_block_ctor or dict()
@@ -1047,6 +1049,12 @@ class BlockDiagonalCurvature(
     """Computes all model statistics needed for estimating the curvature."""
     return self._vjp(func_args)
 
+  @property
+  def param_order(self):
+    # is there a nicer way to do this?
+    params_vars = self.params_vector_to_blocks_vectors(self.jaxpr.params_vars)
+    return np.argsort([p.count for p in jax.tree_util.tree_leaves(params_vars)])
+
   def params_vector_to_blocks_vectors(
       self,
       parameter_structured_vector: utils.Params,
@@ -1101,6 +1109,7 @@ class BlockDiagonalCurvature(
       approx_powers_to_cache: Optional[curvature_blocks.ScalarOrSequence],
       cache_eigenvalues: bool = False,
   ) -> "BlockDiagonalCurvature.State":
+
     if not self.finalized:
       self.finalize(func_args)
 
@@ -1248,6 +1257,67 @@ class BlockDiagonalCurvature(
     blocks_eigenvalues = self.block_eigenvalues(state, use_cached)
     return jnp.concatenate(blocks_eigenvalues, axis=0)
 
+  # Helper function that updates the blocks given a vjp vector
+  def _update_blocks(self, vjp_vec, losses_vjp, state, ema_old, ema_new,
+                     batch_size):
+
+    blocks_info = losses_vjp(vjp_vec)
+    assert len(blocks_info) == self.num_blocks
+
+    new_state = []
+    for block, block_state, block_info in zip(
+        self.blocks, state.blocks_states, blocks_info):
+
+      new_state.append(block.update_curvature_matrix_estimate(
+          block_state, block_info, ema_old, ema_new,
+          batch_size))
+
+    return BlockDiagonalCurvature.State(
+        synced=jnp.asarray(False),
+        blocks_states=tuple(new_state),
+    )
+
+  def _maybe_do_multiple_updates(self, update_func, state, rng, ema_old):
+
+    if self._num_samples > 1 and self._should_vmap_samples:
+
+      def f(rng_i):
+        return update_func(state, rng_i, ema_old)
+
+      states = jax.vmap(f)(jax.random.split(rng, self._num_samples))
+
+      # This implementation is quick and hacky and might break in the future.
+      # It works by averaging the states only for their floating point leaves,
+      # which are assumed to be statistics tensors.
+      return jax.tree_util.tree_map(
+          lambda x: (  # pylint: disable=g-long-lambda
+              jnp.mean(x, axis=0) if jnp.issubdtype(x.dtype, jnp.floating)
+              else x[0]),
+          states)
+
+    elif self._num_samples > 1:
+
+      def f(carry, rng_i):
+
+        state_i, ema_old_i = carry
+        new_state_i = update_func(state_i, rng_i, ema_old_i)
+
+        return (new_state_i, jnp.ones_like(ema_old_i)), None
+
+      (new_state, _), _ = jax.lax.scan(
+          f,
+          init=(state, jnp.asarray(ema_old)),
+          xs=jax.random.split(rng, self._num_samples)
+      )
+      return new_state
+
+    elif self._num_samples == 1:
+      return update_func(state, rng, ema_old)
+
+    else:
+      # Don't update the preconditioner at all.
+      return state
+
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
@@ -1276,64 +1346,6 @@ class BlockDiagonalCurvature(
             f"`loss_functions.NegativeLogProbLoss`, which is incompatible "
             f"with the estimation mode provided - {estimation_mode}.")
 
-    # Helper function that updates the blocks given a vjp vector
-    def update_blocks(vjp_vec_, state_, ema_old_, ema_new_):
-
-      blocks_info_ = losses_vjp(vjp_vec_)
-      assert len(blocks_info_) == self.num_blocks
-
-      new_state = []
-      for block_, block_state_, block_info_ in zip(
-          self.blocks, state_.blocks_states, blocks_info_):
-
-        new_state.append(block_.update_curvature_matrix_estimate(
-            block_state_, block_info_, ema_old_, ema_new_,
-            batch_size))
-
-      return BlockDiagonalCurvature.State(
-          synced=jnp.asarray(False),
-          blocks_states=tuple(new_state),
-      )
-
-    def maybe_do_multiple_updates(update_func):
-
-      if self._num_samples > 1 and self._should_vmap_samples:
-
-        def f(rng_i):
-          return update_func(state, rng_i, ema_old)
-
-        states = jax.vmap(f)(jax.random.split(rng, self._num_samples))
-
-        # This implementation is quick and hacky and might break in the future.
-        return jax.tree_util.tree_map(
-            lambda x: (  # pylint: disable=g-long-lambda
-                jnp.mean(x, axis=0) if jnp.issubdtype(x.dtype, jnp.floating)
-                else x[0]),
-            states)
-
-      elif self._num_samples > 1:
-
-        def f(carry, rng_i):
-
-          state_i, ema_old_i = carry
-          new_state_i = update_func(state_i, rng_i, ema_old_i)
-
-          return (new_state_i, jnp.ones_like(ema_old_i)), None
-
-        (new_state, _), _ = jax.lax.scan(
-            f,
-            init=(state, jnp.asarray(ema_old)),
-            xs=jax.random.split(rng, self._num_samples)
-        )
-        return new_state
-
-      elif self._num_samples == 1:
-        return update_func(state, rng, ema_old)
-
-      else:
-        # Don't update the preconditioner at all.
-        return state
-
     if estimation_mode == "fisher_gradients":
 
       def update_func(state_i, rng_i, ema_old_i):
@@ -1345,9 +1357,10 @@ class BlockDiagonalCurvature(
             loss.grad_of_evaluate_on_sample(key, coefficient_mode="sqrt")
             for loss, key in zip(losses, keys))
 
-        return update_blocks(vjp_vec, state_i, ema_old_i, ema_new)
+        return self._update_blocks(
+            vjp_vec, losses_vjp, state_i, ema_old_i, ema_new, batch_size)
 
-      return maybe_do_multiple_updates(update_func)
+      return self._maybe_do_multiple_updates(update_func, state, rng, ema_old)
 
     elif estimation_mode == "fisher_empirical":
 
@@ -1355,7 +1368,8 @@ class BlockDiagonalCurvature(
           loss.grad_of_evaluate(None, coefficient_mode="regular")
           for loss in losses)
 
-      return update_blocks(vjp_vec, state, ema_old, ema_new)
+      return self._update_blocks(vjp_vec, losses_vjp, state, ema_old, ema_new,
+                                 batch_size)
 
     elif estimation_mode in ("fisher_curvature_prop", "ggn_curvature_prop"):
 
@@ -1378,23 +1392,12 @@ class BlockDiagonalCurvature(
             random_b = jax.random.bernoulli(key, shape=shape)
             vjp_vec.append(loss.multiply_ggn_factor(random_b * 2.0 - 1.0))
 
-        return update_blocks(tuple(vjp_vec), state_i, ema_old_i, ema_new)
+        return self._update_blocks(
+            tuple(vjp_vec), losses_vjp, state_i, ema_old_i, ema_new, batch_size)
 
-      return maybe_do_multiple_updates(update_func)
+      return self._maybe_do_multiple_updates(update_func, state, rng, ema_old)
 
     elif estimation_mode in ("fisher_exact", "ggn_exact"):
-
-      # We use the following trick to simulate summation. The equation is:
-      #   estimate = ema_old * estimate + ema_new * (sum_i estimate_index_i^2)
-      #   weight = ema_old * weight + ema_new
-      # Instead we update the estimate n times with the following updates:
-      #   for k = 1
-      #     estimate_k = ema_old * estimate + (ema_new/n) * n*estimate_index_k^2
-      #     weight_k = ema_old * weight + (ema_new/n)
-      #   for k > 1:
-      #     estimate_k = 1.0 * estimate_k-1 + (ema_new/n) * n*estimate_index_k^2
-      #     weight_k = 1.0 * weight_k-1 + (ema_new/n)
-      # Which is mathematically equivalent to the original version.
 
       zero_tangents = jax.tree_util.tree_map(
           jnp.zeros_like, list(loss.parameter_dependants for loss in losses))
@@ -1404,14 +1407,21 @@ class BlockDiagonalCurvature(
       else:
         shapes = [l.ggn_factor_inner_shape[1:] for l in losses]
 
-      total_num_indices = sum(sum(s) for s in shapes)
-      ema_new = ema_new / total_num_indices
-
       # For now we support only inner shapes of 1 dimension, hence below the
       # (loss_num_indices,).
       assert all(len(s) == 1 for s in shapes)
 
+      total_num_indices = sum(sum(s) for s in shapes)
+
+      # This doesn't affect how the averaging is done except how the new stats
+      # are weighted vs the old stats (which if they also used this correction
+      # will just be 1:1).
+      ema_new = ema_new / total_num_indices
+
+      # This loop should probably be converted into a JAX loop for the sake of
+      # efficient compilation.
       for i, (loss, (loss_num_indices,)) in enumerate(zip(losses, shapes)):
+
         for index in range(loss_num_indices):
 
           vjp_vec = zero_tangents.copy()
@@ -1426,10 +1436,14 @@ class BlockDiagonalCurvature(
             # tuple for the tangents.
             vjp_vec[i] = (vjp_vec[i],)
 
+          # This will affect the tangent stat but not the activation stats. We
+          # do it because we want an average over loss indices for the
+          # activation stats, but a sum for the tangent stats.
           vjp_vec[i] = jax.tree_util.tree_map(
               lambda x: x * jnp.sqrt(total_num_indices), vjp_vec[i])
 
-          state = update_blocks(tuple(vjp_vec), state, ema_old, ema_new)
+          state = self._update_blocks(
+              tuple(vjp_vec), losses_vjp, state, ema_old, ema_new, batch_size)
 
           ema_old = 1.0
 
@@ -1545,7 +1559,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
   This implies that the computation scales linearly (without parallelism) with
   the batch size. The class stores the estimated curvature as a dense matrix,
   hence its memory requirement is (number of parameters)^2. If
-  ``estimation_mode`` is ``fisher_exact`` or ``ggn_exact`` than this would
+  ``estimation_mode`` is ``fisher_exact`` or ``ggn_exact`` then this would
   compute the exact curvature, but other modes are also supported. As a result
   of looping over the input data this class needs to know the index of the batch
   in the arguments to the model function and additionally, since the loop is
@@ -1556,129 +1570,67 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
   def __init__(
       self,
       func: utils.Func,
-      params_index: int = 0,
       batch_index: int = 1,
-      default_estimation_mode: str = "fisher_exact",
+      default_estimation_mode: Optional[str] = None,
       layer_tag_to_block_ctor:
       Optional[Mapping[str, CurvatureBlockCtor]] = None,
-      index_to_block_ctor:
-      Optional[Mapping[Tuple[int, ...], CurvatureBlockCtor]] = None,
-      auto_register_tags: bool = True,
-      **auto_register_kwargs
+      auto_register_tags: bool = False,
+      param_order: Optional[Tuple[int]] = None,
+      **kwargs: Any,
   ):
     """Initializes the curvature instance.
 
     Args:
       func: The model function, which should have at least one registered loss.
-      params_index: The index of the parameters argument in arguments list of
-        ``func``.
       batch_index: Specifies at which index of the inputs to ``func`` is the
         batch, representing data over which we average the curvature.
       default_estimation_mode: The estimation mode which to use by default when
-        calling ``self.update_curvature_matrix_estimate``.
+        calling ``self.update_curvature_matrix_estimate``. If ``None`` this will
+        be ``'fisher_exact'``.
       layer_tag_to_block_ctor: An optional dict mapping tags to specific classes
         of block approximations, which to override the default ones.
-      index_to_block_ctor: An optional dict mapping a specific block parameter
-        indices to specific classes of block approximation, which to override
-        the default ones. To get the correct indices check
-        ``estimator.indices_to_block_map``.
-      auto_register_tags: Whether to automatically register layer tags for
-        parameters that have not been manually registered. For further details
-        see :func:``~auto_register_tags``.
-      **auto_register_kwargs: Any keyword arguments to pass to into the auto
-        registration function.
+      auto_register_tags: This argument will be ignored since this subclass
+        doesn't use automatic registration.
+      param_order: An optional tuple of ints specifying the order of parameters
+        (with the reference order being the one used by ``func``). If not
+        specified, the reference order is used. The parameter order will
+        determine the order of blocks returned by
+        ``to_diagonal_block_dense_matrix``, and the order of the rows and
+        columns of ``to_dense_matrix``.
+      **kwargs: Addiional keyword arguments passed to the superclass
+        ``BlockDiagonalCurvature``.
     """
-    super().__init__(
-        func=func,
-        default_estimation_mode=default_estimation_mode,
-        params_index=params_index,
-        layer_tag_to_block_ctor=layer_tag_to_block_ctor,
-        index_to_block_ctor=index_to_block_ctor,
-        auto_register_tags=auto_register_tags,
-        **auto_register_kwargs
-    )
+
     self._batch_index = batch_index
 
-  @property
-  def batch_index(self) -> int:
-    """The index in the inputs of the model function, which is the batch."""
-    return self._batch_index
+    if layer_tag_to_block_ctor is None:
+      layer_tag_to_block_ctor = dict(generic_tag=curvature_blocks.NaiveFull)
 
-  def _create_blocks(self):
-    # Here in order to be able to have a block together for all parameters, we
-    # create a non-existing (in the original graph) generic layer tag equation.
-    assert self._jaxpr is not None
+    def retagged_func(params, *args):
 
-    jax_version = (
-        jax.__version_info__ if hasattr(jax, "__version_info__")
-        else tuple(map(int, jax.__version__.split("."))))
+      params_flat, params_treedef = jax.tree_util.tree_flatten(params)
 
-    if jax_version > (0, 3, 4):
-      self._blocks = (curvature_blocks.NaiveFull(
-          layer_tag_eq=tags.LayerTagEqn(
-              primitive=tags.generic,
-              invars=list(self._jaxpr.params_vars_flat),
-              outvars=list(self._jaxpr.params_vars_flat),
-              params={},
-              effects=jax.core.no_effects,
-              source_info=jax.core.source_info_util.new_source_info()
-          ),
-          name="ExactCurvature"
-      ),)
+      if param_order is not None:
+        params_flat_canonical_order = [params_flat[i] for i in param_order]
+        params_flat[param_order[0]] = tags.register_generic(
+            *params_flat_canonical_order)
 
-    else:
-      self._blocks = (curvature_blocks.NaiveFull(
-          layer_tag_eq=tags.LayerTagEqn(
-              primitive=tags.generic,
-              invars=list(self._jaxpr.params_vars_flat),
-              outvars=list(self._jaxpr.params_vars_flat),
-              params={},
-              source_info=jax.core.source_info_util.new_source_info()  # pytype: disable=missing-parameter
-          ),
-          name="ExactCurvature"
-      ),)
+      else:
+        params_flat[0] = tags.register_generic(*params_flat)
 
-  def _compute_losses_vjp(self, func_args):
+      params = jax.tree_util.tree_unflatten(params_treedef, params_flat)
 
-    # For some reason pytype can't detect that this attribute exists from the
-    # super class.
-    losses, losses_vjp = self._vjp(func_args)  # pytype: disable=attribute-error
+      return func(params, *args)
 
-    def modified_losses_jvp(vjp_vec):
+    super().__init__(
+        func=retagged_func,
+        default_estimation_mode=default_estimation_mode or "fisher_exact",
+        layer_tag_to_block_ctor=layer_tag_to_block_ctor,
+        auto_register_tags=False,
+        **kwargs,
+    )
 
-      blocks_info = losses_vjp(vjp_vec)
-
-      tangents = [block["params_tangent"] for block in blocks_info]
-      tangents = jax.tree_util.tree_leaves(tangents)
-
-      # Need to reorder all of the block information to follow the canonical
-      # order of variables
-      params_vars = BlockDiagonalCurvature.params_vector_to_blocks_vectors(
-          self, self.jaxpr.params_vars)  # pytype: disable=wrong-arg-types
-      order = np.argsort([p.count
-                          for p in jax.tree_util.tree_leaves(params_vars)])
-
-      return [dict(params_tangent=tuple(tangents[i] for i in order))]
-
-    return losses, modified_losses_jvp
-
-  def params_vector_to_blocks_vectors(
-      self,
-      parameter_structured_vector: utils.Params,
-  ) -> Tuple[Tuple[Array, ...]]:
-
-    return (tuple(jax.tree_util.tree_leaves(parameter_structured_vector)),)
-
-  def blocks_vectors_to_params_vector(
-      self,
-      blocks_vectors: Sequence[Sequence[Array]],
-  ) -> utils.Params:
-
-    assert len(blocks_vectors) == self.num_blocks
-
-    return jax.tree_util.tree_unflatten(
-        self.jaxpr.params_tree, blocks_vectors[0])
-
+  @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
       state: BlockDiagonalCurvature.State,
@@ -1688,14 +1640,16 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       rng: PRNGKey,
       func_args: utils.FuncArgs,
       estimation_mode: Optional[str] = None,
-  ) -> curvature_blocks.Full.State:
+  ) -> BlockDiagonalCurvature.State:
 
     rng = jax.random.split(rng, batch_size)
 
+    super_ = super()
+
     def single_state_update(
         index: Numeric,
-        state_: curvature_blocks.Full.State
-    ) -> curvature_blocks.Full.State:
+        state_: BlockDiagonalCurvature.State
+    ) -> BlockDiagonalCurvature.State:
 
       is_first = index == 0
       args = list(func_args)
@@ -1704,8 +1658,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       args[self._batch_index] = jax.tree_util.tree_map(
           lambda x: x[index][None], args[self._batch_index])
 
-      return BlockDiagonalCurvature.update_curvature_matrix_estimate(
-          self,
+      return super_.update_curvature_matrix_estimate(
           state=state_,
           ema_old=is_first * ema_old + (1 - is_first) * 1.0,
           ema_new=ema_new / batch_size,
@@ -1717,22 +1670,3 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
 
     return jax.lax.fori_loop(0, batch_size, single_state_update, state)
 
-  def update_cache(
-      self,
-      state: BlockDiagonalCurvature.State,
-      identity_weight: Numeric,
-      exact_powers: Optional[curvature_blocks.ScalarOrSequence],
-      approx_powers: Optional[curvature_blocks.ScalarOrSequence],
-      eigenvalues: bool,
-      pmap_axis_name: Optional[str],
-  ) -> curvature_blocks.Full.State:
-
-    block_state = self.blocks[0].update_cache(
-        state=state.blocks_states[0],
-        identity_weight=identity_weight,
-        exact_powers=exact_powers,
-        approx_powers=approx_powers,
-        eigenvalues=eigenvalues,
-    )
-
-    return BlockDiagonalCurvature.State(blocks_states=(block_state,))
