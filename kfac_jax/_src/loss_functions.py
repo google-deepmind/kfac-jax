@@ -1197,9 +1197,9 @@ def register_normal_predictive_distribution(
 
   NOTE: this function assumes you are *not* averaging over non-batch dimensions
   when computing the loss. i.e. it assumes a loss of the form
-  ``mean(sum(target - prediction), axis=range(1,target.ndims), axis=0)``
+  ``mean(sum((target - prediction)**2, axis=range(1,target.ndims)), axis=0)``
   and not
-  ``mean(target - prediction)``.
+  ``mean((target - prediction)**2)``.
   If your loss is of the latter form you can compensate for it by passing the
   appropriate value to ``weight``.
 
@@ -1211,17 +1211,17 @@ def register_normal_predictive_distribution(
     targets: (OPTIONAL) The targets for the loss function. Only required if
       using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
-    variance: float. The variance of the distribution. Note that the default
-      value of 0.5 corresponds to a standard squared error loss weight *
-      ||target - prediction||^2. If you want your squared error loss to be of
-      the form ``0.5*coeff*||target - prediction||^2`` you should use
-      variance=1.0.
-      (Default: 0.5)
-    weight: A scalar coefficient to multiply the log prob loss associated with
-      this distribution. The Fisher will be multiplied by the corresponding
-      factor. In general this is NOT equivalent to changing the temperature of
-      the distribution, but in the ase of normal distributions it may be.
-      (Default: 1.0)
+    variance: The variance of the distribution. Must be a constant scalar,
+      independent of the network's parameters. Note that the default value of
+      0.5 corresponds to a standard squared error loss
+      ``weight * ||target - prediction||^2``. If you want your squared error
+      loss to be of the form ``0.5*coeff*||target - prediction||^2`` you should
+      use variance=1.0. (Default: 0.5)
+    weight: A constant scalar coefficient that the log prob loss associated with
+      this distribution is multiplied by. In general this is NOT equivalent to
+      changing the temperature of the distribution, but in the case of normal
+      distributions it may be. Note that this must be constant and independent
+      of the network's parameters. (Default: 1.0)
   """
   if targets is None:
     args = [mean, variance, weight]
@@ -1240,15 +1240,18 @@ def register_squared_error_loss(
 ) -> Array:
   """Registers a squared error loss function.
 
-  This assumes the squared error loss of the form ``||target - prediction||^2``,
+  This assumes a squared error loss of the form
+
+  ``weight * ||target - prediction||^2``,
+
   averaged across the mini-batch. If your loss uses a coefficient of 0.5
   you need to set the "weight" argument to reflect this.
 
   NOTE: this function assumes you are *not* averaging over non-batch dimensions
   when computing the loss. i.e. it assumes a loss of the form
-  ``mean(sum(target - prediction), axis=range(1,target.ndims), axis=0)``
+  ``mean(sum((target - prediction)**2, axis=range(1, target.ndims)), axis=0)``
   and not
-  ``mean(target - prediction)``
+  ``mean((target - prediction)**2)``
   If your loss is of the latter form you can compensate for it by passing the
   appropriate value to ``weight``.
 
@@ -1266,8 +1269,9 @@ def register_squared_error_loss(
     targets: (OPTIONAL) The targets for the loss function. Only required if
       using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
-    weight: A float coefficient to multiply the loss function by.
-      (Default: 1.0)
+    weight: The constant scalar coefficient which this loss is multiplied by.
+      Note that this must be constant and independent of the network's
+      parameters. (Default: 1.0)
   """
   register_normal_predictive_distribution(
       prediction, targets, variance=0.5, weight=weight)  # pytype: disable=bad-return-type  # numpy-scalars
@@ -1280,7 +1284,22 @@ def register_multi_bernoulli_predictive_distribution(
 ):
   """Registers a multi-Bernoulli predictive distribution.
 
-  Note that this is distinct from
+  This corresponds to a sigmoid cross-entropy loss of the form
+
+  ``weight * sigmoid_cross_entropy(logits, targets)``,
+
+  averaged across the mini-batch.
+
+  NOTE: this function assumes you are *not* averaging over non-batch dimensions
+  when computing the loss. i.e. it assumes a loss of the form
+  ``mean(sum(sigmoid_cross_entropy(logits, targets),
+             axis=range(1, target.ndims)), axis=0)``
+  and not
+  ``mean(sigmoid_cross_entropy(logits, targets))``
+  If your loss is of the latter form you can compensate for it by passing the
+  appropriate value to ``weight``.
+
+  NOTE: this is distinct from
   :func:`~register_categorical_predictive_distribution` and should not be
   confused with it.
 
@@ -1292,11 +1311,11 @@ def register_multi_bernoulli_predictive_distribution(
     targets: (OPTIONAL) The targets for the loss function.  Only required if
       using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
-    weight: (OPTIONAL) a scalar. A coefficient to multiply the log prob loss
-      associated with this distribution. The Fisher will be multiplied by the
-      corresponding factor. This is NOT equivalent to changing the temperature
-      of the distribution since we don't renormalize the log prob in the
-      objective function. (Default: 1.0)
+    weight: The constant scalar coefficient that the log prob loss associated
+      with this distribution is multiplied by. This is NOT equivalent to
+      changing the temperature of the distribution since we don't renormalize
+      the log prob in the objective function. Note that this must be constant
+      and independent of the network's parameters. (Default: 1.0)
   """
   if targets is None:
     args = [logits, weight]
@@ -1316,8 +1335,23 @@ def register_sigmoid_cross_entropy_loss(
 ):
   """Registers a sigmoid cross-entropy loss function.
 
-  Note that this is distinct from :func:`~register_softmax_cross_entropy_loss`
-  and should not be confused with it. It is similar to
+  This assumes a sigmoid cross-entropy loss of the form
+
+  ``weight * sigmoid_cross_entropy(logits, targets)``,
+
+  averaged across the mini-batch.
+
+  NOTE: this function assumes you are *not* averaging over non-batch dimensions
+  when computing the loss. i.e. it assumes a loss of the form
+  ``mean(sum(sigmoid_cross_entropy(logits, targets),
+             axis=range(1, target.ndims)), axis=0)``
+  and not
+  ``mean(sigmoid_cross_entropy(logits, targets))``
+  If your loss is of the latter form you can compensate for it by passing the
+  appropriate value to ``weight``.
+
+  NOTE: this is distinct from :func:`~register_softmax_cross_entropy_loss` and
+  should not be confused with it. It is similar to
   :func:`~register_multi_bernoulli_predictive_distribution` but without the
   explicit probabilistic interpretation. It behaves identically for now.
 
@@ -1330,8 +1364,9 @@ def register_sigmoid_cross_entropy_loss(
       shape as ``logits``. Only required if using
       ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
-    weight: (OPTIONAL) a scalar. A coefficient to multiply the loss function by.
-      (Default: 1.0)
+    weight: The constant scalar coefficient which this loss is multiplied by.
+      Note that this must be constant and independent of the network's
+      parameters. (Default: 1.0)
   """
   register_multi_bernoulli_predictive_distribution(
       logits, targets, weight=weight)
@@ -1345,7 +1380,13 @@ def register_categorical_predictive_distribution(
 ):
   """Registers a categorical predictive distribution.
 
-  Note that this is distinct from
+  This corresponds to a softmax cross-entropy loss of the form
+
+  ``weight * softmax_cross_entropy(logits, targets)``,
+
+  averaged across the mini-batch.
+
+  NOTE: this is distinct from
   :func:`~register_multi_bernoulli_predictive_distribution` and should not be
   confused with it.
 
@@ -1364,11 +1405,11 @@ def register_categorical_predictive_distribution(
       distribution. Should be 0/1-valued and of shape ``(logits.shape[0],)``.
       Log probablities corresponding to mask values of False will be treated
       as constant and equal to 0. (Default: None)
-    weight: (OPTIONAL) a scalar. A coefficient to multiply the
-      log prob loss associated with this distribution. The Fisher will be
-      multiplied by the corresponding factor. This is NOT equivalent to
+    weight: The constant scalar coefficient that the log prob loss associated
+      with this distribution is multiplied by. This is NOT equivalent to
       changing the temperature of the distribution since we don't renormalize
-      the log prob in the objective function. (Default: 1.0)
+      the log prob in the objective function. Note that this must be constant
+      and independent of the network's parameters. (Default: 1.0)
   """
   if targets is not None:
 
@@ -1411,8 +1452,14 @@ def register_softmax_cross_entropy_loss(
 ) -> Array:
   """Registers a softmax cross-entropy loss function.
 
-  Note that this is distinct from :func:`~register_sigmoid_cross_entropy_loss`
-  and should not be confused with it. It is similar to
+  This assumes a softmax cross-entropy loss of the form
+
+  ``weight * softmax_cross_entropy(logits, targets)``,
+
+  averaged across the mini-batch.
+
+  NOTE:this is distinct from :func:`~register_sigmoid_cross_entropy_loss` and
+  should not be confused with it. It is similar to
   :func:`~register_categorical_predictive_distribution` but without the explicit
   probabilistic interpretation. It behaves identically for now.
 
@@ -1429,8 +1476,9 @@ def register_softmax_cross_entropy_loss(
     mask: (OPTIONAL) Mask to apply to losses. Should be 0/1-valued and of shape
       ``(logits.shape[0],)``. Losses corresponding to mask values of False will
       be treated as constant and equal to 0. (Default: None)
-    weight: (OPTIONAL) a scalar. A coefficient to multiply the loss function by.
-      (Default: 1.0)
+    weight: The constant scalar coefficient which this loss is multiplied by.
+      Note that this must be constant and independent of the network's
+      parameters. (Default: 1.0)
   """
   register_categorical_predictive_distribution(logits,
                                                targets=targets,
