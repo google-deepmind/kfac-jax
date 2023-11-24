@@ -22,6 +22,7 @@ import jax
 import jax.numpy as jnp
 from kfac_jax._src.utils import types
 
+T = types.T
 Array = types.Array
 Numeric = types.Numeric
 ArrayTree = types.ArrayTree
@@ -139,8 +140,8 @@ def register_state_class(class_type: Type[Any]) -> Type[Any]:
   """Extended dataclass decorator, which also registers the class as a PyTree.
 
   The function is equivalent to `dataclasses.dataclass`, but additionally
-  registers the `class_type` as a PyTree. This is done done by setting the
-  PyTree nodes to all of the `dataclasses.fields` of the class.
+  registers the `class_type` as a PyTree. This is done by setting the PyTree
+  nodes of all `dataclasses.fields` of the class.
 
   Args:
     class_type: The class type to transform.
@@ -273,7 +274,7 @@ class Finalizable(abc.ABC):
       raise AttributeError("Can't set attributes after finalization.")
 
 
-def auto_scope_method(method):
+def auto_scope_method(method: Callable[..., T]) -> Callable[..., T]:
   """Wraps the method call to have automatically generated Jax name scope."""
   @functools.wraps(method)
   def wrapped(instance, *args, **kwargs):
@@ -287,7 +288,7 @@ def auto_scope_method(method):
   return wrapped
 
 
-def auto_scope_function(func):
+def auto_scope_function(func: Callable[..., T]) -> Callable[..., T]:
   """Wraps the function call to have automatically generated Jax name scope."""
   @functools.wraps(func)
   def wrapped(*args, **kwargs):
@@ -308,9 +309,10 @@ def replace_char(original: str, new_str: str, index: int) -> str:
 
 
 def call_func_with_conditional_kwargs(
-    func: Callable[..., Any],
+    func: Callable[..., T],
     *func_args: Any,
-    **kwargs: Any) -> Any:
+    **kwargs: Any,
+) -> T:
 
   sig = inspect.signature(func)
   func_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}

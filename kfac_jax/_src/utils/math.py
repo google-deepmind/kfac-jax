@@ -152,6 +152,10 @@ def weighted_sum_of_objects(
   return accumulator
 
 
+def sum_objects(objects: Sequence[TArrayTree]) -> TArrayTree:
+  return weighted_sum_of_objects(objects, [1] * len(objects))
+
+
 def _inner_product_float64(obj1: ArrayTree, obj2: ArrayTree) -> Array:
   """Computes inner product explicitly in float64 precision."""
 
@@ -371,6 +375,19 @@ def psd_solve(matrix: Array, vector: Array) -> Array:
 
   else:
     return linalg.solve(matrix, vector)
+
+
+def psd_solve_without_last_idx(a: Array, b: Array) -> Array:
+  sub_a = a[..., :-1, :-1]
+  sub_b = b[..., :-1]
+  sub_x = psd_solve(sub_a, sub_b)
+  return jnp.concatenate([sub_x, jnp.zeros_like(sub_x[..., :1])], axis=-1)
+
+
+def psd_solve_maybe_zero_last_idx(a: Array, b: Array) -> Array:
+  # Check the last column and row are zero.
+  check = jnp.logical_and(jnp.all(a[..., -1] == 0), jnp.all(a[..., -1, :] == 0))
+  return jax.lax.cond(check, psd_solve_without_last_idx, psd_solve, a, b)
 
 
 def psd_matrix_norm(

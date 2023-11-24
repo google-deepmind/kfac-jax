@@ -288,6 +288,65 @@ class ImplicitExactCurvature:
     return utils.scalar_div(vector, batch_size)
 
   @utils.auto_scope_method
+  def multiply_jacobian(
+      self,
+      func_args: utils.FuncArgs,
+      parameter_structured_vector: utils.Params,
+      return_loss_objects: bool = False,
+  ) -> Union[
+      Sequence[Sequence[Array]],
+      Tuple[Sequence[Sequence[Array]], Tuple[loss_functions.LossFunction, ...]]
+  ]:
+    """Multiplies a vector by the model's Jacobian.
+
+    Args:
+      func_args: The inputs to the model function.
+      parameter_structured_vector: A vector in the same structure as the
+        parameters of the model.
+      return_loss_objects: If set to `True` will return as an additional output
+        the loss objects evaluated at the provided function arguments.
+
+    Returns:
+      The product ``J v``, where ``J`` is the model's Jacobian and ``v`` is
+      given by ``parameter_structured_vector``.
+    """
+    losses, jacobian_vectors = self._loss_tags_jvp(
+        func_args, parameter_structured_vector)
+    if return_loss_objects:
+      return jacobian_vectors, losses
+    return jacobian_vectors
+
+  @utils.auto_scope_method
+  def multiply_jacobian_transpose(
+      self,
+      func_args: utils.FuncArgs,
+      loss_input_vectors: Sequence[Sequence[Array]],
+      return_loss_objects: bool = False,
+  ) -> Union[
+      utils.Params,
+      Tuple[utils.Params, Tuple[loss_functions.LossFunction, ...]]
+  ]:
+    """Multiplies a vector by the model's transposed Jacobian.
+
+    Args:
+      func_args: The inputs to the model function.
+      loss_input_vectors: A sequence over losses of sequences of arrays that
+        are the size of the loss's inputs. This represents the vector to be
+        multiplied.
+      return_loss_objects: If set to `True` will return as an additional output
+        the loss objects evaluated at the provided function arguments.
+
+    Returns:
+      The product ``J^T v``, where ``J`` is the model's Jacobian and ``v`` is
+      given by ``loss_inner_vectors``.
+    """
+    losses, vjp = self._loss_tags_vjp(func_args)
+    vector = vjp(loss_input_vectors)
+    if return_loss_objects:
+      return vector, losses
+    return vector
+
+  @utils.auto_scope_method
   def multiply_fisher(
       self,
       func_args: utils.FuncArgs,
@@ -305,18 +364,19 @@ class ImplicitExactCurvature:
       The product ``Fv``.
     """
     losses: Sequence[loss_functions.NegativeLogProbLoss]
-    losses, jacobian_vectors = self._loss_tags_jvp(
-        func_args, parameter_structured_vector)
+    jacobian_vectors, losses = self.multiply_jacobian(
+        func_args, parameter_structured_vector, True)
+
     if any(not isinstance(l, loss_functions.NegativeLogProbLoss)
            for l in losses):
       raise ValueError("To use `multiply_fisher` all registered losses must "
                        "be a subclass of `NegativeLogProbLoss`.")
-    _, vjp = self._loss_tags_vjp(func_args)
-    self._assert_losses_same(losses, _)
 
     loss_fisher_jacobian_vectors = self._multiply_loss_fisher(
         losses, jacobian_vectors)
-    vector = vjp(loss_fisher_jacobian_vectors)
+
+    vector = self.multiply_jacobian_transpose(
+        func_args, loss_fisher_jacobian_vectors)
     batch_size = self.batch_size(func_args)
 
     assert utils.abstract_objects_equal(parameter_structured_vector, vector)
@@ -340,14 +400,14 @@ class ImplicitExactCurvature:
     Returns:
       The product ``Gv``.
     """
-    losses, jacobian_vectors = self._loss_tags_jvp(
-        func_args, parameter_structured_vector)
-    _, vjp = self._loss_tags_vjp(func_args)
-    self._assert_losses_same(losses, _)
+    jacobian_vectors, losses = self.multiply_jacobian(
+        func_args, parameter_structured_vector, True)
 
     loss_ggn_jacobian_vectors = self._multiply_loss_ggn(
         losses, jacobian_vectors)
-    vector = vjp(loss_ggn_jacobian_vectors)
+
+    vector = self.multiply_jacobian_transpose(
+        func_args, loss_ggn_jacobian_vectors)
     batch_size = self.batch_size(func_args)
 
     assert utils.abstract_objects_equal(parameter_structured_vector, vector)
@@ -371,16 +431,18 @@ class ImplicitExactCurvature:
     Returns:
       The product ``B^T v``, where ``F = BB^T``.
     """
-    losses: Sequence[loss_functions.NegativeLogProbLoss]
-    losses, jacobian_vectors = self._loss_tags_jvp(
-        func_args, parameter_structured_vector)
+    jacobian_vectors, losses = self.multiply_jacobian(
+        func_args, parameter_structured_vector, True)
+
     if any(not isinstance(l, loss_functions.NegativeLogProbLoss)
            for l in losses):
       raise ValueError("To use `multiply_fisher` all registered losses must "
                        "be a subclass of `NegativeLogProbLoss`.")
+
     loss_vectors = self._multiply_loss_fisher_factor_transpose(
         losses, jacobian_vectors)
     batch_size = self.batch_size(func_args)
+
     return utils.scalar_div(loss_vectors, jnp.sqrt(batch_size))
 
   @utils.auto_scope_method
@@ -400,10 +462,12 @@ class ImplicitExactCurvature:
     Returns:
       The product ``B^T v``, where ``G = BB^T``.
     """
-    losses, jacobian_vectors = self._loss_tags_jvp(
-        func_args, parameter_structured_vector)
+    jacobian_vectors, losses = self.multiply_jacobian(
+        func_args, parameter_structured_vector, True)
+
     vectors = self._multiply_loss_ggn_factor_transpose(losses, jacobian_vectors)
     batch_size = self.batch_size(func_args)
+
     return utils.scalar_div(vectors, jnp.sqrt(batch_size))
 
   @utils.auto_scope_method
@@ -466,27 +530,6 @@ class ImplicitExactCurvature:
     batch_size = self.batch_size(func_args)
 
     return utils.scalar_div(vectors, jnp.sqrt(batch_size))
-
-  @utils.auto_scope_method
-  def multiply_jacobian_transpose(
-      self,
-      func_args: utils.FuncArgs,
-      loss_input_vectors: Sequence[Sequence[Array]],
-  ) -> utils.Params:
-    """Multiplies a vector by the model's transposed Jacobian.
-
-    Args:
-      func_args: The inputs to the model function.
-      loss_input_vectors: A sequence over losses of sequences of arrays that
-        are the size of the loss's inputs. This represents the vector to be
-        multiplied.
-
-    Returns:
-      The product ``J^T v``, where ``J`` is the model's Jacobian and ``v`` is
-      is given by ``loss_inner_vectors``.
-    """
-    _, vjp = self._loss_tags_vjp(func_args)
-    return vjp(loss_input_vectors)
 
   def get_loss_inner_vector_shapes_and_batch_size(
       self,
@@ -1669,4 +1712,3 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       )
 
     return jax.lax.fori_loop(0, batch_size, single_state_update, state)
-

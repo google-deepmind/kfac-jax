@@ -181,7 +181,7 @@ class Optimizer(utils.WithStagedMethods):
         model state and auxiliary information (usually statistics to log). Note
         that it should *not* be jitted/pmapped or otherwise compiled by JAX, as
         this can lead to errors. (Compilation is done internally by the
-        optimizer.) The interface of this function should be should be:
+        optimizer.) The interface of this function should be:
         ``out_args, loss_grads = value_and_grad_func(*in_args)``. Here,
         ``in_args`` is ``(params, func_state, rng, batch)``, with ``rng``
         omitted if ``value_func_has_rng`` is ``False``, and with ``func_state``
@@ -283,9 +283,9 @@ class Optimizer(utils.WithStagedMethods):
         parameters. (Default: ``10``)
       estimation_mode: String. The type of estimator to use for the curvature
         matrix. See the documentation for :class:`~CurvatureEstimator` for a
-        detailed description of the possible options. If None will use default
-        estimation_mode mode of the used CurvatureEstimator subclass, which is
-        typically "fisher_gradients". (Default: ``None``)
+        detailed description of the possible options. If ``None`` will use
+        default estimation_mode mode of the used CurvatureEstimator subclass,
+        which is typically "fisher_gradients". (Default: ``None``)
       custom_estimator_ctor: Optional constructor for subclass of
         :class:`~BlockDiagonalCurvature`. If specified, the optimizer
         will use this conastructor instead of the default
@@ -328,7 +328,7 @@ class Optimizer(utils.WithStagedMethods):
         ``kfac.utils.default_batch_size_extractor``)
       pmap_axis_name: String. The name of the pmap axis to use when
         ``multi_device`` is set to True. (Default: ``kfac_axis``)
-      forbid_setting_attributes_after_finalize: Boolean. By default after the
+      forbid_setting_attributes_after_finalize: Boolean. By default, after the
         object is finalized, you can not set any of its properties. This is done
         in order to protect the user from making changes to the object
         attributes that would not be picked up by various internal methods after
@@ -349,11 +349,11 @@ class Optimizer(utils.WithStagedMethods):
       distributed_precon_apply: Boolean. Whether to distribute the application
         of the preconditioner across the different devices in a layer-wise
         fashion. If False, each device will (redundantly) perform the required
-        operations for all of the layers. (Default: True)
+        operations for all the layers. (Default: True)
       distributed_inverses: Boolean. Whether to distribute the inverse
         computations (required to compute the preconditioner) across the
         different devices in a layer-wise fashion. If False, each device will
-        (redundantly) perform the required computations for all of the layers.
+        (redundantly) perform the required computations for all the layers.
         (Default: True)
       num_estimator_samples: Number of samples (per case) to use when computing
         stochastic curvature matrix estimates. This option is only used when
@@ -364,7 +364,7 @@ class Optimizer(utils.WithStagedMethods):
       norm_to_scale_identity_weight_per_block: The name of a norm to use to
         compute extra per-block scaling for the damping. See psd_matrix_norm()
         in utils/math.py for the definition of these. Note that this will not
-        effect the exact quadratic model that is used as part of the "adaptive"
+        affect the exact quadratic model that is used as part of the "adaptive"
         learning rate, momentum, and damping methods. (Default: None)
     """
 
@@ -1271,9 +1271,6 @@ class Optimizer(utils.WithStagedMethods):
       func_args: Optional[FuncArgsVariants] = None,
   ) -> Tuple[Array, Array, Array]:
     """Computes the components of the exact quadratic model."""
-    if func_args is None:
-      raise ValueError("When you have not provided `c_factor_v` you must "
-                       "provide `func_args`.")
     if self.estimator.default_mat_type == "fisher":
       c_factor_v = tuple(self._implicit.multiply_fisher_factor_transpose
                          (func_args, vi) for vi in vectors)
@@ -1399,20 +1396,13 @@ class Optimizer(utils.WithStagedMethods):
       if len(fixed_coefficients) == 1:
         # This special case arises at the first iteration, because all
         # velocities are zeros.
-
         special_case = jnp.logical_and(A_damped[0, 0] == 0, b[0] == 0)
         w = - lax.cond(special_case, lambda: b, lambda: b / A_damped[0])
 
       elif len(fixed_coefficients) == 2:
         # This special case arises at the first iteration, because all
         # velocities are zeros.
-
-        to_check = jnp.asarray([A_damped[0, 1], A_damped[1, 0],
-                                A_damped[1, 1], b[1]])
-
-        w = - lax.cond(jnp.all(to_check == 0),
-                       lambda: jnp.stack([b[0] / A_damped[0, 0], b[1]]),
-                       lambda: utils.psd_solve(A_damped, b))
+        w = - utils.psd_solve_maybe_zero_last_idx(A_damped, b)
       else:
         raise NotImplementedError()
 

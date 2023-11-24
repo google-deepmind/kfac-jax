@@ -56,6 +56,7 @@ def sigmoid_cross_entropy(
     registration_module: types.ModuleType = kfac_jax,
 ) -> Array:
   """Sigmoid cross-entropy loss."""
+  extra_registration_kwargs = extra_registration_kwargs or {}
 
   if register_loss:
     registration_module.register_sigmoid_cross_entropy_loss(
@@ -83,9 +84,7 @@ def softmax_cross_entropy(
     registration_module: types.ModuleType = kfac_jax,
 ) -> Array:
   """Softmax cross entropy loss."""
-
-  if extra_registration_kwargs is None:
-    extra_registration_kwargs = {}
+  extra_registration_kwargs = extra_registration_kwargs or {}
 
   if register_loss:
 
@@ -150,9 +149,7 @@ def squared_error(
     registration_module: types.ModuleType = kfac_jax,
 ) -> Array:
   """Squared error loss."""
-
-  if extra_registration_kwargs is None:
-    extra_registration_kwargs = {}
+  extra_registration_kwargs = extra_registration_kwargs or {}
 
   if prediction.shape != targets.shape:
     raise ValueError("prediction and targets should have the same shape.")
