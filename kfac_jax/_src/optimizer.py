@@ -864,7 +864,7 @@ class Optimizer(utils.WithStagedMethods):
       learning_rate: Optional[Array],
       momentum: Optional[Array],
       damping: Array,
-      func_args: Optional[FuncArgsVariants] = None,
+      func_args: FuncArgsVariants,
   ) -> Tuple[Tuple[Optional[Array], Optional[Array]], Array]:
     """The correct update coefficients and corresponding quadratic change."""
 
@@ -1268,7 +1268,7 @@ class Optimizer(utils.WithStagedMethods):
       self,
       vectors: Sequence[Params],
       grads: Params,
-      func_args: Optional[FuncArgsVariants] = None,
+      func_args: FuncArgsVariants,
   ) -> Tuple[Array, Array, Array]:
     """Computes the components of the exact quadratic model."""
     if self.estimator.default_mat_type == "fisher":

@@ -13,7 +13,7 @@
 # limitations under the License.
 """"K-FAC loss functions objects, tags and registration functions."""
 import abc
-from typing import Optional, Sequence, Tuple
+from typing import Dict, Optional, Sequence, Tuple, Type
 
 import distrax
 import jax
@@ -28,6 +28,7 @@ Numeric = utils.Numeric
 PRNGKey = utils.PRNGKey
 Shape = utils.Shape
 DType = utils.DType
+LossFunctionInputs = Tuple[Array, ...]
 
 
 class LossFunction(utils.Finalizable):
@@ -45,7 +46,7 @@ class LossFunction(utils.Finalizable):
     Args:
       weight: The relative weight attributed to the loss.
     """
-    if not isinstance(weight, (int, float)):
+    if not isinstance(weight, (int, float)) and type(weight) is not object:  # pylint: disable=unidiomatic-typecheck
       if not isinstance(weight, Array) or weight.size > 1:
         raise ValueError("`weight` must be a scalar value.")
     super().__init__()
@@ -86,12 +87,29 @@ class LossFunction(utils.Finalizable):
     """Number of parameter independent arrays of the loss."""
     return len(self.parameter_independants)
 
-  @abc.abstractmethod
   def copy_with_different_inputs(
       self,
       parameter_dependants: Sequence[Array],
   ) -> "LossFunction":
     """Creates a copy of the loss function object, but with different inputs."""
+    array_args, aux = self.tree_flatten()
+    array_args = (tuple(parameter_dependants) +
+                  tuple(array_args[self.num_parameter_dependants:]))
+    return self.tree_unflatten(aux, array_args)
+
+  @abc.abstractmethod
+  def tree_flatten(
+      self,
+  ) -> Tuple[Tuple[Optional[Array], ...], Dict[str, utils.Numeric]]:
+    pass
+
+  @classmethod
+  def tree_unflatten(
+      cls: Type["LossFunction"],
+      aux_data: Dict[str, utils.Numeric],
+      children: Tuple[Optional[Array], ...],
+  ) -> "LossFunction":
+    return cls(*children, **aux_data)  # pytype: disable=not-instantiable
 
   def evaluate(
       self,
@@ -529,6 +547,7 @@ class DistributionNegativeLogProbLoss(NegativeLogProbLoss):
         lambda: self.sample(rng=jax.random.PRNGKey(0))).shape
 
 
+@jax.tree_util.register_pytree_node_class
 class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
                                     NaturalParamsNegativeLogProbLoss):
   """Loss log prob loss for a normal distribution parameterized by a mean vector.
@@ -557,7 +576,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       variance: The scalar variance of the normal distribution.
       weight: The relative weight of the loss.
     """
-    if not isinstance(variance, (int, float)):
+    if not isinstance(variance, (int, float)) and type(variance) is not object:  # pylint: disable=unidiomatic-typecheck
       if not isinstance(variance, Array) or variance.size > 1:
         raise ValueError("`variance` must be either a python scalar or a "
                          "scalar array.")
@@ -594,30 +613,6 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def params(self) -> Tuple[Array]:
     return (self.mean,)
 
-  def copy_with_different_inputs(
-      self,
-      parameter_dependants: Sequence[Array],
-  ) -> "NormalMeanNegativeLogProbLoss":
-    """Creates the same :class:`~LossFunction` object, but with different inputs.
-
-    Args:
-      parameter_dependants: The inputs to use to the constructor of a class
-        instance. This must be a sequence of length 1.
-
-    Returns:
-      An instance of :class:`~NormalMeanNegativeLogPorLoss` with the provided
-        inputs.
-    Raises:
-      A ValueError if the ``inputs`` is a sequence of different length than 1.
-    """
-    [mean] = parameter_dependants
-    return NormalMeanNegativeLogProbLoss(
-        mean=mean,
-        targets=self._targets,
-        variance=self._variance,
-        weight=self._weight,
-    )
-
   def multiply_fisher_unweighted(
       self,
       vector: Sequence[Array]
@@ -646,7 +641,14 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     output_slice = ones_slice / jnp.sqrt(self._variance)
     return (insert_slice_in_zeros(output_slice, 1, self._mean.shape[1], index),)
 
+  def tree_flatten(
+      self,
+  ) -> Tuple[Tuple[Array, Optional[Array]], Dict[str, utils.Numeric]]:
+    aux = dict(variance=self._variance, weight=self._weight)
+    return (self._mean, self._targets), aux
 
+
+@jax.tree_util.register_pytree_node_class
 class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
   """Negative log prob loss for a normal distribution with mean and variance.
 
@@ -708,26 +710,6 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
   @property
   def params(self) -> Tuple[Array, Array]:
     return self._mean, self._variance
-
-  def copy_with_different_inputs(
-      self,
-      parameter_dependants: Sequence[Array]
-  ) -> "NormalMeanVarianceNegativeLogProbLoss":
-    """Creates the same :class:`~LossFunction` object, but with different inputs.
-
-    Args:
-      parameter_dependants: The inputs to use to the constructor of a class
-        instance. This must be a sequence of length 2.
-
-    Returns:
-      An instance of :class:`~NormalMeanVarianceNegativeLogProbLoss` with the
-      provided inputs.
-    Raises:
-      A ValueError if the ``inputs`` is a sequence of different length than 2.
-    """
-    [mean, variance] = parameter_dependants
-    return NormalMeanVarianceNegativeLogProbLoss(
-        mean, variance, targets=self._targets, weight=self._weight)
 
   @property
   def _fisher_mean(self) -> Array:
@@ -827,7 +809,14 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
   def ggn_factor_inner_shape(self) -> Shape:
     raise NotImplementedError()
 
+  def tree_flatten(
+      self,
+  ) -> Tuple[Tuple[Array, Array, Optional[Array]], Dict[str, utils.Numeric]]:
+    aux = dict(weight=self._weight)
+    return (self._mean, self._variance, self._targets), aux
 
+
+@jax.tree_util.register_pytree_node_class
 class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
                                         NaturalParamsNegativeLogProbLoss):
   """Negative log prob loss for multiple Bernoulli distributions parametrized by logits.
@@ -881,14 +870,6 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def params(self) -> Tuple[Array]:
     return (self._logits,)
 
-  def copy_with_different_inputs(
-      self,
-      parameter_dependants: Sequence[Array]
-  ) -> "MultiBernoulliNegativeLogProbLoss":
-    [logits] = parameter_dependants
-    return MultiBernoulliNegativeLogProbLoss(
-        logits, targets=self._targets, weight=self._weight)
-
   def multiply_fisher_unweighted(
       self,
       vector: Sequence[Array]
@@ -918,7 +899,14 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return (insert_slice_in_zeros(
         output_slice, 1, self._logits.shape[1], index),)
 
+  def tree_flatten(
+      self,
+  ) -> Tuple[Tuple[Array, Optional[Array]], Dict[str, utils.Numeric]]:
+    aux = dict(weight=self._weight)
+    return (self._logits, self._targets), aux
 
+
+@jax.tree_util.register_pytree_node_class
 class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
                                            NaturalParamsNegativeLogProbLoss):
   """Negative log prob loss for a categorical distribution parameterized by logits.
@@ -954,7 +942,8 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       weight: The relative weight of the loss.
     """
 
-    if mask is not None and mask.shape != logits.shape[:1]:
+    if (mask is not None and type(mask) is not object and  # pylint: disable=unidiomatic-typecheck
+        mask.shape != logits.shape[:1]):
       raise ValueError("If provided, mask.shape must be equal to "
                        "logits.shape[:1].")
 
@@ -974,13 +963,13 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   @property
   def parameter_independants(self) -> Tuple[Numeric, ...]:
-    arrays = (self.weight,)
+    arrays: Tuple[Numeric, ...] = (self.weight,)  # pytype: disable=annotation-type-mismatch
 
     if self.mask is not None:
-      arrays = (self.mask,) + arrays
+      arrays: Tuple[Numeric, ...] = (self.mask,) + arrays  # pytype: disable=annotation-type-mismatch
 
     if self.targets is not None:
-      arrays = (self.targets,) + arrays
+      arrays: Tuple[Numeric, ...] = (self.targets,) + arrays  # pytype: disable=annotation-type-mismatch
 
     return arrays
 
@@ -1023,16 +1012,6 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   @property
   def fisher_factor_inner_shape(self) -> Shape:
     return self._logits.shape
-
-  def copy_with_different_inputs(
-      self,
-      parameter_dependants: Sequence[Array]
-  ) -> "CategoricalLogitsNegativeLogProbLoss":
-
-    [logits] = parameter_dependants
-
-    return CategoricalLogitsNegativeLogProbLoss(
-        logits, targets=self.targets, mask=self.mask, weight=self.weight)
 
   def multiply_fisher_unweighted(
       self,
@@ -1083,7 +1062,17 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
                                          index)
     return (padded_slice - probs * sqrt_probs_slice,)
 
+  def tree_flatten(
+      self,
+  ) -> Tuple[
+      Tuple[Array, Optional[Array], Optional[Array]],
+      Dict[str, utils.Numeric]
+  ]:
+    aux = dict(weight=self._weight)
+    return (self._logits, self._targets, self._mask), aux
 
+
+@jax.tree_util.register_pytree_node_class
 class OneHotCategoricalLogitsNegativeLogProbLoss(
     CategoricalLogitsNegativeLogProbLoss):
   """Neg log prob loss for a categorical distribution with onehot targets.
@@ -1095,14 +1084,6 @@ class OneHotCategoricalLogitsNegativeLogProbLoss(
   @property
   def dist(self) -> distrax.OneHotCategorical:
     return distrax.OneHotCategorical(logits=self._logits, dtype=jnp.int32)
-
-  def copy_with_different_inputs(
-      self,
-      parameter_dependants: Sequence[Array]
-  ) -> "OneHotCategoricalLogitsNegativeLogProbLoss":
-    [logits] = parameter_dependants
-    return OneHotCategoricalLogitsNegativeLogProbLoss(
-        logits, targets=self.targets, mask=self.mask, weight=self.weight)
 
 
 def insert_slice_in_zeros(

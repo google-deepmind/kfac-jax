@@ -67,6 +67,12 @@ PRNGKey = utils.PRNGKey
 Numeric = utils.Numeric
 Scalar = utils.Scalar
 Shape = utils.Shape
+LossFunction = loss_functions.LossFunction
+LossFunctionsTuple = Tuple[loss_functions.LossFunction, ...]
+LossFunctionsSequence = Sequence[loss_functions.LossFunction]
+LossFunctionInputs = loss_functions.LossFunctionInputs
+LossFunctionInputsSequence = Sequence[loss_functions.LossFunctionInputs]
+LossFunctionInputsTuple = Tuple[loss_functions.LossFunctionInputs, ...]
 CurvatureBlockCtor = Callable[
     [tags.LayerTagEqn, str],
     curvature_blocks.CurvatureBlock
@@ -126,6 +132,10 @@ class ImplicitExactCurvature:
         arguments and returns the batch size for a single device.
         (Default: ``kfac.utils.default_batch_size_extractor``)
     """
+    self.comoute_losses = tracer.compute_all_losses(
+        func=func,
+        params_index=params_index
+    )
     self._loss_tags_vjp = tracer.loss_tags_vjp(
         func=func,
         params_index=params_index
@@ -148,8 +158,8 @@ class ImplicitExactCurvature:
   def _multiply_loss_fisher(
       cls,
       losses: Sequence[loss_functions.NegativeLogProbLoss],
-      loss_vectors: Sequence[Sequence[Array]]
-  ) -> Tuple[Tuple[Array, ...], ...]:
+      loss_vectors: LossFunctionInputsSequence,
+  ) -> LossFunctionInputsTuple:
     """Multiplies ``loss_vectors`` by the Fisher of the total loss."""
     assert len(losses) == len(loss_vectors)
     return tuple(loss.multiply_fisher(vec)
@@ -158,9 +168,9 @@ class ImplicitExactCurvature:
   @classmethod
   def _multiply_loss_ggn(
       cls,
-      losses: Sequence[loss_functions.LossFunction],
-      loss_vectors: Sequence[Sequence[Array]]
-  ) -> Tuple[Tuple[Array, ...], ...]:
+      losses: LossFunctionsSequence,
+      loss_vectors: LossFunctionInputsSequence,
+  ) -> LossFunctionInputsTuple:
     """Multiplies ``loss_vectors`` by the GGN of the total loss."""
     return tuple(loss.multiply_ggn(vec)
                  for loss, vec in zip(losses, loss_vectors))
@@ -170,7 +180,7 @@ class ImplicitExactCurvature:
       cls,
       losses: Sequence[loss_functions.NegativeLogProbLoss],
       loss_inner_vectors: Sequence[Array],
-  ) -> Tuple[Tuple[Array, ...], ...]:
+  ) -> LossFunctionInputsTuple:
     """Multiplies the vectors with the Fisher factors of each loss.
 
     Args:
@@ -191,7 +201,7 @@ class ImplicitExactCurvature:
       cls,
       losses: Sequence[loss_functions.LossFunction],
       loss_inner_vectors: Sequence[Array],
-  ) -> Tuple[Tuple[Array, ...], ...]:
+  ) -> LossFunctionInputsTuple:
     """Multiplies the vectors with the GGN factors of each loss.
 
     Args:
@@ -210,7 +220,7 @@ class ImplicitExactCurvature:
   def _multiply_loss_fisher_factor_transpose(
       cls,
       losses: Sequence[loss_functions.NegativeLogProbLoss],
-      loss_vectors: Sequence[Sequence[Array]]
+      loss_vectors: LossFunctionInputsSequence,
   ) -> Tuple[Array, ...]:
     """Multiplies the vectors with the transposed Fisher factors of each loss.
 
@@ -230,8 +240,8 @@ class ImplicitExactCurvature:
   @classmethod
   def _multiply_loss_ggn_factor_transpose(
       cls,
-      losses: Sequence[loss_functions.LossFunction],
-      loss_vectors: Sequence[Sequence[Array]]
+      losses: LossFunctionsSequence,
+      loss_vectors: LossFunctionInputsSequence,
   ) -> Tuple[Array, ...]:
     """Multiplies the vectors with the transposed GGN factors of each loss.
 
@@ -294,8 +304,8 @@ class ImplicitExactCurvature:
       parameter_structured_vector: utils.Params,
       return_loss_objects: bool = False,
   ) -> Union[
-      Sequence[Sequence[Array]],
-      Tuple[Sequence[Sequence[Array]], Tuple[loss_functions.LossFunction, ...]]
+      LossFunctionInputsTuple,
+      Tuple[LossFunctionInputsTuple, LossFunctionsTuple],
   ]:
     """Multiplies a vector by the model's Jacobian.
 
@@ -320,11 +330,11 @@ class ImplicitExactCurvature:
   def multiply_jacobian_transpose(
       self,
       func_args: utils.FuncArgs,
-      loss_input_vectors: Sequence[Sequence[Array]],
+      loss_input_vectors: LossFunctionInputsSequence,
       return_loss_objects: bool = False,
   ) -> Union[
       utils.Params,
-      Tuple[utils.Params, Tuple[loss_functions.LossFunction, ...]]
+      Tuple[utils.Params, LossFunctionsTuple]
   ]:
     """Multiplies a vector by the model's transposed Jacobian.
 
@@ -622,6 +632,9 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
     self.func = func
     self.params_index = params_index
     self.default_estimation_mode = default_estimation_mode
+    self.comoute_losses = tracer.compute_all_losses(
+        func=func, params_index=params_index
+    )
 
   @property
   def default_mat_type(self) -> str:

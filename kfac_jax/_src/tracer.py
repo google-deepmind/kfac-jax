@@ -30,29 +30,29 @@ Params = utils.Params
 FuncArgs = utils.FuncArgs
 FuncOuts = utils.FuncOuts
 Var = jax.core.Var
+LossFunction = loss_functions.LossFunction
+LossFunctionInputs = loss_functions.LossFunctionInputs
 
 T = TypeVar("T")
 # J = TypeVar("J", jax.core.Jaxpr, jax.core.ClosedJaxpr)
 ProcJaxpr: TypeAlias = "ProcessedJaxpr"
-TaggedFunction = Callable[..., Tuple[loss_functions.LossFunction, ...]]
+TaggedFunction = Callable[..., Tuple[LossFunction, ...]]
 FuncWithTags = Callable[..., Any]
-LossTagInputs = Tuple[Array, ...]
-LayerTagInputs = Tuple[Array, ...]
 
 FunctionTransformation = Callable[..., Union[ProcJaxpr, T]]
 TransformedFunction = Callable[..., Union[ProcJaxpr, T]]
 
 LossTagsVjp = Tuple[
-    Tuple[loss_functions.LossFunction, ...],
-    Callable[[Sequence[LossTagInputs]], Params]
+    Tuple[LossFunction, ...],
+    Callable[[Sequence[LossFunctionInputs]], Params]
 ]
 LossTagsJvp = Tuple[
-    Tuple[loss_functions.LossFunction, ...],
-    Tuple[LossTagInputs, ...],
+    Tuple[LossFunction, ...],
+    Tuple[LossFunctionInputs, ...],
 ]
 LayerTagVjp = Tuple[
-    Tuple[loss_functions.LossFunction, ...],
-    Callable[[Tuple[LossTagInputs, ...]], Tuple[Dict[str, Array], ...]]
+    Tuple[LossFunction, ...],
+    Callable[[Tuple[LossFunctionInputs, ...]], Tuple[Dict[str, Array], ...]]
 ]
 JaxprOrClosedJaxpr = Union[jax.core.Jaxpr, jax.core.ClosedJaxpr]
 
@@ -388,10 +388,10 @@ def construct_compute_losses_inputs(
     consts: Sequence[Any],
     num_losses: int,
     primal_func_args: FuncArgs,
-    params_index: int
+    params_index: int,
 ) -> Callable[
     [Params],
-    Tuple[Tuple[LossTagInputs, ...], Tuple[LossTagInputs, ...]]
+    Tuple[Tuple[LossFunctionInputs, ...], Tuple[LossFunction, ...]],
 ]:
   """Constructs a function that computes the inputs to all loss tags.
 
@@ -418,7 +418,7 @@ def construct_compute_losses_inputs(
 
   def forward_compute_losses(
       primal_params: Params
-  ) -> Tuple[Tuple[LossTagInputs, ...], Tuple[LossTagInputs, ...]]:
+  ) -> Tuple[Tuple[LossFunctionInputs, ...], Tuple[LossFunction, ...]]:
     """Computes and returns the inputs to the first ``num_losses`` loss tags."""
 
     # Check the provided inputs match the original primals.
@@ -444,24 +444,45 @@ def construct_compute_losses_inputs(
 
     # Loop through equations and evaluate primitives using `bind`
     losses_so_far = 0
+    losses = []
     losses_p_deps = []
     losses_inputs = []
     for eqn in jaxpr.eqns:
-
       write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
 
       if isinstance(eqn.primitive, tags.LossTag):
+        loss_tag: tags.LossTag = eqn.primitive
         losses_inputs.append(read(eqn.invars))
-        losses_p_deps.append(eqn.primitive.extract_parameter_dependants(
+        losses.append(loss_tag.loss(*losses_inputs[-1], **eqn.params))
+        losses_p_deps.append(loss_tag.extract_parameter_dependants(
             *losses_inputs[-1], **eqn.params))
         losses_so_far += 1
 
       if num_losses is not None and losses_so_far == num_losses:
         break
 
-    return tuple(losses_p_deps), tuple(losses_inputs)
+    return tuple(losses_p_deps), tuple(losses)
 
   return forward_compute_losses
+
+
+def _compute_all_losses(
+    p_jaxpr: ProcessedJaxpr,
+    primal_func_args: FuncArgs,
+) -> Tuple[LossFunction, ...]:
+  """Returns all loss functions objects."""
+  if not p_jaxpr.loss_tags:
+    raise ValueError("The provided `ProcessedJaxpr` has no loss tags.")
+
+  losses_func = construct_compute_losses_inputs(
+      jaxpr=p_jaxpr.jaxpr,
+      consts=p_jaxpr.consts,
+      num_losses=len(p_jaxpr.loss_tags),
+      primal_func_args=primal_func_args,
+      params_index=p_jaxpr.params_index,
+  )
+  _, losses = losses_func(primal_func_args[p_jaxpr.params_index])
+  return losses
 
 
 def _loss_tags_vjp(
@@ -498,15 +519,9 @@ def _loss_tags_vjp(
       params_index=p_jaxpr.params_index)
 
   primal_params = primal_func_args[p_jaxpr.params_index]
+  _, full_vjp_func, losses = jax.vjp(losses_func, primal_params, has_aux=True)
 
-  (_, losses_inputs), full_vjp_func = jax.vjp(losses_func, primal_params)
-
-  losses = tuple(tag.primitive.loss(*inputs, **tag.params)
-                 for tag, inputs in zip(p_jaxpr.loss_tags, losses_inputs))
-
-  zero_tangents = jax.tree_util.tree_map(jnp.zeros_like, losses_inputs)
-
-  def losses_vjp_func(losses_tangents: Sequence[LossTagInputs]) -> Params:
+  def losses_vjp_func(losses_tangents: Sequence[LossFunctionInputs]) -> Params:
     """Computes the vector-Jacobian product w.r.t. the parameters.
 
     Args:
@@ -529,9 +544,7 @@ def _loss_tags_vjp(
                          f"a sequence, but tangents[{i}] has type "
                          f"{type(loss_tangents)}.")
 
-    # The tangents of the second entry are always zero, as we compute this only
-    # for the parameter dependent arrays.
-    params_tangents, = full_vjp_func((losses_tangents, zero_tangents))
+    [params_tangents] = full_vjp_func(losses_tangents)
 
     return params_tangents
 
@@ -578,16 +591,8 @@ def _loss_tags_jvp(
 
   tangents = (params_tangents,)
 
-  (primals_out, tangents_out) = jax.jvp(losses_func, primal_params, tangents)
-
-  _, losses_inputs_primals = primals_out
-
-  losses_tangents, _ = tangents_out
-
-  losses = tuple(
-      tag.primitive.loss(*inputs, **tag.params)
-      for tag, inputs in zip(p_jaxpr.loss_tags, losses_inputs_primals)
-  )
+  (_, losses_tangents, losses) = jax.jvp(
+      losses_func, primal_params, tangents, has_aux=True)
 
   return losses, losses_tangents
 
@@ -596,7 +601,7 @@ def _loss_tags_hvp(
     processed_jaxpr: ProcessedJaxpr,
     primal_func_args: FuncArgs,
     params_tangents: Params,
-) -> Tuple[Params, Tuple[loss_functions.LossFunction, ...]]:
+) -> Tuple[Params, Tuple[LossFunction, ...]]:
   """Computes a Hessian-vector product of the function w.r.t. all loss tags.
 
   The function takes as inputs the concrete values of the primals for the
@@ -627,27 +632,18 @@ def _loss_tags_hvp(
       primal_func_args=primal_func_args,
       params_index=processed_jaxpr.params_index)
 
-  def compute_losses(
-      param_primals: Params
-  ) -> Tuple[loss_functions.LossFunction, ...]:
-    """Computes the sum of all losses as a scalar."""
-
-    _, loss_inputs = losses_func(param_primals)
-
-    return tuple(tag.primitive.loss(*inputs, **tag.params)
-                 for tag, inputs in zip(processed_jaxpr.loss_tags, loss_inputs))
-
   def losses_sum(param_primals: Params) -> Array:
     # This computes the sum of losses evaluated. Makes it easier because we can
     # now use jax.grad rather than jax.vjp for taking derivatives.
-    return sum(jnp.sum(loss.evaluate()) for loss in
-               compute_losses(param_primals))
+    _, losses = losses_func(param_primals)
+    return sum(jnp.sum(loss.evaluate()) for loss in losses)
 
   # Directional derivative function
   df_dot_dv = lambda p: (jax.jvp(losses_sum, [p], [params_tangents])[1])
   hvp = jax.grad(df_dot_dv)(primal_func_args[processed_jaxpr.params_index])
 
-  return hvp, compute_losses(primal_func_args[processed_jaxpr.params_index])
+  _, losses = losses_func(primal_func_args[processed_jaxpr.params_index])
+  return hvp, losses
 
 
 def _layer_tag_vjp(
@@ -712,7 +708,7 @@ def _layer_tag_vjp(
 
   def forward_aux(
       aux: Dict[Var, Array]
-  ) -> Tuple[Tuple[LossTagInputs, ...], Tuple[LossTagInputs, ...]]:
+  ) -> Tuple[Tuple[LossFunctionInputs, ...], Tuple[LossFunctionInputs, ...]]:
     """Computes the inputs and kwargs of all **loss** tags.
 
     Args:
@@ -803,7 +799,7 @@ def _layer_tag_vjp(
                  zip(processed_jaxpr.loss_tags, losses_inputs))
 
   def vjp_func(
-      tangents: Tuple[LossTagInputs, ...]
+      tangents: Tuple[LossFunctionInputs, ...]
   ) -> Tuple[Dict[str, Array], ...]:
     """Computes a (reverse-mode) vector-Jacobian product w.r.t. all layer tags.
 
@@ -849,6 +845,37 @@ def _layer_tag_vjp(
     return tuple(layers_info)  # pytype: disable=bad-return-type  # numpy-scalars
 
   return losses, vjp_func
+
+
+def compute_all_losses(
+    func: utils.Func,
+    params_index: int = 0,
+) -> TransformedFunction[Tuple[LossFunction, ...]]:
+  """Creates a function that when called, returns all loss objects.
+
+  The returned function takes as inputs the concrete values of the primals for
+  which to compute the loss objects.
+
+  Args:
+    func: The model function, which must include at least one loss registration.
+    params_index: The variables from the function arguments which are at this
+      index (e.g. `func_args[params_index]`) are to be considered model
+      parameters.
+
+  Returns:
+    A function that computes the Jacobian-vector product with signature
+    `Callable[[FuncArgs], Tuple[LossFunction, ...]]`.
+  """
+  # Note that this function is independent of any layer tags, hence we can avoid
+  # calling the auto registration.
+  return cached_transformation(
+      func=func,
+      transformation=_compute_all_losses,
+      verifier=lambda: None,
+      params_index=params_index,
+      auto_register_tags=False,
+      allow_left_out_params=True,
+  )
 
 
 def loss_tags_vjp(
@@ -945,7 +972,7 @@ def loss_tags_hvp(
   Returns:
     A function that computes the Hessian-vector product and also returns all
     losses, with signature `Callable[[FuncArgs, Params],
-    Tuple[LossTagsVjp, Tuple[loss_functions.LossFunction, ...]]`.
+    Tuple[LossTagsVjp, Tuple[LossFunction, ...]]`.
   """
   # Note that this function is independent of any layer tags, hence we can avoid
   # calling the auto registration.

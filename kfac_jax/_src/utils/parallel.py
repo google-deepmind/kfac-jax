@@ -62,8 +62,8 @@ def wrap_if_pmap(
 pmean_if_pmap = wrap_if_pmap(lax.pmean)
 psum_if_pmap = wrap_if_pmap(lax.psum)
 
-compute_mean = jax.pmap(lambda x: lax.pmean(x, "i"), axis_name="i")
-compute_sum = jax.pmap(lambda x: lax.psum(x, "i"), axis_name="i")
+pmap_mean = jax.pmap(lambda x: lax.pmean(x, "i"), axis_name="i")
+pmap_sum = jax.pmap(lambda x: lax.psum(x, "i"), axis_name="i")
 
 
 def index_if_not_scalar(value: Numeric, index: int = 0) -> Numeric:
@@ -90,12 +90,12 @@ def get_first(obj: TArrayTree) -> TArrayTree:
 
 def get_mean(obj: TArrayTree) -> TArrayTree:
   """Returns the average of `obj` over different devices."""
-  return get_first(compute_mean(obj))
+  return get_first(pmap_mean(obj))
 
 
 def get_sum(obj: TArrayTree) -> TArrayTree:
   """Returns the sum of `obj` over different devices."""
-  return get_first(compute_sum(obj))
+  return get_first(pmap_sum(obj))
 
 
 broadcast_all_local_devices = jax.pmap(lambda x: x)
