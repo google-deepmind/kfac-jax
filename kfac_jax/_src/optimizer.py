@@ -140,6 +140,7 @@ class Optimizer(utils.WithStagedMethods):
       modifiable_attribute_exceptions: Sequence[str] = (),
       include_norms_in_stats: bool = False,
       include_per_param_norms_in_stats: bool = False,
+      include_registered_loss_in_stats: bool = False,
       distributed_precon_apply: bool = True,
       distributed_inverses: bool = True,
       num_estimator_samples: int = 1,
@@ -178,22 +179,23 @@ class Optimizer(utils.WithStagedMethods):
     Args:
       value_and_grad_func: Python callable. This function should return the
         value of the loss to be optimized and its gradients, and optionally the
-        model state and auxiliary information (usually statistics to log). Note
-        that it should *not* be jitted/pmapped or otherwise compiled by JAX, as
-        this can lead to errors. (Compilation is done internally by the
-        optimizer.) The interface of this function should be:
-        ``out_args, loss_grads = value_and_grad_func(*in_args)``. Here,
-        ``in_args`` is ``(params, func_state, rng, batch)``, with ``rng``
-        omitted if ``value_func_has_rng`` is ``False``, and with ``func_state``
-        omitted if ``value_func_has_state`` is ``False``. Meanwhile,
-        ``out_args`` is ``(loss, (func_state, aux))`` if
-        ``value_func_has_state`` and ``value_func_has_aux`` are both ``True``,
-        ``(loss, func_state)`` if ``value_func_has_state`` is ``True`` and
-        ``value_func_has_aux`` is ``False``, ``(loss, aux)`` if
-        ``value_func_has_state`` is ``False`` and ``value_func_has_aux`` is
-        ``True``, and finally ``loss`` if ``value_func_has_state`` and
-        ``value_func_has_aux`` are both ``False``. This should be consistent
-        with how JAX's ``value_and_grad`` API function is typically used.
+        model state and auxiliary information in the form of a a dict mapping
+        strings to scalar arrays (usually statistics to log). Note that it
+        should *not* be jitted/pmapped or otherwise compiled by JAX, as this can
+        lead to errors. (Compilation is done internally by the optimizer.) The
+        interface of this function should be: ``out_args, loss_grads =
+        value_and_grad_func(*in_args)``. Here, ``in_args`` is ``(params,
+        func_state, rng, batch)``, with ``rng`` omitted if
+        ``value_func_has_rng`` is ``False``, and with ``func_state`` omitted if
+        ``value_func_has_state`` is ``False``. Meanwhile, ``out_args`` is
+        ``(loss, (func_state, aux))`` if ``value_func_has_state`` and
+        ``value_func_has_aux`` are both ``True``, ``(loss, func_state)`` if
+        ``value_func_has_state`` is ``True`` and ``value_func_has_aux`` is
+        ``False``, ``(loss, aux)`` if ``value_func_has_state`` is ``False`` and
+        ``value_func_has_aux`` is ``True``, and finally ``loss`` if
+        ``value_func_has_state`` and ``value_func_has_aux`` are both ``False``.
+        This should be consistent with how JAX's ``value_and_grad`` API function
+        is typically used.
       l2_reg: Scalar. Set this value to tell the optimizer what L2
         regularization coefficient you are using (if any). Note the coefficient
         appears in the regularizer as ``coeff / 2 * sum(param**2)``. This adds
@@ -287,8 +289,8 @@ class Optimizer(utils.WithStagedMethods):
         default estimation_mode mode of the used CurvatureEstimator subclass,
         which is typically "fisher_gradients". (Default: ``None``)
       custom_estimator_ctor: Optional constructor for subclass of
-        :class:`~BlockDiagonalCurvature`. If specified, the optimizer
-        will use this conastructor instead of the default
+        :class:`~BlockDiagonalCurvature`. If specified, the optimizer will use
+        this conastructor instead of the default
         :class:`~BlockDiagonalCurvature`. (Default: ``None``)
       curvature_ema: The decay factor used when calculating the covariance
         estimate moving averages. (Default: ``0.95``)
@@ -346,6 +348,12 @@ class Optimizer(utils.WithStagedMethods):
         vector norms of the gradient, preconditioned gradient, and parameter
         update are included in the statistics returned by the step function.
         (Default: ``False``)
+      include_registered_loss_in_stats: Boolean. If True, we include the loss,
+        as computed from the registered losses, in the stats. Also included is
+        the relative difference between this as the loss computed from
+        ``value_and_grad_func``. This is useful for debugging registration
+        errors. Note this for this option to work it's required that the targets
+        are passed for each loss function registration. (Default: ``False``)
       distributed_precon_apply: Boolean. Whether to distribute the application
         of the preconditioner across the different devices in a layer-wise
         fashion. If False, each device will (redundantly) perform the required
@@ -401,7 +409,7 @@ class Optimizer(utils.WithStagedMethods):
         value_and_grad_func,
         has_aux=value_func_has_aux or value_func_has_state,
     )
-    self._l2_reg = jnp.asarray(l2_reg)
+    self._l2_reg = l2_reg
     self._use_adaptive_learning_rate = use_adaptive_learning_rate
     self._learning_rate_schedule = learning_rate_schedule
     self._use_adaptive_momentum = use_adaptive_momentum
@@ -455,6 +463,7 @@ class Optimizer(utils.WithStagedMethods):
     self._batch_process_func = batch_process_func or (lambda x: x)
     self._include_norms_in_stats = include_norms_in_stats
     self._include_per_param_norms_in_stats = include_per_param_norms_in_stats
+    self._include_registered_loss_in_stats = include_registered_loss_in_stats
     self._batch_size_extractor = batch_size_extractor
 
     self._use_cached_inverses = (self._inverse_update_period != 1)
@@ -463,6 +472,8 @@ class Optimizer(utils.WithStagedMethods):
     self._norm_to_scale_identity_weight_per_block = (
         norm_to_scale_identity_weight_per_block
     )
+
+    self._params_index = 0
 
     if (norm_to_scale_identity_weight_per_block is not None
         and norm_to_scale_identity_weight_per_block != "none"):
@@ -477,7 +488,7 @@ class Optimizer(utils.WithStagedMethods):
     self._estimator = estimator_ctor(
         func=self._value_func,
         default_estimation_mode=estimation_mode,
-        params_index=0,
+        params_index=self._params_index,
         layer_tag_to_block_ctor=layer_tag_to_block_ctor,
         register_only_generic=register_only_generic,
         patterns_to_skip=patterns_to_skip,
@@ -490,7 +501,7 @@ class Optimizer(utils.WithStagedMethods):
     )
     self._implicit = curvature_estimator.ImplicitExactCurvature(
         self._value_func,
-        params_index=0,
+        params_index=self._params_index,
         batch_size_extractor=batch_size_extractor,
     )
 
@@ -505,7 +516,7 @@ class Optimizer(utils.WithStagedMethods):
     return self._num_burnin_steps
 
   @property
-  def l2_reg(self) -> Array:
+  def l2_reg(self) -> Numeric:
     """The weight of the additional diagonal term added to the curvature."""
     return self._l2_reg
 
@@ -768,7 +779,7 @@ class Optimizer(utils.WithStagedMethods):
   def _compute_loss_and_grads(
       self,
       func_args: FuncArgsVariants,
-  ) -> Tuple[Array, Params, FuncState, FuncAux]:
+  ) -> Tuple[Array, Params, Optional[FuncState], Optional[FuncAux]]:
     """Computes the model loss value and its gradients."""
 
     out, grads = self._value_and_grad_func(*func_args)
@@ -776,7 +787,11 @@ class Optimizer(utils.WithStagedMethods):
     loss, func_state, aux = extract_func_outputs(
         out, self._value_func_has_aux, self._value_func_has_state)
 
-    return loss, grads, func_state, aux
+    if self._include_registered_loss_in_stats:
+      aux = aux or {}
+      aux["loss_registered"] = self.compute_loss_from_registrations(func_args)
+
+    return loss, grads, func_state, aux  # pytype: disable=bad-return-type
 
   def _maybe_update_inverse_cache(
       self,
@@ -897,6 +912,24 @@ class Optimizer(utils.WithStagedMethods):
         quad_change = jnp.nan
 
       return coefficients, quad_change  # pytype: disable=bad-return-type  # jnp-type
+
+  @utils.staged
+  def compute_loss_from_registrations(
+      self,
+      func_args: FuncArgsVariants
+  ) -> Array:
+
+    loss = self.estimator.compute_func_from_registered(
+        func_args, self._batch_size_extractor(func_args[-1]))
+
+    if self.l2_reg > 0.0:
+
+      l2_reg_val = self.l2_reg / 2 * utils.squared_norm(
+          func_args[self._params_index])
+
+      loss += l2_reg_val
+
+    return loss
 
   @utils.auto_scope_method
   def _update_damping(
@@ -1141,8 +1174,9 @@ class Optimizer(utils.WithStagedMethods):
         scaled_grad_norm_sq=sq_norm_scaled_grads,
     )
 
-    if self._value_func_has_aux:
-      stats["aux"] = utils.pmean_if_pmap(aux, self.pmap_axis_name)
+    if aux is not None:
+      aux = utils.pmean_if_pmap(aux, self.pmap_axis_name)
+      stats["aux"] = aux
 
     if self._include_norms_in_stats:
       stats["param_norm"] = utils.norm(params)
@@ -1158,11 +1192,20 @@ class Optimizer(utils.WithStagedMethods):
       )
       stats.update(utils.per_parameter_norm(delta, "update_norm"))
 
+    if self._include_registered_loss_in_stats:
+      assert aux is not None
+      stats["loss_registered"] = aux.pop("loss_registered")
+      stats["loss_registered_reldiff"] = (
+          stats["loss_registered"] - loss) / loss
+
+    # There seems to be a bug in PyType that is messing up the annotated return
+    # type function this function, causing it to be 'tuple' instead of what it
+    # actually is.
     if self._value_func_has_state:
-      return params, state, func_state, stats
+      return params, state, func_state, stats  # pytype: disable=bad-return-type
     else:
       assert func_state is None
-      return params, state, stats
+      return params, state, stats  # pytype: disable=bad-return-type
 
   def step(
       self,
@@ -1487,9 +1530,7 @@ def convert_value_and_grad_to_value_func(
   """
 
   def value_func(*args, **kwargs) -> Array:
-
     out, _ = value_and_grad_func(*args, **kwargs)
-
     return out[0] if has_aux else out
 
   return value_func
@@ -1560,6 +1601,7 @@ def extract_func_outputs(
   """
 
   if not has_aux and not has_state:
+    assert isinstance(raw_outputs, Array)
     return raw_outputs, None, None
 
   loss, other = raw_outputs

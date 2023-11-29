@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC annotation types and general tree operations."""
-from typing import Callable, TypeVar, Sequence, Mapping, Tuple, Union
+from typing import Dict, Callable, Mapping, Sequence, Tuple, TypeVar, Union
 
 import jax
 import jax.numpy as jnp
@@ -31,7 +31,7 @@ TArrayTree = TypeVar("TArrayTree", bound=ArrayTree)
 Params = TypeVar("Params", bound=ArrayTree)
 Batch = TypeVar("Batch", bound=ArrayTree)
 FuncState = TypeVar("FuncState", bound=ArrayTree)
-FuncAux = TypeVar("FuncAux", bound=ArrayTree)
+FuncAux = Dict[str, ArrayTree]
 PyTreeDef = jax.tree_util.PyTreeDef
 FuncArgs = Sequence[ArrayTree]
 FuncOuts = Union[Array, Tuple[Array, FuncAux]]

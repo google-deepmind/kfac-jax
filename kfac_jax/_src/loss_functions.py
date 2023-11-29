@@ -567,6 +567,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       targets: Optional[Array] = None,
       variance: Numeric = 0.5,
       weight: Numeric = 1.0,
+      normalize_log_prob: bool = True,
   ):
     """Initializes the loss instance.
 
@@ -575,7 +576,11 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       targets: Optional targets to use for evaluation.
       variance: The scalar variance of the normal distribution.
       weight: The relative weight of the loss.
+      normalize_log_prob: Whether the log prob should include the standard
+        normalization constant for Gaussians (which is additive and depends
+        on the variance).
     """
+
     if not isinstance(variance, (int, float)) and type(variance) is not object:  # pylint: disable=unidiomatic-typecheck
       if not isinstance(variance, Array) or variance.size > 1:
         raise ValueError("`variance` must be either a python scalar or a "
@@ -583,6 +588,8 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     self._mean = mean
     self._targets = targets
     self._variance = variance
+    self._normalize_log_prob = normalize_log_prob
+
     super().__init__(weight=weight)
 
   @property
@@ -598,10 +605,17 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._targets
 
   @property
+  def normalize_log_prob(self) -> bool:
+    return self._normalize_log_prob
+
+  @property
   def parameter_independants(self) -> Tuple[Numeric, ...]:
+
     arrays = (self.variance, self.weight)
+
     if self._targets is not None:
       arrays = (self._targets,) + arrays
+
     return arrays
 
   @property
@@ -613,17 +627,26 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def params(self) -> Tuple[Array]:
     return (self.mean,)
 
+  def _evaluate(self, targets: Array) -> Array:
+
+    if self.normalize_log_prob:
+      return super()._evaluate(targets)
+    else:
+      # keeps leading dims intact
+      return 0.5 * jnp.sum(jnp.square(
+          self.mean - targets), axis=range(1, targets.ndim)) / self.variance
+
   def multiply_fisher_unweighted(
       self,
       vector: Sequence[Array]
   ) -> Tuple[Array]:
-    return (vector[0] / self._variance,)
+    return (vector[0] / self.variance,)
 
   def multiply_fisher_factor_unweighted(
       self,
       vector: Array,
   ) -> Tuple[Array]:
-    return (vector / jnp.sqrt(self._variance),)
+    return (vector / jnp.sqrt(self.variance),)
 
   def multiply_fisher_factor_transpose_unweighted(
       self,
@@ -637,15 +660,15 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       index: Sequence[int],
   ) -> Tuple[Array]:
     index = index[0]
-    ones_slice = jnp.ones([self._mean.shape[0]])[..., None]
-    output_slice = ones_slice / jnp.sqrt(self._variance)
-    return (insert_slice_in_zeros(output_slice, 1, self._mean.shape[1], index),)
+    ones_slice = jnp.ones([self.mean.shape[0]])[..., None]
+    output_slice = ones_slice / jnp.sqrt(self.variance)
+    return (insert_slice_in_zeros(output_slice, 1, self.mean.shape[1], index),)
 
   def tree_flatten(
       self,
   ) -> Tuple[Tuple[Array, Optional[Array]], Dict[str, utils.Numeric]]:
-    aux = dict(variance=self._variance, weight=self._weight)
-    return (self._mean, self._targets), aux
+    aux = dict(variance=self.variance, weight=self.weight)
+    return (self.mean, self.targets), aux
 
 
 @jax.tree_util.register_pytree_node_class
@@ -1137,7 +1160,8 @@ def insert_slice_in_zeros(
 NormalMeanNegativeLogProbLoss_tag = tags.LossTag(
     NormalMeanNegativeLogProbLoss,
     parameter_dependants=["mean"],
-    parameter_independants=["targets", "variance", "weight"],
+    parameter_independants=["targets", "variance", "weight",
+                            "normalize_log_prob"],
 )
 
 NormalMeanVarianceNegativeLogProbLoss_tag = tags.LossTag(
@@ -1170,17 +1194,20 @@ def register_normal_predictive_distribution(
     targets: Optional[Array] = None,
     variance: float = 0.5,
     weight: Numeric = 1.0,
+    normalize_log_prob: bool = True,
 ):
   """Registers a normal predictive distribution.
 
   This corresponds to a squared error loss of the form
-     ``weight/(2*var) * ||target - mean||^2``
+     ``weight/(2*var) * jnp.sum((targets - mean)**2) / batch_size``.
 
   NOTE: this function assumes you are *not* averaging over non-batch dimensions
-  when computing the loss. i.e. it assumes a loss of the form
-  ``mean(sum((target - prediction)**2, axis=range(1,target.ndims)), axis=0)``
+  when computing the loss. e.g. if dimension 0 were the batch dimension, this
+  corresponds to
+  ``jnp.mean(jnp.sum((target - prediction)**2,
+                     axis=range(1,target.ndims)), axis=0)``
   and not
-  ``mean((target - prediction)**2)``.
+  ``jnp.mean((target - prediction)**2)``.
   If your loss is of the latter form you can compensate for it by passing the
   appropriate value to ``weight``.
 
@@ -1195,21 +1222,29 @@ def register_normal_predictive_distribution(
     variance: The variance of the distribution. Must be a constant scalar,
       independent of the network's parameters. Note that the default value of
       0.5 corresponds to a standard squared error loss
-      ``weight * ||target - prediction||^2``. If you want your squared error
-      loss to be of the form ``0.5*coeff*||target - prediction||^2`` you should
-      use variance=1.0. (Default: 0.5)
+      ``weight * jnp.sum((target - prediction)**2)``. If you want your squared
+      error loss to be of the form
+      ``0.5*coeff*jnp.sum((target - prediction)**2)`` you should use
+      variance=1.0. (Default: 0.5)
     weight: A constant scalar coefficient that the log prob loss associated with
       this distribution is multiplied by. In general this is NOT equivalent to
       changing the temperature of the distribution, but in the case of normal
       distributions it may be. Note that this must be constant and independent
       of the network's parameters. (Default: 1.0)
+    normalize_log_prob: Whether the negative log prob loss associated to this
+      this distribution should include the additive normalization constant
+      (which is constant and depends on ``variance``) that makes it a true log
+      prob, and not just a squared error loss. Note that this has no effect on
+      the behavior of optimizer with the exception of in niche situations where
+      the loss value is computed from the registrations. e.g., when
+      ``include_registered_loss_in_stats=True`` is used. (Default: True)
   """
   if targets is None:
-    args = [mean, variance, weight]
-    args_names = ["mean", "variance", "weight"]
+    args = [mean, variance, weight, normalize_log_prob]
+    args_names = ["mean", "variance", "weight", "normalize_log_prob"]
   else:
-    args = [mean, targets, variance, weight]
-    args_names = ["mean", "targets", "variance", "weight"]
+    args = [mean, targets, variance, weight, normalize_log_prob]
+    args_names = ["mean", "targets", "variance", "weight", "normalize_log_prob"]
 
   NormalMeanNegativeLogProbLoss_tag.bind(*args, args_names=tuple(args_names))
 
@@ -1222,17 +1257,18 @@ def register_squared_error_loss(
   """Registers a squared error loss function.
 
   This assumes a squared error loss of the form
+  ``weight * jnp.sum((targets - prediction)**2) / batch_size``.
 
-  ``weight * ||target - prediction||^2``,
-
-  averaged across the mini-batch. If your loss uses a coefficient of 0.5
-  you need to set the "weight" argument to reflect this.
+  If your loss uses a coefficient of 0.5 you need to set the ``weight`` argument
+  to reflect this.
 
   NOTE: this function assumes you are *not* averaging over non-batch dimensions
-  when computing the loss. i.e. it assumes a loss of the form
-  ``mean(sum((target - prediction)**2, axis=range(1, target.ndims)), axis=0)``
+  when computing the loss. e.g. if dimension 0 were the batch dimension, this
+  corresponds to
+  ``jnp.mean(jnp.sum((target - prediction)**2,
+                     axis=range(1, target.ndims)), axis=0)``
   and not
-  ``mean((target - prediction)**2)``
+  ``jnp.mean((target - prediction)**2)``
   If your loss is of the latter form you can compensate for it by passing the
   appropriate value to ``weight``.
 
@@ -1255,7 +1291,8 @@ def register_squared_error_loss(
       parameters. (Default: 1.0)
   """
   register_normal_predictive_distribution(
-      prediction, targets, variance=0.5, weight=weight)  # pytype: disable=bad-return-type  # numpy-scalars
+      prediction, targets, variance=0.5,
+      weight=weight, normalize_log_prob=False)  # pytype: disable=bad-return-type  # numpy-scalars
 
 
 def register_multi_bernoulli_predictive_distribution(
@@ -1266,17 +1303,15 @@ def register_multi_bernoulli_predictive_distribution(
   """Registers a multi-Bernoulli predictive distribution.
 
   This corresponds to a sigmoid cross-entropy loss of the form
-
-  ``weight * sigmoid_cross_entropy(logits, targets)``,
-
-  averaged across the mini-batch.
+  ``weight * jnp.sum(sigmoid_cross_entropy(logits, targets)) / batch_size``.
 
   NOTE: this function assumes you are *not* averaging over non-batch dimensions
-  when computing the loss. i.e. it assumes a loss of the form
-  ``mean(sum(sigmoid_cross_entropy(logits, targets),
-             axis=range(1, target.ndims)), axis=0)``
+  when computing the loss. e.g. if dimension 0 were the batch dimension, this
+  corresponds to
+  ``jnp.mean(jnp.sum(sigmoid_cross_entropy(logits, targets),
+                     axis=range(1, target.ndims)), axis=0)``
   and not
-  ``mean(sigmoid_cross_entropy(logits, targets))``
+  ``jnp.mean(sigmoid_cross_entropy(logits, targets))``
   If your loss is of the latter form you can compensate for it by passing the
   appropriate value to ``weight``.
 
@@ -1317,24 +1352,23 @@ def register_sigmoid_cross_entropy_loss(
   """Registers a sigmoid cross-entropy loss function.
 
   This assumes a sigmoid cross-entropy loss of the form
-
-  ``weight * sigmoid_cross_entropy(logits, targets)``,
-
-  averaged across the mini-batch.
+  ``weight * jnp.sum(sigmoid_cross_entropy(logits, targets)) / batch_size``.
 
   NOTE: this function assumes you are *not* averaging over non-batch dimensions
-  when computing the loss. i.e. it assumes a loss of the form
-  ``mean(sum(sigmoid_cross_entropy(logits, targets),
-             axis=range(1, target.ndims)), axis=0)``
+  when computing the loss. e.g. if dimension 0 were the batch dimension, this
+  corresponds to
+  ``jnp.mean(jnp.sum(sigmoid_cross_entropy(logits, targets),
+                     axis=range(1, target.ndims)), axis=0)``
   and not
-  ``mean(sigmoid_cross_entropy(logits, targets))``
-  If your loss is of the latter form you can compensate for it by passing the
+  ``jnp.mean(sigmoid_cross_entropy(logits, targets))``
+  If your loss is of the latter form you can compensate for this by passing the
   appropriate value to ``weight``.
 
-  NOTE: this is distinct from :func:`~register_softmax_cross_entropy_loss` and
-  should not be confused with it. It is similar to
-  :func:`~register_multi_bernoulli_predictive_distribution` but without the
-  explicit probabilistic interpretation. It behaves identically for now.
+  NOTE: this function is distinct from
+  :func:`~register_softmax_cross_entropy_loss` and should not be confused with
+  it. It is similar to :func:`~register_multi_bernoulli_predictive_distribution`
+  but without the explicit probabilistic interpretation. It behaves identically
+  for now.
 
   Args:
     logits: The input logits of the loss as a 2D array of floats. The first
@@ -1363,9 +1397,7 @@ def register_categorical_predictive_distribution(
 
   This corresponds to a softmax cross-entropy loss of the form
 
-  ``weight * softmax_cross_entropy(logits, targets)``,
-
-  averaged across the mini-batch.
+  ``weight * jnp.sum(softmax_cross_entropy(logits, targets)) / batch_size``.
 
   NOTE: this is distinct from
   :func:`~register_multi_bernoulli_predictive_distribution` and should not be
@@ -1435,9 +1467,7 @@ def register_softmax_cross_entropy_loss(
 
   This assumes a softmax cross-entropy loss of the form
 
-  ``weight * softmax_cross_entropy(logits, targets)``,
-
-  averaged across the mini-batch.
+  ``weight * jnp.sum(softmax_cross_entropy(logits, targets)) / batch_size``.
 
   NOTE:this is distinct from :func:`~register_sigmoid_cross_entropy_loss` and
   should not be confused with it. It is similar to

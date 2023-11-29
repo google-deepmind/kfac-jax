@@ -59,8 +59,17 @@ def wrap_if_pmap(
   return p_func_if_pmap
 
 
-pmean_if_pmap = wrap_if_pmap(lax.pmean)
-psum_if_pmap = wrap_if_pmap(lax.psum)
+# TODO(jamesmartens,botev): We no longer use wrap_if_pmap in the below
+# definitions since it doesn't seem to transmit type info properly. Investigate?
+def pmean_if_pmap(obj: TArrayTree, axis_name: Optional[str]) -> TArrayTree:
+
+  return lax.pmean(obj, axis_name) if in_pmap(axis_name) else obj
+
+
+def psum_if_pmap(obj: TArrayTree, axis_name: Optional[str]) -> TArrayTree:
+
+  return lax.psum(obj, axis_name) if in_pmap(axis_name) else obj
+
 
 pmap_mean = jax.pmap(lambda x: lax.pmean(x, "i"), axis_name="i")
 pmap_sum = jax.pmap(lambda x: lax.psum(x, "i"), axis_name="i")

@@ -333,6 +333,14 @@ def block_permuted(
   return jnp.block(reordered_blocks)
 
 
+def squared_norm(obj: ArrayTree) -> Array:
+  """Computes the squared Euclidean norm of the provided PyTree object."""
+  elements_squared_norm = jax.tree_util.tree_map(
+      lambda x: jnp.sum(jnp.square(x)), obj)
+
+  return sum(jax.tree_util.tree_leaves(elements_squared_norm))
+
+
 def norm(obj: ArrayTree) -> Array:
   """Computes the Euclidean norm of the provided PyTree object."""
   elements_squared_norm = jax.tree_util.tree_map(

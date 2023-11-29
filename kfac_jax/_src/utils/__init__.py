@@ -110,6 +110,7 @@ matrix_of_inner_products = math.matrix_of_inner_products
 vector_of_inner_products = math.vector_of_inner_products
 block_permuted = math.block_permuted
 norm = math.norm
+squared_norm = math.squared_norm
 per_parameter_norm = math.per_parameter_norm
 psd_inv = math.psd_inv
 psd_solve = math.psd_solve

@@ -132,7 +132,7 @@ class ImplicitExactCurvature:
         arguments and returns the batch size for a single device.
         (Default: ``kfac.utils.default_batch_size_extractor``)
     """
-    self.comoute_losses = tracer.compute_all_losses(
+    self.compute_losses = tracer.compute_all_losses(
         func=func,
         params_index=params_index
     )
@@ -625,14 +625,17 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       default_estimation_mode: The estimation mode which to use by default when
         calling :func:`~CurvatureEstimator.update_curvature_matrix_estimate`.
     """
+
     if default_estimation_mode not in _ESTIMATION_MODES:
       raise ValueError("Unrecognised default_estimation_mode "
                        f"{default_estimation_mode}.")
+
     super().__init__()
+
     self.func = func
     self.params_index = params_index
     self.default_estimation_mode = default_estimation_mode
-    self.comoute_losses = tracer.compute_all_losses(
+    self.compute_losses = tracer.compute_all_losses(
         func=func, params_index=params_index
     )
 
@@ -889,6 +892,16 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
   @abc.abstractmethod
   def to_dense_matrix(self, state: StateType) -> Array:
     """Returns an explicit dense array representing the curvature matrix."""
+
+  def compute_func_from_registered(self, func_args, batch_size) -> Array:
+
+    losses = self.compute_losses(func_args)
+
+    loss_values = tuple(
+        jnp.sum(loss.evaluate(None, coefficient_mode="regular"))
+        for loss in losses)
+
+    return sum(loss_values) / batch_size
 
 
 class BlockDiagonalCurvature(
