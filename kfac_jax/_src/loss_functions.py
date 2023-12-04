@@ -1253,7 +1253,7 @@ def register_squared_error_loss(
     prediction: Array,
     targets: Optional[Array] = None,
     weight: Numeric = 1.0,
-) -> Array:
+):
   """Registers a squared error loss function.
 
   This assumes a squared error loss of the form
@@ -1292,7 +1292,7 @@ def register_squared_error_loss(
   """
   register_normal_predictive_distribution(
       prediction, targets, variance=0.5,
-      weight=weight, normalize_log_prob=False)  # pytype: disable=bad-return-type  # numpy-scalars
+      weight=weight, normalize_log_prob=False)
 
 
 def register_multi_bernoulli_predictive_distribution(
@@ -1462,7 +1462,7 @@ def register_softmax_cross_entropy_loss(
     targets: Optional[Array] = None,
     mask: Optional[Array] = None,
     weight: Numeric = 1.0,
-) -> Array:
+):
   """Registers a softmax cross-entropy loss function.
 
   This assumes a softmax cross-entropy loss of the form
@@ -1494,4 +1494,4 @@ def register_softmax_cross_entropy_loss(
   register_categorical_predictive_distribution(logits,
                                                targets=targets,
                                                mask=mask,
-                                               weight=weight)  # pytype: disable=bad-return-type  # numpy-scalars
+                                               weight=weight)
