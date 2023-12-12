@@ -17,13 +17,11 @@ from typing import Any, Generic, Optional, Sequence, Type, TypeVar, Tuple, Union
 
 import jax
 from jax import core
-from jax.interpreters import batching as jax_batching
 
 # Types for annotation
 T = TypeVar("T")
 Array = jax.Array
 Arrays = Tuple[Array, ...]
-ArrayOrXla = TypeVar("ArrayOrXla", Array, jax.interpreters.xla.XlaOp)
 
 
 class LossTag(core.Primitive, Generic[T]):
@@ -74,7 +72,7 @@ class LossTag(core.Primitive, Generic[T]):
     # allow this is two fold - one to not break user code when the tags are not
     # used at all, and two - to be able to define a network with code for a
     # single example which is the vmap-ed for a batch.
-    jax_batching.primitive_batchers[self] = self._batching
+    jax.interpreters.batching.primitive_batchers[self] = self._batching
 
   @property
   def parameter_dependants_names(self) -> Tuple[str, ...]:
@@ -112,9 +110,9 @@ class LossTag(core.Primitive, Generic[T]):
 
   def get_outputs(
       self,
-      *args: ArrayOrXla,
+      *args: Array,
       args_names: Sequence[str],
-  ) -> Tuple[ArrayOrXla, ...]:
+  ) -> Tuple[Array, ...]:
     """Verifies that the number of arguments matches expectations."""
 
     assert len(args) == len(args_names)
@@ -217,7 +215,7 @@ class LayerTag(core.Primitive):
     # allow this is two fold - one to not break user code when the tags are not
     # used at all, and two - to be able to define a network with code for a
     # single example which is the vmap-ed for a batch.
-    jax_batching.primitive_batchers[self] = self._batching
+    jax.interpreters.batching.primitive_batchers[self] = self._batching
 
   @property
   def num_outputs(self) -> int:

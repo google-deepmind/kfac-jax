@@ -389,7 +389,7 @@ def psd_solve_without_last_idx(a: Array, b: Array) -> Array:
   sub_a = a[..., :-1, :-1]
   sub_b = b[..., :-1]
   sub_x = psd_solve(sub_a, sub_b)
-  return jnp.concatenate([sub_x, jnp.zeros_like(sub_x[..., :1])], axis=-1)
+  return jnp.concatenate([sub_x, jnp.zeros_like(b[..., :1])], axis=-1)
 
 
 def psd_solve_maybe_zero_last_idx(a: Array, b: Array) -> Array:

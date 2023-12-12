@@ -964,11 +964,10 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
         dimensions).
       weight: The relative weight of the loss.
     """
-
     if (mask is not None and type(mask) is not object and  # pylint: disable=unidiomatic-typecheck
-        mask.shape != logits.shape[:1]):
+        mask.shape != logits.shape[:-1]):
       raise ValueError("If provided, mask.shape must be equal to "
-                       "logits.shape[:1].")
+                       "logits.shape[:-1].")
 
     self._logits = logits
     self._targets = targets
