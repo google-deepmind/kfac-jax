@@ -47,7 +47,7 @@ _SPECIAL_CASE_ZERO_INV: bool = True
 # If disabling Cholesky inverses and using GPUs, one must make sure to set
 # distributed_inverses=True, since otherwise the devices can potentially become
 # out of sync, which is a silent and very serious failure
-_USE_CHOLESKY_INVERSION: bool = True
+_USE_CHOLESKY_INVERSION: bool = False
 
 
 def set_special_case_zero_inv(value: bool):
@@ -729,6 +729,20 @@ def invert_psd_matrices(
     return 1.0 / m
 
   return jax.tree_map(invert_psd_matrix, matrices)
+
+
+def inverse_sqrt_psd_matrices(matrices: ArrayTree) -> ArrayTree:
+
+  def inverse_sqrt_psd_matrix(m):
+
+    if m.ndim == 2:
+      # Check copy.bara.sky before changing the next line:
+      return qr_pth_inv_root.qr_pth_inv_root(4, m, cholesky_qr=True)
+
+    assert m.ndim <= 1
+    return 1.0 / jnp.sqrt(m)
+
+  return jax.tree_map(inverse_sqrt_psd_matrix, matrices)
 
 
 def pi_adjusted_kronecker_inverse(

@@ -955,6 +955,7 @@ class Full(CurvatureBlock, abc.ABC):
         result = utils.psd_solve(matrix, vector)
       else:
         # TODO(jamesmartens,botev): investigate this for determinism on GPUs
+        # NOTE: this function only works for integer powers
         result = jnp.matmul(jnp.linalg.matrix_power(matrix, power), vector)
 
     else:
@@ -1259,12 +1260,14 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
     else:
 
-      if power != -1:
+      if power != -1 and power != -0.5:
         raise NotImplementedError(
             f"Approximations for power {power} is not yet implemented."
         )
 
       if use_cached:
+
+        assert power != -0.5
 
         factors = [
             state.cache[str(power)][f"{i}_factor"]
@@ -1272,10 +1275,18 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
         ]
 
       else:
-        factors = utils.pi_adjusted_kronecker_inverse(
-            *[factor.value for factor in state.factors],
-            damping=identity_weight,
-        )
+
+        factors = [factor.value for factor in state.factors]
+
+        factors = utils.pi_adjusted_kronecker_factors(
+            *factors, damping=identity_weight)
+
+        if power == -1:
+          factors = utils.invert_psd_matrices(factors)
+        elif power == -0.5:
+          factors = utils.inverse_sqrt_psd_matrices(factors)
+        else:
+          raise NotImplementedError()
 
       result = utils.kronecker_product_axis_mul_v(factors, vector)
 

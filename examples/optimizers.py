@@ -59,6 +59,7 @@ class Preconditioner:
       curvature_update_period: int = 1,
       inverse_update_period: int = 5,
       use_exact_inverses: bool = False,
+      use_sqrt_inv: bool = False,
       register_only_generic: bool = False,
       patterns_to_skip: Sequence[str] = (),
       auto_register_kwargs: Optional[Dict[str, Any]] = None,
@@ -109,6 +110,8 @@ class Preconditioner:
         computed "exactly" without the pi-adjusted factored damping approach.
         Note that this involves the use of eigendecompositions, which can
         sometimes be much more expensive. (Default: ``False``)
+      use_sqrt_inv: Bool. If ``True``, we use inverse square roots for
+        preconditioner instead of inverse. (Default: ``False``)
       register_only_generic: Boolean. Whether when running the auto-tagger to
         register only generic parameters, or allow it to use the graph matcher
         to automatically pick up any kind of layer tags. (Default: ``False``)
@@ -163,6 +166,8 @@ class Preconditioner:
 
     self._use_cached_inverses = self._inverse_update_period != 1
     self._use_exact_inverses = use_exact_inverses
+
+    self._use_sqrt_inv = use_sqrt_inv
 
     self._norm_to_scale_identity_weight_per_block = (
         norm_to_scale_identity_weight_per_block
@@ -406,10 +411,11 @@ class Preconditioner:
   ) -> optax.Updates:
     """Preconditions (= multiplies the inverse curvature estimation matrix to) updates."""
 
-    new_updates = self.estimator.multiply_inverse(
+    new_updates = self.estimator.multiply_matpower(
         state=state.estimator_state,
         parameter_structured_vector=updates,
         identity_weight=self.get_identity_weight(state),
+        power=-1 if not self._use_sqrt_inv else -0.5,
         exact_power=self._use_exact_inverses,
         use_cached=self._use_cached_inverses,
         pmap_axis_name=self.pmap_axis_name,

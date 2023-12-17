@@ -124,6 +124,9 @@ kronecker_eigen_basis_mul_v = math.kronecker_eigen_basis_mul_v
 safe_psd_eigh = math.safe_psd_eigh
 loop_and_parallelize_average = math.loop_and_parallelize_average
 psd_matrix_norm = math.psd_matrix_norm
+invert_psd_matrices = math.invert_psd_matrices
+inverse_sqrt_psd_matrices = math.inverse_sqrt_psd_matrices
+
 del math
 
 # accumulators
