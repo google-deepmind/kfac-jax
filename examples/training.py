@@ -38,6 +38,7 @@ PRNGKey = kfac_jax.utils.PRNGKey
 Params = kfac_jax.utils.Params
 Batch = kfac_jax.utils.Batch
 FuncState = kfac_jax.utils.FuncState
+WeightedMovingAverage = kfac_jax.utils.WeightedMovingAverage
 
 InitFunc = Callable[[PRNGKey, Batch], Params]
 BatchSizeCalculatorCtor = Callable[[int, int, str], "BatchSizeCalculator"]
@@ -219,6 +220,15 @@ class SupervisedExperiment(abc.ABC):
     self._train_input, self._eval_input, self._init_batch = None, None, None
 
     self._params, self._state, self._opt_state = None, None, None
+    self._params_polyak = None
+
+    self._use_polyak_avg_with_decay_factor = config.get(
+        "use_polyak_avg_with_decay_factor", None)
+
+    if self._use_polyak_avg_with_decay_factor:
+      self._update_polyak_average_pmap = jax.pmap(self._update_polyak_average,
+                                                  donate_argnums=0)
+
     self._python_step = 0
     self._num_tensors = 0
     self._num_parameters = 0
@@ -292,6 +302,25 @@ class SupervisedExperiment(abc.ABC):
 
     return self._init_batch
 
+  def _update_polyak_average(
+      self,
+      params_polyak: Optional[WeightedMovingAverage[Params]],
+      params: Params
+  ) -> WeightedMovingAverage[Params]:
+    """Updates the polyak-averaged version of the parameters."""
+
+    assert self._use_polyak_avg_with_decay_factor is not None
+
+    if params_polyak is None:
+      params_polyak = WeightedMovingAverage.zeros_like(params)
+    else:
+      # Copy the object to make this a pure function
+      params_polyak = params_polyak.copy()
+
+    params_polyak.update(params, self._use_polyak_avg_with_decay_factor, 1.0)
+
+    return params_polyak
+
   def progress(
       self,
       global_step: Numeric,
@@ -337,11 +366,13 @@ class SupervisedExperiment(abc.ABC):
 
   def maybe_initialize_state(self):
     """Initializes all the experiment's state variables."""
+
     if self._params is not None:
       logging.info("Loaded from checkpoint, not initializing parameters.")
       return
 
     init_rng = kfac_jax.utils.replicate_all_local_devices(self.init_rng)
+
     # Initialize parameters and optional state
     params_rng, optimizer_rng = kfac_jax.utils.p_split(init_rng)
     logging.info("Initializing parameters.")
@@ -371,6 +402,7 @@ class SupervisedExperiment(abc.ABC):
 
     self._num_tensors = 0
     self._num_parameters = 0
+
     logging.info("%s %s %s", "=" * 20, "Parameters", "=" * 20)
     for path, var in jax.tree_util.tree_flatten_with_path(self._params)[0]:
       # Because of pmap
@@ -383,6 +415,7 @@ class SupervisedExperiment(abc.ABC):
       )
       self._num_parameters = self._num_parameters + var.size
       self._num_tensors = self._num_tensors + 1
+
     logging.info("Total parameters: %s", f"{self._num_parameters:,}")
 
     # Log optimizer state
@@ -423,6 +456,7 @@ class SupervisedExperiment(abc.ABC):
 
   def train_step(self, global_step: Array, rng: PRNGKey) -> Dict[str, Numeric]:
     """Performs a single training step."""
+
     del global_step  # Unused
 
     # Perform optimizer step
@@ -440,6 +474,10 @@ class SupervisedExperiment(abc.ABC):
       self._params, self._opt_state, self._state, stats = result
     else:
       self._params, self._opt_state, stats = result
+
+    if self._use_polyak_avg_with_decay_factor is not None:
+      self._params_polyak = self._update_polyak_average_pmap(
+          self._params_polyak, self._params)
 
     if "aux" in stats:
       # Average everything in aux and then put it in stats
@@ -479,6 +517,7 @@ class SupervisedExperiment(abc.ABC):
       self,
       global_step: Array,
       params: Params,
+      params_polyak: Optional[WeightedMovingAverage[Params]],
       func_state: FuncState,
       opt_state: Union[kfac_jax.Optimizer.State, optimizers.OptaxState],
       rng: PRNGKey,
@@ -499,6 +538,23 @@ class SupervisedExperiment(abc.ABC):
 
     loss, stats = self.eval_model_func(*func_args)
 
+    if params_polyak is not None:
+
+      func_args = kfac_jax.optimizer.make_func_args(
+          params=params_polyak.value,
+          func_state=func_state,
+          rng=rng,
+          batch=batch,
+          has_state=self.has_func_state,
+          has_rng=self.has_rng,
+      )
+
+      loss_no_avg = loss
+
+      loss, stats = self.eval_model_func(*func_args)
+
+      stats["loss_no_avg"] = loss_no_avg
+
     stats["loss"] = loss
 
     if hasattr(opt_state, "data_seen"):
@@ -512,6 +568,7 @@ class SupervisedExperiment(abc.ABC):
       rng: PRNGKey,
   ) -> Dict[str, Numeric]:
     """Runs the evaluation of the currently loaded model parameters."""
+
     all_stats = dict()
 
     # Evaluates both the train and eval split metrics
@@ -521,10 +578,12 @@ class SupervisedExperiment(abc.ABC):
       averaged_stats = kfac_jax.utils.MultiChunkAccumulator.empty(True)
 
       for batch in dataset_iter_thunk():
+
         key, rng = kfac_jax.utils.p_split(rng)
 
         stats = self.eval_batch(
-            global_step, self._params, self._state, self._opt_state, key, batch
+            global_step, self._params, self._params_polyak, self._state,
+            self._opt_state, key, batch
         )
 
         averaged_stats.add(stats, 1)
@@ -549,6 +608,7 @@ class JaxlineExperiment(SupervisedExperiment, experiment.AbstractExperiment):
 
   CHECKPOINT_ATTRS = {
       "_params": "params",
+      "_params_polyak": "params_polyak",
       "_state": "state",
       "_opt_state": "opt_state",
   }
