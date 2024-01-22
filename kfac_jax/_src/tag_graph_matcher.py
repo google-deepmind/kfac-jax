@@ -64,7 +64,7 @@ def eval_jaxpr_eqn(eqn: JaxprEqn, in_values: Vars) -> Var:
   if jax_version > (0, 4, 11):
     user_context = jax_extend.source_info_util.user_context
   else:
-    user_context = jax.core.source_info_util.user_context
+    user_context = jax.core.source_info_util.user_context  # pytype: disable=module-attr
 
   with user_context(eqn.source_info.traceback):
     return eqn.primitive.bind(*subfuns, *in_values, **bind_params)
