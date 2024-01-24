@@ -113,6 +113,7 @@ class Optimizer(utils.WithStagedMethods):
       damping_lower_threshold: Numeric = 0.25,
       damping_upper_threshold: Numeric = 0.75,
       always_use_exact_qmodel_for_damping_adjustment: bool = False,
+      precon_damping_mult: Numeric = 1.0,
       norm_constraint: Optional[Numeric] = None,
       num_burnin_steps: int = 10,
       estimation_mode: Optional[str] = None,
@@ -274,6 +275,9 @@ class Optimizer(utils.WithStagedMethods):
         which is what this argument controls. When True, the exact curvature
         matrix will be used, which is more expensive, but could possibly produce
         a better damping schedule. (Default: ``False``)
+      precon_damping_mult: Scalar. Multiplies the damping used in the
+        preconditioner (vs the exact quadratic model) by this value.
+        (Default: 1.0)
       norm_constraint: Scalar. If specified, the update is scaled down so that
         its approximate squared Fisher norm ``v^T F v`` is at most the specified
         value. (Note that here ``F`` is the approximate curvature matrix, not
@@ -445,6 +449,7 @@ class Optimizer(utils.WithStagedMethods):
     self._damping_upper_threshold = damping_upper_threshold
     self._always_use_exact_qmodel_for_damping_adjustment = (
         always_use_exact_qmodel_for_damping_adjustment)
+    self._precon_damping_mult = precon_damping_mult
     self._norm_constraint = norm_constraint
     self._num_burnin_steps = num_burnin_steps
     self._curvature_ema = curvature_ema
@@ -779,8 +784,11 @@ class Optimizer(utils.WithStagedMethods):
   def _compute_loss_and_grads(
       self,
       func_args: FuncArgsVariants,
+      state: Optional["Optimizer.State"] = None,
   ) -> Tuple[Array, Params, Optional[FuncState], Optional[FuncAux]]:
     """Computes the model loss value and its gradients."""
+
+    del state
 
     out, grads = self._value_and_grad_func(*func_args)
 
@@ -825,14 +833,14 @@ class Optimizer(utils.WithStagedMethods):
     preconditioned_grads = self.estimator.multiply_inverse(
         state=state.estimator_state,
         parameter_structured_vector=grads,
-        identity_weight=self.l2_reg + damping,
+        identity_weight=(self.l2_reg + damping) * self._precon_damping_mult,
         exact_power=self._use_exact_inverses,
         use_cached=self._use_cached_inverses,
         pmap_axis_name=self.pmap_axis_name,
         norm_to_scale_identity_weight_per_block=self._norm_to_scale_identity_weight_per_block,
     )
 
-    if self._norm_constraint is not None:
+    if self._norm_constraint:
 
       assert not self._use_adaptive_learning_rate
       assert coefficient is not None
@@ -864,7 +872,7 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._always_use_exact_qmodel_for_damping_adjustment:
       quad_model = self.compute_exact_quad_model(
-          [delta], grads, func_args)
+          [delta], grads, func_args, state=state)
     else:
       quad_model = self.compute_approx_quad_model(state, [delta], grads)
 
@@ -892,9 +900,10 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._use_adaptive_learning_rate or self._use_adaptive_momentum:
 
-      quad_model = self.compute_exact_quad_model(vectors, grads, func_args)
-
+      quad_model = self.compute_exact_quad_model(vectors, grads, func_args,
+                                                 state=state)
       return self._solve_quad_model(quad_model, damping, vectors, coefficients)
+
     else:
       assert all(c is not None for c in coefficients)
 
@@ -1098,7 +1107,8 @@ class Optimizer(utils.WithStagedMethods):
     del rng  # should not be used after this point!
 
     # Compute loss and gradients
-    loss, grads, func_state, aux = self._compute_loss_and_grads(func_args)
+    loss, grads, func_state, aux = self._compute_loss_and_grads(
+        func_args, state=state)
 
     # Sync
     loss, grads = utils.pmean_if_pmap((loss, grads), self.pmap_axis_name)
@@ -1108,8 +1118,8 @@ class Optimizer(utils.WithStagedMethods):
 
     # Compute proposed directions
     preconditioned_gradient, sq_norm_scaled_grads = (
-        self._compute_preconditioned_gradient(state, grads, learning_rate,
-                                              damping)
+        self._compute_preconditioned_gradient(
+            state, grads, learning_rate, damping)
     )
     vectors = (preconditioned_gradient, state.velocities)
 
@@ -1312,8 +1322,12 @@ class Optimizer(utils.WithStagedMethods):
       vectors: Sequence[Params],
       grads: Params,
       func_args: FuncArgsVariants,
+      state: Optional["Optimizer.State"] = None,
   ) -> Tuple[Array, Array, Array]:
     """Computes the components of the exact quadratic model."""
+
+    del state
+
     if self.estimator.default_mat_type == "fisher":
       c_factor_v = tuple(self._implicit.multiply_fisher_factor_transpose
                          (func_args, vi) for vi in vectors)
