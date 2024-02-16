@@ -345,7 +345,7 @@ def make_jax_graph(
   closed_jaxpr, out_shapes = jax.make_jaxpr(func, return_shape=True)(*func_args)
 
   if compute_only_loss_tags:
-    make_var_func = jax.core.gensym([closed_jaxpr.jaxpr])
+    make_var_func = jax.core.gensym()
     eqns = []
     sub_graph_vars = set()
     loss_tags_output_vars = []
@@ -1469,7 +1469,7 @@ def _auto_register_tags(
       tagged_params.add(p)
 
   # Create the Jaxpr with all the tag registrations
-  make_var_func = jax.core.gensym([mid_graph.jaxpr])
+  make_var_func = jax.core.gensym()
   eqns = list()
   env = {}
   pattern_counters = {}

@@ -129,7 +129,6 @@ class TestGraphMatcher(parameterized.TestCase):
         self.assertEqual(v2, vars_to_vars[v1])
       self.assertEqual(v1.aval.shape, v2.aval.shape)
       self.assertEqual(v1.aval.dtype, v2.aval.dtype)
-      self.assertEqual(v1.count, v2.count)
 
   @parameterized.parameters(models.NON_LINEAR_MODELS + models.SCAN_MODELS)
   def test_auto_register_tags_jaxpr(
