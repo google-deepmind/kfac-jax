@@ -1107,7 +1107,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
   @property
   def array_shape(self) -> Shape:
     """The shape of the single non axis grouped array."""
-    avals = [jnp.zeros(v.aval.shape) for v in self.parameter_variables]
+    avals = [jnp.zeros(v.aval.shape) for v in self.parameter_variables]  # pytype: disable=attribute-error  # always-use-property-annotation
     return self.parameters_shaped_list_to_array(avals).shape
 
   @property

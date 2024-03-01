@@ -288,7 +288,7 @@ class ProcessedJaxpr(utils.Finalizable):
       return False
 
     # Verify whether parameter shapes are equivalent
-    if any(p_i.aval.shape != p_j.aval.shape
+    if any(p_i.aval.shape != p_j.aval.shape  # pytype: disable=attribute-error  # always-use-property-annotation
            for p_i, p_j in zip(self.params_vars_flat, other.params_vars_flat)):
       return False
 
