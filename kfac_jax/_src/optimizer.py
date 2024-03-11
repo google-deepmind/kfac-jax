@@ -1218,6 +1218,8 @@ class Optimizer(utils.WithStagedMethods):
     if self._include_registered_loss_in_stats:
       assert aux is not None
       stats["loss_registered"] = aux.pop("loss_registered")
+      stats["loss_registered"] = utils.pmean_if_pmap(stats["loss_registered"],
+                                                     self.pmap_axis_name)
       stats["loss_registered_reldiff"] = (
           stats["loss_registered"] - loss) / loss
 
