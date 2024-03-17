@@ -4,7 +4,7 @@ sphinxcontrib-katex==0.9.7
 sphinxcontrib-bibtex==2.6.1
 sphinx-autodoc-typehints==1.20.0
 pandoc==2.3
-IPython==7.16.1
+IPython==8.10.0
 ipykernel==5.3.4
 myst_nb==0.17.2
 docutils==0.17.0
