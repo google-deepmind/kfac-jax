@@ -31,6 +31,9 @@ DType = utils.DType
 LossFunctionInputs = Tuple[Array, ...]
 
 
+# pylint: disable=g-one-element-tuple
+
+
 class LossFunction(utils.Finalizable):
   """Abstract base class for loss functions.
 
@@ -1040,6 +1043,8 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       vector: Sequence[Array]
   ) -> Tuple[Array]:
 
+    assert len(vector) == 1
+
     probs = self._probs
 
     fisher_product = vector[0] * probs - probs * jnp.sum(
@@ -1051,6 +1056,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       vector: Array
   ) -> Tuple[Array]:
+
     probs = self._probs
 
     sqrt_probs = self._sqrt_probs
@@ -1062,6 +1068,8 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       vector: Sequence[Array]
   ) -> Array:
+
+    assert len(vector) == 1
 
     probs = self._probs
 

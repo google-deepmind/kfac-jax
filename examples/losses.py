@@ -84,6 +84,7 @@ def softmax_cross_entropy(
     registration_module: types.ModuleType = kfac_jax,
 ) -> Array:
   """Softmax cross entropy loss."""
+
   extra_registration_kwargs = extra_registration_kwargs or {}
 
   if register_loss:

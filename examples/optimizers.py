@@ -899,8 +899,8 @@ def kfac_resnet50_schedule(
 #   codebase simple and compact.
 # - Optax's `warmup_cosine_decay_schedule` and
 #   `warmup_exponential_decay_schedule` are implemented by simply combining
-#   `linear_schedule` and the corresponding schedule. So we can prepare a
-#   general warmup scheduler factory that returns a combination of `linear_
+#   `polynomial_schedule` and the corresponding schedule. So we can prepare a
+#   general warmup scheduler factory that returns a combination of `polynomial_
 #   schedule` and the given base scheduler based on the arguments e.g. warmup_
 #   steps.
 
@@ -957,7 +957,7 @@ def cosine_schedule(
       warmup_data = warmup_epochs * dataset_size
 
     elif warmup_fraction is not None:
-      warmup_data = warmup_fraction * total_steps * train_total_batch_size
+      warmup_data = warmup_fraction * total_epochs * dataset_size
 
     else:
       warmup_data = warmup_steps * train_total_batch_size
@@ -1014,14 +1014,15 @@ def stepwise_schedule(
   """A basic stepwise schedule."""
 
   if (epoch_boundaries is None) == (step_boundaries is None):
-    raise ValueError("Exactly one of `epoch_boundaries` and `step_boundaries` "
+    raise ValueError("Exactly one of 'epoch_boundaries' and 'step_boundaries' "
                      "can must be passed.")
 
   if (warmup_epochs is None) == (warmup_steps is None):
-    raise ValueError("Exactly one of `warmup_epochs` and `warmup_steps` must "
+    raise ValueError("Exactly one of 'warmup_epochs' and 'warmup_steps' must "
                      "be set.")
 
-  values = jnp.array(lr_decay_factors) * initial_learning_rate
+  values = jnp.concatenate(
+      [jnp.array([1.0]), jnp.array(lr_decay_factors)]) * initial_learning_rate
 
   if warmup_epochs is not None or epoch_boundaries is not None:
 
@@ -1056,7 +1057,10 @@ def stepwise_schedule(
     index = jnp.sum(data_boundaries <= data_seen)
     value = jnp.take(values, index)
 
-    return value * jnp.minimum(1., data_seen / warmup_data)
+    if warmup_data > 0.0:
+      return value * jnp.minimum(1., data_seen / warmup_data)
+    else:
+      return value
 
   else:
 
@@ -1065,7 +1069,10 @@ def stepwise_schedule(
     index = jnp.sum(step_boundaries <= global_step)
     value = jnp.take(values, index)
 
-    return value * jnp.minimum(1., global_step / warmup_steps)
+    if warmup_steps > 0.0:
+      return value * jnp.minimum(1., global_step / warmup_steps)
+    else:
+      return value
 
 
 def exponential_decay_schedule(
@@ -1076,42 +1083,165 @@ def exponential_decay_schedule(
     total_epochs: Optional[float],
     init_value: float,
     end_value: float,
-    decay_epochs: Optional[float] = None,
-    decay_steps: Optional[int] = None,
-    decay_fraction: Optional[float] = None,
+    start_epochs: Optional[float] = None,
+    start_steps: Optional[int] = None,
+    start_fraction: Optional[float] = None,
+    data_seen: Optional[Numeric] = None,
     **_: Any,
 ):
   """Exponential decay schedule."""
-  if (total_steps is None) == (total_epochs is None):
-    raise ValueError("Only one of `steps` and `epochs` can be set.")
 
-  n = sum(x is not None for x in [decay_epochs, decay_steps, decay_fraction])
+  if (total_steps is None) == (total_epochs is None):
+    raise ValueError("Exactly one of 'total_steps' and 'total_epochs' must be "
+                     "set.")
+
+  n = sum(x is not None for x in [start_epochs, start_steps, start_fraction])
 
   if n != 1:
-    raise ValueError(
-        f"Exactly one of warmup_steps={decay_steps}, "
-        f"warmup_epochs={decay_epochs} and warmpu_fraction="
-        f"{decay_fraction} must be set."
-    )
+    raise ValueError(f"Exactly one of start_steps={start_steps}, "
+                     f"start_epochs={start_epochs} and start_fraction="
+                     f"{start_fraction} must be set.")
 
-  if (
-      decay_epochs is not None or total_epochs is not None
-  ) and train_total_batch_size is None:
-    raise ValueError(
-        "Batch size must be known when passing epochs or warmup_epochs."
-    )
+  if start_epochs is not None or total_epochs is not None:
 
-  if decay_epochs is not None:
-    decay_steps = decay_epochs * dataset_size / train_total_batch_size
-  elif decay_fraction is not None:
-    decay_steps = decay_fraction * total_steps
+    if data_seen is None:
 
-  return optax.exponential_decay(
-      init_value=init_value,
-      end_value=end_value,
-      decay_rate=end_value / init_value,
-      transition_steps=decay_steps,
-  )(global_step)
+      if train_total_batch_size is not None:
+        data_seen = global_step * train_total_batch_size
+
+      else:
+        raise ValueError("One of 'train_total_batch_size' or 'data_seen' must "
+                         "passed when 'total_epochs' or 'start_epochs' are "
+                         "passed.")
+
+    if ((start_epochs is None or total_epochs is None)
+        and train_total_batch_size is None):
+
+      raise ValueError("'train_total_batch_size' must be passed if only one of "
+                       "'total_epochs' or 'start_epochs' are passed.")
+
+    if start_epochs is not None:
+      start_data = start_epochs * dataset_size
+
+    elif start_fraction is not None:
+      start_data = start_fraction * total_epochs * dataset_size
+
+    else:
+      start_data = start_steps * train_total_batch_size
+
+    if total_epochs is not None:
+      total_data = total_epochs * dataset_size
+
+    else:
+      total_data = total_steps * train_total_batch_size
+
+    return optax.exponential_decay(
+        init_value=init_value,
+        end_value=end_value,
+        decay_rate=end_value / init_value,
+        transition_begin=start_data,
+        transition_steps=total_data - start_data,
+    )(data_seen)
+
+  else:
+
+    if start_fraction is not None:
+      start_steps = start_fraction * total_steps
+
+    # Optax uses chex which has an inconsistent definition of "Numeric" from
+    # what we use here.
+    return optax.exponential_decay(  # pytype: disable=bad-return-type
+        init_value=init_value,
+        end_value=end_value,
+        decay_rate=end_value / init_value,
+        transition_begin=start_steps,
+        transition_steps=total_steps - start_steps,
+    )(global_step)
+
+
+def polynomial_schedule(
+    global_step: int,
+    dataset_size: int,
+    train_total_batch_size: Optional[int],
+    total_steps: Optional[int],
+    total_epochs: Optional[float],
+    init_value: float,
+    end_value: float,
+    power: Numeric = 1,
+    start_epochs: Optional[float] = None,
+    start_steps: Optional[int] = None,
+    start_fraction: Optional[float] = None,
+    data_seen: Optional[Numeric] = None,
+    **_: Any,
+):
+  """Polynomial schedule (defaults to linear)."""
+
+  if (total_steps is None) == (total_epochs is None):
+    raise ValueError("Exactly one of 'total_steps' and 'total_epochs' must be "
+                     "set.")
+
+  n = sum(x is not None for x in [start_epochs, start_steps, start_fraction])
+
+  if n != 1:
+    raise ValueError(f"Exactly one of start_steps={start_steps}, "
+                     f"start_epochs={start_epochs} and start_fraction="
+                     f"{start_fraction} must be set.")
+
+  if start_epochs is not None or total_epochs is not None:
+
+    if data_seen is None:
+
+      if train_total_batch_size is not None:
+        data_seen = global_step * train_total_batch_size
+
+      else:
+        raise ValueError("One of 'train_total_batch_size' or 'data_seen' must "
+                         "passed when 'total_epochs' or 'start_epochs' are "
+                         "passed.")
+
+    if ((start_epochs is None or total_epochs is None)
+        and train_total_batch_size is None):
+
+      raise ValueError("'train_total_batch_size' must be passed if only one of "
+                       "'total_epochs' or 'start_epochs' are passed.")
+
+    if start_epochs is not None:
+      start_data = start_epochs * dataset_size
+
+    elif start_fraction is not None:
+      start_data = start_fraction * total_epochs * dataset_size
+
+    else:
+      start_data = start_steps * train_total_batch_size
+
+    if total_epochs is not None:
+      total_data = total_epochs * dataset_size
+
+    else:
+      total_data = total_steps * train_total_batch_size
+
+    return optax.polynomial_schedule(
+        init_value=init_value,
+        end_value=end_value,
+        power=power,
+        transition_begin=start_data,
+        transition_steps=total_data - start_data,
+    )(data_seen)
+
+  else:
+
+    if start_fraction is not None:
+      start_steps = start_fraction * total_steps
+
+    # Optax uses chex which has an inconsistent definition of "Numeric" from
+    # what we use here.
+    return optax.polynomial_schedule(  # pytype: disable=bad-return-type
+        init_value=init_value,
+        end_value=end_value,
+        power=power,
+        transition_begin=start_steps,
+        transition_steps=total_steps - start_steps,
+    )(global_step)
 
 
 def construct_schedule(
@@ -1132,6 +1262,8 @@ def construct_schedule(
     return functools.partial(stepwise_schedule, **kwargs)
   elif name == "exponential_decay":
     return functools.partial(exponential_decay_schedule, **kwargs)
+  elif name == "polynomial":
+    return functools.partial(polynomial_schedule, **kwargs)
   else:
     raise NotImplementedError(name)
 
