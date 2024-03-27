@@ -448,8 +448,8 @@ def psd_matrix_norm(
 
       elif method_2norm == "power_iteration":
 
-        return optax.power_iteration(
-            matrix, num_iters=300, error_tolerance=1e-7)[1]
+        return float(optax.power_iteration(
+            matrix, num_iters=300, error_tolerance=1e-7)[0])
 
       else:
         raise ValueError(f"Unrecognized method string: '{norm_type}'")
