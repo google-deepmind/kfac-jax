@@ -827,19 +827,16 @@ class Optimizer(utils.WithStagedMethods):
         pmap_axis_name=self.pmap_axis_name,
     )
 
-  # TODO(jamesmartens, botev): It's ugly that this method implements the norm
-  # constraint on top of computing the preconditioned gradient. Should refactor.
   @utils.staged
   def _compute_preconditioned_gradient(
       self,
       state: "Optimizer.State",
       grads: Params,
-      coefficient: Optional[Array],
       damping: Array,
-  ) -> Tuple[Params, Optional[Array]]:
-    """Computes the preconditioned gradient, maybe applying norm-constraint."""
+  ) -> Params:
+    """Computes the preconditioned gradient."""
 
-    preconditioned_grads = self.estimator.multiply_inverse(
+    return self.estimator.multiply_inverse(
         state=state.estimator_state,
         parameter_structured_vector=grads,
         identity_weight=(self.l2_reg + damping) * self._precon_damping_mult,
@@ -849,23 +846,25 @@ class Optimizer(utils.WithStagedMethods):
         norm_to_scale_identity_weight_per_block=self._norm_to_scale_identity_weight_per_block,
     )
 
-    if self._norm_constraint:
+  @utils.staged
+  def _maybe_apply_norm_constraint(
+      self, grads: Params, preconditioned_grads: Params, coefficient: Array
+  ) -> Tuple[Params, Optional[Params]]:
+    """Scales precon grad to have F-weighted norm <= norm_constraint."""
+    if self._norm_constraint is None:
+      return preconditioned_grads, None
 
-      assert not self._use_adaptive_learning_rate
-      assert coefficient is not None
+    assert not self._use_adaptive_learning_rate
 
-      sq_norm_grads = utils.inner_product(preconditioned_grads, grads)
+    sq_norm_grads = utils.inner_product(preconditioned_grads, grads)
+    sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
 
-      sq_norm_scaled_grads = sq_norm_grads * coefficient ** 2
+    max_coefficient = jnp.sqrt(self._norm_constraint / sq_norm_scaled_grads)
+    coefficient = jnp.minimum(max_coefficient, 1)
 
-      max_coefficient = jnp.sqrt(self._norm_constraint / sq_norm_scaled_grads)
-      coefficient = jnp.minimum(max_coefficient, 1)
+    precon_grad = utils.scalar_mul(preconditioned_grads, coefficient)
 
-      preconditioned_grads = utils.scalar_mul(preconditioned_grads, coefficient)
-    else:
-      sq_norm_scaled_grads = None
-
-    return preconditioned_grads, sq_norm_scaled_grads
+    return precon_grad, sq_norm_scaled_grads
 
   def _compute_quad_change_for_damping(
       self,
@@ -1130,10 +1129,17 @@ class Optimizer(utils.WithStagedMethods):
     state = self._maybe_update_inverse_cache(state, damping)
 
     # Compute proposed directions
-    preconditioned_gradient, sq_norm_scaled_grads = (
-        self._compute_preconditioned_gradient(
-            state, grads, learning_rate, damping)
+    preconditioned_gradient = self._compute_preconditioned_gradient(
+        state, grads, damping
     )
+
+    # constrain the norms
+    preconditioned_gradient, sq_norm_scaled_grads = (
+        self._maybe_apply_norm_constraint(
+            grads, preconditioned_gradient, learning_rate,
+        )
+    )
+
     vectors = (preconditioned_gradient, state.velocities)
 
     # Compute the coefficients for the vectors
