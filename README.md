@@ -37,7 +37,7 @@ $ pip install -U kfac-jax
 Our examples rely on additional libraries, all of which you can install using:
 
 ```bash
-$ pip install -r requirements_examples.txt
+$ pip install kfac-jax[examples]
 ```
 
 ## Quickstart<a id="quickstart"></a>

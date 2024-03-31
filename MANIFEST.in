@@ -1,4 +1,1 @@
-include README.md
-include LICENSE
-include requirements*.txt
 include kfac_jax/py.typed
