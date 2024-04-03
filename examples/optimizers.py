@@ -36,6 +36,8 @@ FuncArgsVariants = kfac_jax.optimizer.FuncArgsVariants
 ScheduleType = kfac_jax.optimizer.ScheduleType
 OptaxCtor = Callable[[ScheduleType], optax.GradientTransformation]
 EstimatorState = kfac_jax.curvature_estimator.BlockDiagonalCurvature.State
+EstimationMode = kfac_jax.curvature_estimator.EstimationMode
+CalculationMode = kfac_jax.curvature_estimator.CalculationMode
 EmptyState = optax.EmptyState
 
 
@@ -54,7 +56,10 @@ class Preconditioner:
       damping: float | None = None,
       damping_schedule: ScheduleType | None = None,
       norm_constraint: Numeric | None = None,
-      estimation_mode: str = "fisher_gradients",
+      estimation_mode: EstimationMode = EstimationMode(
+          curvature_mode=kfac_jax.curvature_estimator.CurvatureMode.FISHER,
+          calculation_mode=CalculationMode.GRADIENTS,
+      ),
       curvature_ema: Numeric = 0.95,
       curvature_update_period: int = 1,
       inverse_update_period: int = 5,
@@ -96,10 +101,10 @@ class Preconditioner:
         its approximate squared Fisher norm ``v^T F v`` is at most the specified
         value. (Note that here ``F`` is the approximate curvature matrix, not
         the exact.) (Default: ``None``)
-      estimation_mode: String. The type of estimator to use for the curvature
-        matrix. See the documentation for :class:`~CurvatureEstimator` for a
-        detailed description of the possible options. (Default:
-        ``fisher_gradients``).
+      estimation_mode: EstimationMode. The type of estimator to use for the
+        curvature matrix. See the documentation for :class:`~CurvatureEstimator`
+        for a detailed description of the possible options. (Default:
+        fisher gradients).
       curvature_ema: The decay factor used when calculating the covariance
         estimate moving averages. (Default: ``0.95``)
       curvature_update_period: Int. The number of steps in between updating the
@@ -141,8 +146,8 @@ class Preconditioner:
         operations for all of the layers. (Default: True)
       num_samples: Number of samples (per case) to use when computing stochastic
         curvature matrix estimates. This option is only used when
-        ``estimation_mode == 'fisher_gradients'`` or ``estimation_mode ==
-        '[fisher,ggn]_curvature_prop'``. (Default: 1)
+        ``estimation_mode.calculation_mode == GRADIENTS`` or
+        ``estimation_mode.calculation_mode == CURVATURE_PROP``. (Default: 1)
       should_vmap_samples: Whether to use ``jax.vmap`` to compute samples
         when ``num_samples > 1``. (Default: False)
       norm_to_scale_identity_weight_per_block: The name of a norm to use to

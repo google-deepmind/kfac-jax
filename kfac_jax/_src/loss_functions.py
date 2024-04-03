@@ -1221,11 +1221,11 @@ def register_normal_predictive_distribution(
   Args:
     mean: A tensor defining the mean vector of the distribution. The first
       dimension will usually be the batch size, but doesn't need to be (unless
-      using ``estimation_mode='fisher_exact'`` or
-      ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
+      using ``estimation_mode.calculation_mode == EXACT`` in the
+      optimizer/estimator).
     targets: (OPTIONAL) The targets for the loss function. Only required if
-      using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
-      (Default: None)
+      using ``estimation_mode.calcluation_mode == EMPIRICAL`` in the
+      optimizer/estimator. (Default: None)
     variance: The variance of the distribution. Must be a constant scalar,
       independent of the network's parameters. Note that the default value of
       0.5 corresponds to a standard squared error loss
@@ -1288,11 +1288,11 @@ def register_squared_error_loss(
   Args:
     prediction: The prediction made by the network (i.e. its output). The first
       dimension will usually be the batch size, but doesn't need to be (unless
-      using ``estimation_mode='fisher_exact'`` or
-      ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
+      using ``estimation_mode.calculation_mode == EXACT`` in the
+      optimizer/estimator).
     targets: (OPTIONAL) The targets for the loss function. Only required if
-      using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
-      (Default: None)
+      using ``estimation_mode.calcluation_mode == EMPIRICAL`` in the
+      optimizer/estimator. (Default: None)
     weight: The constant scalar coefficient which this loss is multiplied by.
       Note that this must be constant and independent of the network's
       parameters. (Default: 1.0)
@@ -1329,11 +1329,11 @@ def register_multi_bernoulli_predictive_distribution(
   Args:
     logits: The logits of the distribution (i.e. its parameters) as a 2D array
       of floats. The first dimension will usually be the batch size, but doesn't
-      need to be (unless using ``estimation_mode='fisher_exact'`` or
-      ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
+      need to be (unless using ``estimation_mode.calculation_mode == EXACT`` in
+      the optimizer/estimator).
     targets: (OPTIONAL) The targets for the loss function.  Only required if
-      using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
-      (Default: None)
+      using ``estimation_mode.calcluation_mode == EMPIRICAL`` in the
+      optimizer/estimator. (Default: None)
     weight: The constant scalar coefficient that the log prob loss associated
       with this distribution is multiplied by. This is NOT equivalent to
       changing the temperature of the distribution since we don't renormalize
@@ -1380,12 +1380,12 @@ def register_sigmoid_cross_entropy_loss(
   Args:
     logits: The input logits of the loss as a 2D array of floats. The first
       dimension will usually be the batch size, but doesn't need to be (unless
-      using ``estimation_mode='fisher_exact'`` or
-      ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
+      using ``estimation_mode.calculation_mode == EXACT`` in the
+      optimizer/estimator).
     targets: (OPTIONAL) The targets for the loss function. Must be of the same
       shape as ``logits``. Only required if using
-      ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
-      (Default: None)
+      ``estimation_mode.calcluation_mode == EMPIRICAL`` in the
+      optimizer/estimator.(Default: None)
     weight: The constant scalar coefficient which this loss is multiplied by.
       Note that this must be constant and independent of the network's
       parameters. (Default: 1.0)
@@ -1413,14 +1413,14 @@ def register_categorical_predictive_distribution(
   Args:
     logits: The logits of the distribution (i.e. its parameters) as a 2D array
       of floats. The first dimension will usually be the batch size, but doesn't
-      need to be (unless using ``estimation_mode='fisher_exact'`` or
-      ``estimation_mode='ggn_exact'`` in the optimizer/estimator). The second
-      dimension is the one over which the softmax is computed.
+      need to be (unless using ``estimation_mode.calculation_mode == EXACT`` in
+      the optimizer/estimator). The second dimension is the one over which the
+      softmax is computed.
     targets: (OPTIONAL) The values at which the log probability of this
       distribution is evaluated (to give the loss).  Must be a 2D array of
       integers with shape ``(logits.shape[0],)``. Only required if using
-      ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
-      (Default: None)
+      ``estimation_mode.calcluation_mode == EMPIRICAL`` in the
+      optimizer/estimator. (Default: None)
     mask: (OPTIONAL) Mask to apply to log probabilities generated by the
       distribution. Should be 0/1-valued and of shape ``(logits.shape[0],)``.
       Log probablities corresponding to mask values of False will be treated
@@ -1484,13 +1484,13 @@ def register_softmax_cross_entropy_loss(
   Args:
     logits: The input logits of the loss as a 2D array of floats. The first
       dimension will usually be the batch size, but doesn't need to be (unless
-      using ``estimation_mode='fisher_exact'`` or
-      ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
+      using ``estimation_mode.calculation_mode == EXACT`` in the
+      optimizer/estimator).
       The second dimension is the one over which the softmax is computed.
     targets: (OPTIONAL) The targets for the loss function. Must be a 1D array of
       integers with shape ``(logits.shape[0],)``. Only required if using
-      ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
-      (Default: None)
+      ``estimation_mode.calcluation_mode == EMPIRICAL`` in the
+      optimizer/estimator. (Default: None)
     mask: (OPTIONAL) Mask to apply to losses. Should be 0/1-valued and of shape
       ``(logits.shape[0],)``. Losses corresponding to mask values of False will
       be treated as constant and equal to 0. (Default: None)

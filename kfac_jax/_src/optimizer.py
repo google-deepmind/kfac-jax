@@ -61,6 +61,8 @@ ReturnWithoutFuncState = tuple[
     Params, OptimizerState, dict[str, Array]
 ]
 ReturnEither = ReturnWithFuncState | ReturnWithoutFuncState
+EstimationMode = curvature_estimator.EstimationMode
+CurvatureMode = curvature_estimator.CurvatureMode
 
 
 class Optimizer(utils.WithStagedMethods):
@@ -119,7 +121,7 @@ class Optimizer(utils.WithStagedMethods):
       precon_damping_mult: Numeric = 1.0,
       norm_constraint: Numeric | None = None,
       num_burnin_steps: int = 10,
-      estimation_mode: str | None = None,
+      estimation_mode: EstimationMode = EstimationMode(),
       custom_estimator_ctor: (
           Callable[..., BlockDiagonalCurvature] | None) = None,
       curvature_ema: Numeric = 0.95,
@@ -289,14 +291,13 @@ class Optimizer(utils.WithStagedMethods):
         before performing the actual step the optimizer will perform this many
         times updates to the curvature approximation without updating the actual
         parameters. (Default: ``10``)
-      estimation_mode: String. The type of estimator to use for the curvature
-        matrix. See the documentation for :class:`~CurvatureEstimator` for a
-        detailed description of the possible options. If ``None`` will use
-        default estimation_mode mode of the used CurvatureEstimator subclass,
-        which is typically "fisher_gradients". (Default: ``None``)
+      estimation_mode: EstimationMode. The type of estimator to use for the
+        curvature matrix. See the documentation for :class:`~EstimationMode`
+        for a detailed description of the possible options. Defaults to the
+        default estimation_mode value.
       custom_estimator_ctor: Optional constructor for subclass of
         :class:`~BlockDiagonalCurvature`. If specified, the optimizer will use
-        this conastructor instead of the default
+        this constructor instead of the default
         :class:`~BlockDiagonalCurvature`. (Default: ``None``)
       curvature_ema: The decay factor used when calculating the covariance
         estimate moving averages. (Default: ``0.95``)
@@ -371,8 +372,8 @@ class Optimizer(utils.WithStagedMethods):
         (Default: True)
       num_estimator_samples: Number of samples (per case) to use when computing
         stochastic curvature matrix estimates. This option is only used when
-        ``estimation_mode == 'fisher_gradients'`` or ``estimation_mode ==
-        '[fisher,ggn]_curvature_prop'``. (Default: 1)
+        ``estimation_mode.calculation_mode == GRADIENTS`` or
+        ``estimation_mode.calculation_mode == CURVATURE_PROP``. (Default: 1)
       should_vmap_estimator_samples: Whether to use ``jax.vmap`` to compute
         samples when ``num_estimator_samples > 1``. (Default: False)
       norm_to_scale_identity_weight_per_block: The name of a norm to use to
@@ -1348,15 +1349,13 @@ class Optimizer(utils.WithStagedMethods):
 
     del state
 
-    if self.estimator.default_mat_type == "fisher":
-      c_factor_v = tuple(self._implicit.multiply_fisher_factor_transpose
-                         (func_args, vi) for vi in vectors)
-    elif self.estimator.default_mat_type == "ggn":
-      c_factor_v = tuple(self._implicit.multiply_ggn_factor_transpose
-                         (func_args, vi) for vi in vectors)
-    else:
-      raise ValueError(f"Unrecognized estimator.mat_type="
-                       f"{self.estimator.default_mat_type}.")
+    match self.estimator.default_mat_type:
+      case CurvatureMode.FISHER:
+        c_factor_v = tuple(self._implicit.multiply_fisher_factor_transpose
+                           (func_args, vi) for vi in vectors)
+      case CurvatureMode.GGN:
+        c_factor_v = tuple(self._implicit.multiply_ggn_factor_transpose
+                           (func_args, vi) for vi in vectors)
 
     return (utils.matrix_of_inner_products(c_factor_v),
             utils.matrix_of_inner_products(vectors),

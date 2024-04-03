@@ -28,26 +28,29 @@ Array = kfac_jax.utils.Array
 PRNGKey = kfac_jax.utils.PRNGKey
 Shape = kfac_jax.utils.Shape
 StateType = kfac_jax.curvature_estimator.StateType
+CurvatureMode = kfac_jax.curvature_estimator.CurvatureMode
+CalculationMode = kfac_jax.curvature_estimator.CalculationMode
+EstimationMode = kfac_jax.curvature_estimator.EstimationMode
 
 
-NON_LINEAR_MODELS_AND_CURVATURE_TYPE = [
-    model + ("ggn",) for model in models.NON_LINEAR_MODELS
+NON_LINEAR_MODELS_AND_CURVATURE_MODE = [
+    model + (CurvatureMode.GGN,) for model in models.NON_LINEAR_MODELS
 ] + [
-    model + ("fisher",) for model in models.NON_LINEAR_MODELS
+    model + (CurvatureMode.FISHER,) for model in models.NON_LINEAR_MODELS
 ]
 
 
-LINEAR_MODELS_AND_CURVATURE_TYPE = [
-    model + ("ggn",) for model in models.LINEAR_MODELS
+LINEAR_MODELS_AND_CURVATURE_MODE = [
+    model + (CurvatureMode.GGN,) for model in models.LINEAR_MODELS
 ] + [
-    model + ("fisher",) for model in models.LINEAR_MODELS
+    model + (CurvatureMode.FISHER,) for model in models.LINEAR_MODELS
 ]
 
 
 PIECEWISE_LINEAR_MODELS_AND_CURVATURE = [
-    model + ("ggn",) for model in models.PIECEWISE_LINEAR_MODELS
+    model + (CurvatureMode.GGN,) for model in models.PIECEWISE_LINEAR_MODELS
 ] + [
-    model + ("fisher",) for model in models.PIECEWISE_LINEAR_MODELS
+    model + (CurvatureMode.FISHER,) for model in models.PIECEWISE_LINEAR_MODELS
 ]
 
 
@@ -57,7 +60,7 @@ def compute_exact_approx_curvature(
     rng: PRNGKey,
     func_args: kfac_jax.utils.FuncArgs,
     batch_size: int,
-    curvature_type: str,
+    curvature_mode: CurvatureMode,
 ) -> StateType:
   """Computes the full Fisher matrix approximation for the estimator."""
   state = estimator.init(
@@ -74,7 +77,9 @@ def compute_exact_approx_curvature(
       batch_size=batch_size,
       rng=rng,
       func_args=func_args,
-      estimation_mode=f"{curvature_type}_exact",
+      estimation_mode=EstimationMode(
+          curvature_mode=curvature_mode,
+          calculation_mode=CalculationMode.EXACT),
   )
   estimator.sync(state, pmap_axis_name="i")
   return state
@@ -83,7 +88,7 @@ def compute_exact_approx_curvature(
 class TestEstimator(parameterized.TestCase):
   """Testing of different curvature estimators."""
 
-  def assertAllClose(
+  def assert_all_close(
       self,
       x: kfac_jax.utils.PyTree,
       y: kfac_jax.utils.PyTree,
@@ -101,14 +106,14 @@ class TestEstimator(parameterized.TestCase):
         self.assertEqual(xi.dtype, yi.dtype)
       np.testing.assert_allclose(xi, yi, rtol=rtol, atol=atol, equal_nan=False)
 
-  @parameterized.parameters(NON_LINEAR_MODELS_AND_CURVATURE_TYPE)
+  @parameterized.parameters(NON_LINEAR_MODELS_AND_CURVATURE_MODE)
   def test_explicit_exact_full(
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., Array],
       data_point_shapes: Mapping[str, Shape],
       seed: int,
-      curvature_type: str,
+      curvature_mode: CurvatureMode,
       data_size: int = 4,
   ):
     """Tests the explicit exact estimator matches the implicit one."""
@@ -133,7 +138,7 @@ class TestEstimator(parameterized.TestCase):
         estimator_key,
         func_args,
         data_size,
-        curvature_type,
+        curvature_mode,
     )
     explicit_exact_matrix = explicit_estimator.to_dense_matrix(state)
 
@@ -150,28 +155,28 @@ class TestEstimator(parameterized.TestCase):
         i += p.size
       v_e = jax.tree_util.tree_unflatten(
           jax.tree_util.tree_structure(params), v_e_leaves)
-      if curvature_type == "fisher":
+      if curvature_mode == CurvatureMode.FISHER:
         r_e = implicit.multiply_fisher(func_args, v_e)
-      elif curvature_type == "ggn":
+      elif curvature_mode == CurvatureMode.GGN:
         r_e = implicit.multiply_ggn(func_args, v_e)
       else:
-        raise ValueError(f"Unrecognized curvature_type={curvature_type}.")
+        raise ValueError(f"Unrecognized curvature_mode={curvature_mode}.")
       flat_r_e = jax.tree_util.tree_leaves(
           jax.tree_util.tree_map(lambda x: x.flatten(), r_e))
       return index + 1, jnp.concatenate(flat_r_e, axis=0)
     _, matrix = jax.lax.scan(mul_e_i, 0, None, length=explicit_estimator.dim)
 
     # Compare
-    self.assertAllClose(matrix, explicit_exact_matrix)
+    self.assert_all_close(matrix, explicit_exact_matrix)
 
-  @parameterized.parameters(NON_LINEAR_MODELS_AND_CURVATURE_TYPE)
+  @parameterized.parameters(NON_LINEAR_MODELS_AND_CURVATURE_MODE)
   def test_block_diagonal_full(
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., Array],
       data_point_shapes: Mapping[str, Shape],
       seed: int,
-      curvature_type: str,
+      curvature_mode: CurvatureMode,
       data_size: int = 4,
   ):
     """Tests that the block diagonal full is equal to the explicit curvature."""
@@ -203,13 +208,17 @@ class TestEstimator(parameterized.TestCase):
         estimator_key,
         func_args,
         data_size,
-        curvature_type,
+        curvature_mode,
     )
     blocks = block_estimator.to_diagonal_block_dense_matrix(block_state)
 
     # Compute curvature matrix using the explicit exact curvature
     full_estimator = kfac_jax.ExplicitExactCurvature(
-        model_func, default_estimation_mode="fisher_exact",
+        model_func,
+        default_estimation_mode=EstimationMode(
+            curvature_mode=CurvatureMode.FISHER,
+            calculation_mode=CalculationMode.EXACT,
+            ),
         param_order=block_estimator.param_order
     )
     state = compute_exact_approx_curvature(
@@ -217,7 +226,7 @@ class TestEstimator(parameterized.TestCase):
         estimator_key,
         func_args,
         data_size,
-        curvature_type,
+        curvature_mode,
     )
     full_matrix = full_estimator.to_dense_matrix(state)
 
@@ -225,7 +234,7 @@ class TestEstimator(parameterized.TestCase):
     d = 0
     for block in blocks:
       s = slice(d, d + block.shape[0])
-      self.assertAllClose(block, full_matrix[s, s])
+      self.assert_all_close(block, full_matrix[s, s])
       d = d + block.shape[0]
     self.assertEqual(d, full_matrix.shape[0])
 
@@ -236,7 +245,7 @@ class TestEstimator(parameterized.TestCase):
       model_func: Callable[..., Array],
       data_point_shapes: Mapping[str, Shape],
       seed: int,
-      curvature_type: str,
+      curvature_mode: CurvatureMode,
       data_size: int = 4,
   ):
     """Tests for piecewise linear models that block equal to the Hessian."""
@@ -267,7 +276,7 @@ class TestEstimator(parameterized.TestCase):
         estimator_key,
         func_args,
         data_size,
-        curvature_type,
+        curvature_mode,
     )
     blocks = (block_estimator.to_diagonal_block_dense_matrix(block_state))
 
@@ -296,18 +305,18 @@ class TestEstimator(parameterized.TestCase):
     d = 0
     for block in blocks:
       s = slice(d, d + block.shape[0])
-      self.assertAllClose(block, hessian[s, s])
+      self.assert_all_close(block, hessian[s, s])
       d = d + block.shape[0]
     self.assertEqual(d, hessian.shape[0])
 
-  @parameterized.parameters(NON_LINEAR_MODELS_AND_CURVATURE_TYPE)
+  @parameterized.parameters(NON_LINEAR_MODELS_AND_CURVATURE_MODE)
   def test_diagonal(
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., Array],
       data_point_shapes: Mapping[str, Shape],
       seed: int,
-      curvature_type: str,
+      curvature_mode: CurvatureMode,
       data_size: int = 4,
   ):
     """Tests that the diagonal estimation is the diagonal of the full."""
@@ -339,7 +348,7 @@ class TestEstimator(parameterized.TestCase):
         estimator_key,
         func_args,
         data_size,
-        curvature_type,
+        curvature_mode,
     )
     diagonals = diagonal_estimator.to_diagonal_block_dense_matrix(diag_state)
 
@@ -357,23 +366,23 @@ class TestEstimator(parameterized.TestCase):
         estimator_key,
         func_args,
         data_size,
-        curvature_type,
+        curvature_mode,
     )
     blocks = block_estimator.to_diagonal_block_dense_matrix(block_state)
 
     # Compare diagonals
     self.assertEqual(len(diagonals), len(blocks))
     for diagonal, block in zip(diagonals, blocks):
-      self.assertAllClose(diagonal, jnp.diag(jnp.diag(block)))
+      self.assert_all_close(diagonal, jnp.diag(jnp.diag(block)))
 
-  @parameterized.parameters(LINEAR_MODELS_AND_CURVATURE_TYPE)
+  @parameterized.parameters(LINEAR_MODELS_AND_CURVATURE_MODE)
   def test_kronecker_factored(
       self,
       init_func: Callable[..., models.hk.Params],
       model_func: Callable[..., Array],
       data_point_shapes: Mapping[str, Shape],
       seed: int,
-      curvature_type: str = "fisher",
+      curvature_mode: CurvatureMode = CurvatureMode.FISHER,
       data_size: int = 4,
   ):
     """Test for linear network if the KF blocks match the full."""
@@ -408,7 +417,7 @@ class TestEstimator(parameterized.TestCase):
         estimator_key,
         func_args,
         data_size,
-        curvature_type,
+        curvature_mode,
     )
     kf_blocks = kf_estimator.to_diagonal_block_dense_matrix(kf_state)
 
@@ -426,14 +435,14 @@ class TestEstimator(parameterized.TestCase):
         estimator_key,
         func_args,
         data_size,
-        curvature_type,
+        curvature_mode,
     )
     blocks = full_estimator.to_diagonal_block_dense_matrix(full_state)
 
     # Compare diagonals
     self.assertEqual(len(kf_blocks), len(blocks))
     for kf, block in zip(kf_blocks, blocks):
-      self.assertAllClose(kf, block)
+      self.assert_all_close(kf, block)
 
   @parameterized.parameters([
       (
@@ -451,7 +460,7 @@ class TestEstimator(parameterized.TestCase):
       self,
       data_point_shapes: Mapping[str, Shape],
       seed: int,
-      curvature_type: str = "fisher",
+      curvature_mode: CurvatureMode = CurvatureMode.FISHER,
       data_size: int = 4,
   ):
     """Test for linear network if the KF blocks match the full."""
@@ -493,7 +502,7 @@ class TestEstimator(parameterized.TestCase):
         estimator_key,
         func_args,
         data_size,
-        curvature_type,
+        curvature_mode,
     )
 
     cached_state = estimator.update_cache(
@@ -516,17 +525,17 @@ class TestEstimator(parameterized.TestCase):
             block_state.factors[1].value)
         out_eigs, _ = kfac_jax.utils.safe_psd_eigh(
             block_state.factors[0].value)
-        self.assertAllClose(scale * jnp.outer(out_eigs, in_eigs), eigs)
+        self.assert_all_close(scale * jnp.outer(out_eigs, in_eigs), eigs)
       elif isinstance(block_state, kfac_jax.Diagonal.State):
         diag_eigs = jnp.concatenate([factor.value.flatten() for factor in
                                      block_state.diagonal_factors])
-        self.assertAllClose(diag_eigs, eigs)
+        self.assert_all_close(diag_eigs, eigs)
       elif isinstance(block_state, kfac_jax.Full.State):
         matrix_eigs, _ = kfac_jax.utils.safe_psd_eigh(block_state.matrix.value)
-        self.assertAllClose(matrix_eigs, eigs)
+        self.assert_all_close(matrix_eigs, eigs)
       elif isinstance(block_state, kfac_jax.CurvatureBlock.State):
         # ScaledIdentity
-        self.assertAllClose(jnp.ones_like(eigs), eigs)
+        self.assert_all_close(jnp.ones_like(eigs), eigs)
       else:
         raise NotImplementedError()
 
@@ -546,7 +555,7 @@ class TestEstimator(parameterized.TestCase):
       self,
       data_point_shapes: Mapping[str, Shape],
       seed: int,
-      curvature_type: str,
+      curvature_mode: CurvatureMode,
       data_size: int = 4,
       e: float = 1.0,
   ):
@@ -589,7 +598,7 @@ class TestEstimator(parameterized.TestCase):
         estimator_key,
         func_args,
         data_size,
-        curvature_type,
+        curvature_mode,
     )
 
     cached_state = estimator.update_cache(
@@ -607,7 +616,7 @@ class TestEstimator(parameterized.TestCase):
 
     # Check cached and non-cached are the same
     m_inv_v2 = estimator.multiply_inverse(state, v, e, True, False, None)
-    self.assertAllClose(m_inv_v, m_inv_v2, atol=1e-5, rtol=1e-4)
+    self.assert_all_close(m_inv_v, m_inv_v2, atol=1e-5, rtol=1e-4)
 
     block_vectors = estimator.params_vector_to_blocks_vectors(v)
     results = estimator.params_vector_to_blocks_vectors(m_v)
@@ -622,12 +631,12 @@ class TestEstimator(parameterized.TestCase):
 
       # Matrix multiplication
       computed = block_matrices[i] @ v_i_flat + e * v_i_flat
-      self.assertAllClose(computed, r_i_flat)
+      self.assert_all_close(computed, r_i_flat)
 
       # Matrix inverse multiplication
       m_i_plus_eye = block_matrices[i] + e * jnp.eye(block_matrices[i].shape[0])
       computed2 = jnp.linalg.solve(m_i_plus_eye, v_i_flat)
-      self.assertAllClose(computed2, r2_i_flat, atol=1e-5, rtol=1e-4)
+      self.assert_all_close(computed2, r2_i_flat, atol=1e-5, rtol=1e-4)
 
   @parameterized.parameters([
       (
@@ -645,7 +654,7 @@ class TestEstimator(parameterized.TestCase):
       self,
       data_point_shapes: Mapping[str, Shape],
       seed: int,
-      curvature_type: str,
+      curvature_mode: CurvatureMode,
       data_size: int = 4,
   ):
     """Tests that the products of the curvature factors are correct."""
@@ -673,18 +682,18 @@ class TestEstimator(parameterized.TestCase):
     estimator = kfac_jax.ImplicitExactCurvature(model_func)
 
     v = init_func(init_key2, data)
-    if curvature_type == "fisher":
+    if curvature_mode == CurvatureMode.FISHER:
       c_factor_v = estimator.multiply_fisher_factor_transpose(func_args, v)
       c_v_1 = estimator.multiply_fisher_factor(func_args, c_factor_v)
       c_v_2 = estimator.multiply_fisher(func_args, v)
-    elif curvature_type == "ggn":
+    elif curvature_mode == CurvatureMode.GGN:
       c_factor_v = estimator.multiply_ggn_factor_transpose(func_args, v)
       c_v_1 = estimator.multiply_ggn_factor(func_args, c_factor_v)
       c_v_2 = estimator.multiply_ggn(func_args, v)
     else:
       raise NotImplementedError()
 
-    self.assertAllClose(c_v_1, c_v_2, atol=1e-6, rtol=1e-6)
+    self.assert_all_close(c_v_1, c_v_2, atol=1e-6, rtol=1e-6)
 
 
 if __name__ == "__main__":

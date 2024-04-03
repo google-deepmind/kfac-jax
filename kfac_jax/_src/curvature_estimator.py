@@ -48,6 +48,8 @@ https://arxiv.org/abs/1412.1193 for more information about the Hessian, Fisher
 and GGN matrices and how to compute matrix-vector products.
 """
 import abc
+import dataclasses
+import enum
 import functools
 from typing import Any, Callable, Sequence, Mapping, Generic, TypeVar
 import jax
@@ -78,10 +80,62 @@ CurvatureBlockCtor = Callable[
 ]
 StateType = TypeVar("StateType")
 
-# Special global variables
-_ESTIMATION_MODES = ("fisher_gradients", "fisher_empirical", "fisher_exact",
-                     "fisher_curvature_prop", "ggn_exact", "ggn_curvature_prop")
 
+class CurvatureMode(enum.Enum):
+  FISHER = 1
+  GGN = 2
+
+
+class CalculationMode(enum.Enum):
+  GRADIENTS = 1
+  EMPIRICAL = 2
+  EXACT = 3
+  CURVATURE_PROP = 4
+
+
+@dataclasses.dataclass(frozen=True)
+class EstimationMode:
+  """The types of curvature estimator to available to use.
+
+  Valid combinations are:
+    * fisher_gradients - the basic estimation approach from the original
+      K-FAC paper.
+
+    * fisher_curvature_prop - method which estimates the Fisher using
+      self-products of random 1/-1 vectors times "half-factors" of the
+      Fisher, as described `here <https://arxiv.org/abs/1206.6464>`__.
+
+    * fisher_exact - is the obvious generalization of Curvature
+      Propagation to compute the exact Fisher (modulo any additional
+      diagonal or Kronecker approximations) by looping over one-hot vectors
+      for each coordinate of the output instead of using 1/-1 vectors. It is
+      more expensive to compute than the other three options by a factor
+      equal to the output dimension, roughly speaking.
+
+    * fisher_empirical - computes the 'empirical' Fisher information
+      matrix (which uses the data's distribution for the targets, as
+      opposed to the true Fisher which uses the model's distribution) and
+      requires that each registered loss have specified targets.
+
+    * ggn_curvature_prop - Analogous to fisher_curvature_prop, but
+      estimates the Generalized Gauss-Newton matrix (GGN).
+
+    * ggn_exact - Analogous to fisher_exact, but estimates the Generalized
+      Gauss-Newton matrix (GGN).
+
+  """
+  curvature_mode: CurvatureMode = CurvatureMode.FISHER
+  calculation_mode: CalculationMode = CalculationMode.GRADIENTS
+
+  def __post_init__(self):
+    if ((self.calculation_mode == CalculationMode.EMPIRICAL or
+         self.calculation_mode == CalculationMode.GRADIENTS) and
+        self.curvature_mode != CurvatureMode.FISHER):
+      raise ValueError("Unsupported Curvature and Calculation mode combination"
+                       f" {self.curvature_mode} and {self.calculation_mode}")
+
+
+# Special global variables
 _DEFAULT_TAG_TO_BLOCK_CTOR: dict[str, CurvatureBlockCtor] = dict(
     dense_tag=curvature_blocks.DenseTwoKroneckerFactored,
     conv2d_tag=curvature_blocks.Conv2DTwoKroneckerFactored,
@@ -610,7 +664,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       self,
       func: utils.Func,
       params_index: int = 0,
-      default_estimation_mode: str = "fisher_gradients",
+      default_estimation_mode: EstimationMode = EstimationMode(),
   ):
     """Initializes the CurvatureEstimator instance.
 
@@ -622,10 +676,6 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         calling :func:`~CurvatureEstimator.update_curvature_matrix_estimate`.
     """
 
-    if default_estimation_mode not in _ESTIMATION_MODES:
-      raise ValueError("Unrecognised default_estimation_mode "
-                       f"{default_estimation_mode}.")
-
     super().__init__()
 
     self.func = func
@@ -636,10 +686,9 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
     )
 
   @property
-  def default_mat_type(self) -> str:
+  def default_mat_type(self) -> CurvatureMode:
     """The type of matrix that this estimator is approximating."""
-    idx = self.default_estimation_mode.index("_")
-    return self.default_estimation_mode[:idx]
+    return self.default_estimation_mode.curvature_mode
 
   @property
   @abc.abstractmethod
@@ -803,7 +852,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
-      estimation_mode: str | None = None,
+      estimation_mode: EstimationMode | None = None,
   ) -> StateType:
     """Updates the estimator's curvature estimates.
 
@@ -821,33 +870,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         used for the estimation process. Should have the same structure as the
         argument ``func_args`` passed in the constructor.
       estimation_mode: The type of curvature estimator to use. By default
-        (e.g. if ``None``) will use ``self.default_estimation_mode``. One of:
-
-        * fisher_gradients - the basic estimation approach from the original
-          K-FAC paper.
-
-        * fisher_curvature_prop - method which estimates the Fisher using
-          self-products of random 1/-1 vectors times "half-factors" of the
-          Fisher, as described `here <https://arxiv.org/abs/1206.6464>`__.
-
-        * fisher_exact - is the obvious generalization of Curvature
-          Propagation to compute the exact Fisher (modulo any additional
-          diagonal or Kronecker approximations) by looping over one-hot vectors
-          for each coordinate of the output instead of using 1/-1 vectors. It is
-          more expensive to compute than the other three options by a factor
-          equal to the output dimension, roughly speaking.
-
-        * fisher_empirical - computes the 'empirical' Fisher information
-          matrix (which uses the data's distribution for the targets, as
-          opposed to the true Fisher which uses the model's distribution) and
-          requires that each registered loss have specified targets.
-
-        * ggn_curvature_prop - Analogous to fisher_curvature_prop, but
-          estimates the Generalized Gauss-Newton matrix (GGN).
-
-        * ggn_exact - Analogous to fisher_exact, but estimates the Generalized
-          Gauss-Newton matrix (GGN).
-
+        (e.g. if ``None``) will use ``self.default_estimation_mode``.
     Returns:
       The updated state.
     """
@@ -922,7 +945,7 @@ class BlockDiagonalCurvature(
       self,
       func: utils.Func,
       params_index: int = 0,
-      default_estimation_mode: str | None = None,
+      default_estimation_mode: EstimationMode = EstimationMode(),
       layer_tag_to_block_ctor:
       Mapping[str, CurvatureBlockCtor] | None = None,
       index_to_block_ctor:
@@ -941,8 +964,7 @@ class BlockDiagonalCurvature(
       params_index: The index of the parameters argument in arguments list of
         ``func``.
       default_estimation_mode: The estimation mode which to use by default when
-        calling ``self.update_curvature_matrix_estimate``. If ``None`` this will
-        be ``'fisher_gradients'``.
+        calling ``self.update_curvature_matrix_estimate``.
       layer_tag_to_block_ctor: An optional dict mapping tags to specific classes
         of block approximations, which to override the default ones.
       index_to_block_ctor: An optional dict mapping a specific block parameter
@@ -962,16 +984,15 @@ class BlockDiagonalCurvature(
         the operations for all of the blocks.
       num_samples: Number of samples (per case) to use when computing stochastic
         curvature matrix estimates. This option is only used when
-        ``estimation_mode == 'fisher_gradients'`` or ``estimation_mode ==
-        '[fisher,ggn]_curvature_prop'``.
+        ``estimation_mode.calculation_mode == GRADIENTS`` or
+        ``estimation_mode.calculation_mode == CURVATURE_PROP``.
       should_vmap_samples: Whether to use ``jax.vmap`` to compute samples
         when ``num_samples > 1``.
       **auto_register_kwargs: Any keyword arguments to pass to into the auto
         registration function.
     """
 
-    super().__init__(
-        func, params_index, default_estimation_mode or "fisher_gradients")
+    super().__init__(func, params_index, default_estimation_mode)
 
     self._index_to_block_ctor = index_to_block_ctor or dict()
     self._layer_tag_to_block_ctor = layer_tag_to_block_ctor or dict()
@@ -1392,18 +1413,19 @@ class BlockDiagonalCurvature(
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
-      estimation_mode: str | None = None,
+      estimation_mode: EstimationMode | None = None,
   ) -> "BlockDiagonalCurvature.State":
 
     if not self.finalized:
       self.finalize(func_args)
 
-    estimation_mode = estimation_mode or self.default_estimation_mode
+    estimation_mode = (self.default_estimation_mode
+                       if estimation_mode is None else estimation_mode)
 
     # Compute the losses and the VJP function from the function inputs
     losses, losses_vjp = self._compute_losses_vjp(func_args)
 
-    if "fisher" in estimation_mode:
+    if estimation_mode.curvature_mode == CurvatureMode.FISHER:
       if any(not isinstance(l, loss_functions.NegativeLogProbLoss)
              for l in losses):
         raise ValueError(
@@ -1411,7 +1433,8 @@ class BlockDiagonalCurvature(
             f"`loss_functions.NegativeLogProbLoss`, which is incompatible "
             f"with the estimation mode provided - {estimation_mode}.")
 
-    if estimation_mode == "fisher_gradients":
+    if estimation_mode.calculation_mode == CalculationMode.GRADIENTS:
+      assert estimation_mode.curvature_mode == CurvatureMode.FISHER
 
       def update_func(state_i, rng_i, ema_old_i):
 
@@ -1427,7 +1450,8 @@ class BlockDiagonalCurvature(
 
       return self._maybe_do_multiple_updates(update_func, state, rng, ema_old)
 
-    elif estimation_mode == "fisher_empirical":
+    elif estimation_mode.calculation_mode == CalculationMode.EMPIRICAL:
+      assert estimation_mode.curvature_mode == CurvatureMode.FISHER
 
       vjp_vec = tuple(
           loss.grad_of_evaluate(None, coefficient_mode="regular")
@@ -1436,7 +1460,7 @@ class BlockDiagonalCurvature(
       return self._update_blocks(vjp_vec, losses_vjp, state, ema_old, ema_new,
                                  batch_size)
 
-    elif estimation_mode in ("fisher_curvature_prop", "ggn_curvature_prop"):
+    elif estimation_mode.calculation_mode == CalculationMode.CURVATURE_PROP:
 
       def update_func(state_i, rng_i, ema_old_i):
 
@@ -1447,30 +1471,30 @@ class BlockDiagonalCurvature(
 
         for loss, key in zip(losses, keys):
 
-          if estimation_mode == "fisher_curvature_prop":
-            shape = loss.fisher_factor_inner_shape
-            random_b = jax.random.bernoulli(key, shape=shape)
-            vjp_vec.append(loss.multiply_fisher_factor(random_b * 2.0 - 1.0))
-
-          else:
-            shape = loss.ggn_factor_inner_shape
-            random_b = jax.random.bernoulli(key, shape=shape)
-            vjp_vec.append(loss.multiply_ggn_factor(random_b * 2.0 - 1.0))
+          match estimation_mode.curvature_mode:
+            case CurvatureMode.FISHER:
+              shape = loss.fisher_factor_inner_shape
+              random_b = jax.random.bernoulli(key, shape=shape)
+              vjp_vec.append(loss.multiply_fisher_factor(random_b * 2.0 - 1.0))
+            case CurvatureMode.GGN:
+              shape = loss.ggn_factor_inner_shape
+              random_b = jax.random.bernoulli(key, shape=shape)
+              vjp_vec.append(loss.multiply_ggn_factor(random_b * 2.0 - 1.0))
 
         return self._update_blocks(
             tuple(vjp_vec), losses_vjp, state_i, ema_old_i, ema_new, batch_size)
 
       return self._maybe_do_multiple_updates(update_func, state, rng, ema_old)
 
-    elif estimation_mode in ("fisher_exact", "ggn_exact"):
-
+    elif estimation_mode.calculation_mode == CalculationMode.EXACT:
       zero_tangents = jax.tree_util.tree_map(
           jnp.zeros_like, list(loss.parameter_dependants for loss in losses))
 
-      if estimation_mode == "fisher_exact":
-        shapes = [l.fisher_factor_inner_shape[1:] for l in losses]
-      else:
-        shapes = [l.ggn_factor_inner_shape[1:] for l in losses]
+      match estimation_mode.curvature_mode:
+        case CurvatureMode.FISHER:
+          shapes = [l.fisher_factor_inner_shape[1:] for l in losses]
+        case CurvatureMode.GGN:
+          shapes = [l.ggn_factor_inner_shape[1:] for l in losses]
 
       # For now we support only inner shapes of 1 dimension, hence below the
       # (loss_num_indices,).
@@ -1487,14 +1511,15 @@ class BlockDiagonalCurvature(
       # efficient compilation.
       for i, (loss, (loss_num_indices,)) in enumerate(zip(losses, shapes)):
 
-        for index in range(loss_num_indices):
+        for idx in range(loss_num_indices):
 
           vjp_vec = zero_tangents.copy()
 
-          if estimation_mode == "fisher_exact":
-            vjp_vec[i] = loss.multiply_fisher_factor_replicated_one_hot([index])
-          else:
-            vjp_vec[i] = loss.multiply_ggn_factor_replicated_one_hot([index])
+          match estimation_mode.curvature_mode:
+            case CurvatureMode.FISHER:
+              vjp_vec[i] = loss.multiply_fisher_factor_replicated_one_hot([idx])
+            case CurvatureMode.GGN:
+              vjp_vec[i] = loss.multiply_ggn_factor_replicated_one_hot([idx])
 
           if isinstance(vjp_vec[i], Array):
             # In the special case of only one parameter, it still needs to be a
@@ -1624,7 +1649,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
   This implies that the computation scales linearly (without parallelism) with
   the batch size. The class stores the estimated curvature as a dense matrix,
   hence its memory requirement is (number of parameters)^2. If
-  ``estimation_mode`` is ``fisher_exact`` or ``ggn_exact`` then this would
+  ``estimation_mode.calculation_mode`` is ``EXACT`` then this would
   compute the exact curvature, but other modes are also supported. As a result
   of looping over the input data this class needs to know the index of the batch
   in the arguments to the model function and additionally, since the loop is
@@ -1636,7 +1661,9 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       self,
       func: utils.Func,
       batch_index: int = 1,
-      default_estimation_mode: str | None = None,
+      default_estimation_mode: EstimationMode = EstimationMode(
+          curvature_mode=CurvatureMode.FISHER,
+          calculation_mode=CalculationMode.EXACT),
       layer_tag_to_block_ctor:
       Mapping[str, CurvatureBlockCtor] | None = None,
       auto_register_tags: bool = False,
@@ -1650,8 +1677,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       batch_index: Specifies at which index of the inputs to ``func`` is the
         batch, representing data over which we average the curvature.
       default_estimation_mode: The estimation mode which to use by default when
-        calling ``self.update_curvature_matrix_estimate``. If ``None`` this will
-        be ``'fisher_exact'``.
+        calling ``self.update_curvature_matrix_estimate``.
       layer_tag_to_block_ctor: An optional dict mapping tags to specific classes
         of block approximations, which to override the default ones.
       auto_register_tags: This argument will be ignored since this subclass
@@ -1689,7 +1715,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
 
     super().__init__(
         func=retagged_func,
-        default_estimation_mode=default_estimation_mode or "fisher_exact",
+        default_estimation_mode=default_estimation_mode,
         layer_tag_to_block_ctor=layer_tag_to_block_ctor,
         auto_register_tags=False,
         **kwargs,
@@ -1704,7 +1730,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
-      estimation_mode: str | None = None,
+      estimation_mode: EstimationMode | None = None,
   ) -> BlockDiagonalCurvature.State:
 
     rng = jax.random.split(rng, batch_size)
