@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kfac-jax"
+license = {"file" = "LICENSE"}
+authors = [{"name" = "DeepMind", "email" = "kfac-jax-dev@google.com"}]
+description = "A Jax package for approximate curvature estimation and optimization using KFAC."
+readme = "README.md"
+dependencies = [
+  "absl-py>=0.12.0",
+  "immutabledict>=2.2.1",
+  "numpy>=1.22",
+  "distrax>=0.1.3",
+  "jax>=0.4.7",
+  "jaxlib>=0.4.7",
+  "dm-tree>=0.1.7",
+  "optax>=0.1.4",
+]
+requires-python = ">=3.10"
+# PyPI package information.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/google-deepmind/kfac-jax"
+
+[project.optional-dependencies]
+docs = [
+  "sphinx>=5.3.0",
+  "sphinx_rtd_theme>=1.3.0",
+  "sphinxcontrib-katex>=0.9.7",
+  "sphinxcontrib-bibtex>=2.6.1",
+  "sphinx-autodoc-typehints>=1.20.0",
+  "pandoc>=2.3",
+  "IPython>=8.10.0",
+  "ipykernel>=5.3.4",
+  "myst_nb>=0.17.2",
+  "docutils>=0.17.0",
+  "matplotlib>=3.5.0",
+]
+examples = [
+  "ml_collections>=0.1.1",
+  "optax>=0.1.1",
+  "dm-haiku>=0.0.6",
+  "jaxline>=0.0.5",
+  "tensorflow>=2.8.0",
+  "tensorflow_datasets>=4.5.2",
+]
+tests = [
+  "pytest-xdist",
+  "absl-py>=0.12.0",
+  "immutabledict>=2.2.1",
+  "numpy>=1.22",
+  "distrax>=0.1.3",
+  "jax>=0.4.7",
+  "jaxlib>=0.4.7",
+  "dm-haiku>=0.0.9",
+  "dm-tree>=0.1.7",
+  "optax>=0.1.4",
+]
