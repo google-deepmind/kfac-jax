@@ -71,7 +71,7 @@ setuptools.setup(
             os.path.join(_CURRENT_DIR, "requirements_tests.txt")
         ),
     },
-    requires_python=">=3.8",
+    requires_python=">=3.10",
     include_package_data=True,
     zip_safe=False,
     # PyPI package information.
