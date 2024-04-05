@@ -13,7 +13,7 @@
 # limitations under the License.
 """K-FAC losses and layers tagging Jax primitives."""
 import types
-from typing import Any, Generic, Optional, Sequence, Type, TypeVar, Tuple, Union
+from typing import Any, Generic, Sequence, TypeVar
 
 import jax
 from jax import core
@@ -21,7 +21,7 @@ from jax import core
 # Types for annotation
 T = TypeVar("T")
 Array = jax.Array
-Arrays = Tuple[Array, ...]
+Arrays = tuple[Array, ...]
 
 
 class LossTag(core.Primitive, Generic[T]):
@@ -38,7 +38,7 @@ class LossTag(core.Primitive, Generic[T]):
 
   def __init__(
       self,
-      cls: Type[T],
+      cls: type[T],
       parameter_dependants: Sequence[str],
       parameter_independants: Sequence[str],
   ):
@@ -75,12 +75,12 @@ class LossTag(core.Primitive, Generic[T]):
     jax.interpreters.batching.primitive_batchers[self] = self._batching
 
   @property
-  def parameter_dependants_names(self) -> Tuple[str, ...]:
+  def parameter_dependants_names(self) -> tuple[str, ...]:
     """The number of parameter dependent inputs to the tag primitive."""
     return self._parameter_dependants
 
   @property
-  def parameter_independants_names(self) -> Tuple[str, ...]:
+  def parameter_independants_names(self) -> tuple[str, ...]:
     """The number of parameter **independent** inputs to the tag primitive."""
     return self._parameter_independants
 
@@ -92,7 +92,7 @@ class LossTag(core.Primitive, Generic[T]):
       self,
       *args: T,
       args_names: Sequence[str],
-  ) -> Tuple[T, ...]:
+  ) -> tuple[T, ...]:
 
     assert len(args) == len(args_names)
 
@@ -112,7 +112,7 @@ class LossTag(core.Primitive, Generic[T]):
       self,
       *args: Array,
       args_names: Sequence[str],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Verifies that the number of arguments matches expectations."""
 
     assert len(args) == len(args_names)
@@ -127,7 +127,7 @@ class LossTag(core.Primitive, Generic[T]):
       self,
       *operands: Array,
       args_names: Sequence[str],
-  ) -> Tuple[Arrays, jax.core.Effects]:
+  ) -> tuple[Arrays, jax.core.Effects]:
 
     return (self.get_outputs(*operands, args_names=args_names),
             jax.core.no_effects)
@@ -137,7 +137,7 @@ class LossTag(core.Primitive, Generic[T]):
       context: jax.interpreters.mlir.LoweringRuleContext,
       *args,
       args_names: Sequence[str],
-  ) -> Tuple[Any, ...]:
+  ) -> tuple[Any, ...]:
     """The XLA translation rule for this primitive (creates a no-op tuple)."""
 
     del context
@@ -149,7 +149,7 @@ class LossTag(core.Primitive, Generic[T]):
       arg_values: Sequence[Array],
       arg_tangents: Sequence[Array],
       args_names: Sequence[str],
-  ) -> Tuple[Arrays, Arrays]:
+  ) -> tuple[Arrays, Arrays]:
     """Computes the Jacobian-vector product for the primitive."""
 
     if len(arg_values) != len(arg_tangents):
@@ -163,9 +163,9 @@ class LossTag(core.Primitive, Generic[T]):
   def _batching(
       self,
       batched_args: Sequence[Array],
-      batched_dims: Union[int, Tuple[int, ...]],
+      batched_dims: int | tuple[int, ...],
       args_names: Sequence[str],
-  ) -> Tuple[Array, Union[int, Tuple[int, ...]]]:
+  ) -> tuple[Array, int | tuple[int, ...]]:
     """Defines how the primitive behaves under :func:`jax.vmap`."""
 
     return (self.bind(*batched_args, args_names=tuple(args_names)),
@@ -230,10 +230,10 @@ class LayerTag(core.Primitive):
   def split_all_inputs(
       self,
       all_inputs: Sequence[T],
-  ) -> Tuple[
-      Tuple[T, ...],
-      Tuple[T, ...],
-      Tuple[T, ...]
+  ) -> tuple[
+      tuple[T, ...],
+      tuple[T, ...],
+      tuple[T, ...]
   ]:
     """Splits the operands of the primitive into ``(outputs, inputs, params)``."""
 
@@ -255,7 +255,7 @@ class LayerTag(core.Primitive):
       context: jax.interpreters.mlir.LoweringRuleContext,
       *args,
       **_: Any,
-  ) -> Tuple[Any, ...]:
+  ) -> tuple[Any, ...]:
     """The XLA translation rule for this primitive - returns the ``outputs`` ."""
     # Need to return a sequence
     return (self.get_outputs(*args),)
@@ -266,7 +266,7 @@ class LayerTag(core.Primitive):
       cotangent: Array,
       *operands: Array,
       **_: Any,
-  ) -> Tuple[Union[Array, None], ...]:
+  ) -> tuple[Array | None, ...]:
     """Computes the cotangents of the operands from those of the primitive."""
     del cls  # not used
     return (cotangent,) + (None,) * (len(operands) - 1)
@@ -285,9 +285,9 @@ class LayerTag(core.Primitive):
   def _batching(
       self,
       batched_operands: Sequence[Array],
-      batched_dims: Union[int, Tuple[int, ...]],
+      batched_dims: int | tuple[int, ...],
       **kwargs: Any
-  ) -> Tuple[Array, int]:
+  ) -> tuple[Array, int]:
     """Defines how the primitive behaves under :func:`jax.vmap`."""
     return self.bind(*batched_operands, **kwargs), batched_dims[0]
 
@@ -322,7 +322,7 @@ def register_dense(
     y: Array,
     x: Array,
     w: Array,
-    b: Optional[Array] = None,
+    b: Array | None = None,
     **kwargs,
 ) -> Array:
   """Registers a dense layer: ``y = matmul(x, w) + b``."""
@@ -338,7 +338,7 @@ def register_conv2d(
     y: Array,
     x: Array,
     w: Array,
-    b: Optional[Array] = None,
+    b: Array | None = None,
     **kwargs: Any
 ) -> Array:
   """Registers a 2d convolution layer: ``y = conv2d(x, w) + b``."""
@@ -354,8 +354,8 @@ scale_and_shift = LayerTag(
 def register_scale_and_shift(
     y: Array,
     x: Array,
-    scale: Optional[Array] = None,
-    shift: Optional[Array] = None,
+    scale: Array | None = None,
+    shift: Array | None = None,
 ) -> Array:
   """Registers a scale and shift layer: ``y = x * scale + shift``."""
   if scale is not None and shift is not None:

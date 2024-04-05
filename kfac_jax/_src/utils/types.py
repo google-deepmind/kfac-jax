@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC annotation types and general tree operations."""
-from typing import Dict, Callable, Mapping, Sequence, Tuple, TypeVar, Union
+from typing import Callable, Mapping, Sequence, TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -21,25 +21,25 @@ import jax.numpy as jnp
 T = TypeVar("T")
 Array = jax.Array
 PRNGKey = Array
-Scalar = Union[float, int]
-Numeric = Union[Array, Scalar]
-Shape = Tuple[int, ...]
+Scalar = float | int
+Numeric = Array | Scalar
+Shape = tuple[int, ...]
 DType = jnp.dtype
-PyTree = Union[T, Sequence["PyTree[T]"], Mapping[str, "PyTree[T]"]]
+PyTree = T | Sequence["PyTree[T]"] | Mapping[str, "PyTree[T]"]
 ArrayTree = PyTree[Array]
 TArrayTree = TypeVar("TArrayTree", bound=ArrayTree)
 Params = TypeVar("Params", bound=ArrayTree)
 Batch = TypeVar("Batch", bound=ArrayTree)
 FuncState = TypeVar("FuncState", bound=ArrayTree)
-FuncAux = Dict[str, ArrayTree]
+FuncAux = dict[str, ArrayTree]
 PyTreeDef = jax.tree_util.PyTreeDef
 FuncArgs = Sequence[ArrayTree]
-FuncOuts = Union[Array, Tuple[Array, FuncAux]]
+FuncOuts = Array | tuple[Array, FuncAux]
 Func = Callable[..., FuncOuts]
 ValueFunc = Callable[..., Array]
-ValueAndGradFunc = Callable[..., Tuple[Array, Params]]
-AssumedFuncOutput = Union[Array, Tuple[Array, FuncAux],
-                          Tuple[Array, Tuple[FuncState, FuncAux]]]
+ValueAndGradFunc = Callable[..., tuple[Array, Params]]
+AssumedFuncOutput = (Array | tuple[Array, FuncAux] |
+                     tuple[Array, tuple[FuncState, FuncAux]])
 SCALAR_TYPES = (float, int)
 
 

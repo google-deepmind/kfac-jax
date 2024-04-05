@@ -13,7 +13,7 @@
 # limitations under the License.
 """K-FAC utilities for multi-device execution."""
 import functools
-from typing import Callable, Optional, Sequence
+from typing import Callable, Sequence
 
 import jax
 from jax import core
@@ -29,7 +29,7 @@ TArrayTree = types.TArrayTree
 
 
 # TODO(jamesmartens,botev): add a test for this function?
-def in_pmap(axis_name: Optional[str]) -> bool:
+def in_pmap(axis_name: str | None) -> bool:
   """Returns whether we are in a pmap with the given axis name."""
 
   if axis_name is None:
@@ -48,11 +48,11 @@ def in_pmap(axis_name: Optional[str]) -> bool:
 
 def wrap_if_pmap(
     p_func: Callable[[TArrayTree, str], TArrayTree],
-) -> Callable[[TArrayTree, Optional[str]], TArrayTree]:
+) -> Callable[[TArrayTree, str | None], TArrayTree]:
   """Wraps `p_func` to be executed only when inside a `jax.pmap` context."""
 
   @functools.wraps(p_func)
-  def p_func_if_pmap(obj: TArrayTree, axis_name: Optional[str]) -> TArrayTree:
+  def p_func_if_pmap(obj: TArrayTree, axis_name: str | None) -> TArrayTree:
 
     return p_func(obj, axis_name) if in_pmap(axis_name) else obj
 
@@ -61,12 +61,12 @@ def wrap_if_pmap(
 
 # TODO(jamesmartens,botev): We no longer use wrap_if_pmap in the below
 # definitions since it doesn't seem to transmit type info properly. Investigate?
-def pmean_if_pmap(obj: TArrayTree, axis_name: Optional[str]) -> TArrayTree:
+def pmean_if_pmap(obj: TArrayTree, axis_name: str | None) -> TArrayTree:
 
   return lax.pmean(obj, axis_name) if in_pmap(axis_name) else obj
 
 
-def psum_if_pmap(obj: TArrayTree, axis_name: Optional[str]) -> TArrayTree:
+def psum_if_pmap(obj: TArrayTree, axis_name: str | None) -> TArrayTree:
 
   return lax.psum(obj, axis_name) if in_pmap(axis_name) else obj
 
@@ -184,7 +184,7 @@ def host_mean(x: TArrayTree) -> TArrayTree:
 def sync_and_divide_value(
     value: TArrayTree,
     counter: Numeric,
-    axis_name: Optional[str] = None,
+    axis_name: str | None = None,
 ) -> TArrayTree:
   """Computes the mean of `value` over all hosts and divides it by `counter`."""
   value = jax.tree_util.tree_map(lambda x: x / counter, value)
@@ -209,7 +209,7 @@ copy_obj = jax.jit(lambda x: jax.tree_util.tree_map(copy_array, x))
 _pmap_copy_obj = jax.pmap(copy_obj)
 
 
-def pmap_copy_obj(x: Optional[TArrayTree]) -> Optional[TArrayTree]:
+def pmap_copy_obj(x: TArrayTree | None) -> TArrayTree | None:
 
   # pmap will fail to work if passed a totally empty tree
   if x is None:

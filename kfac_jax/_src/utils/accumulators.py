@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC for accumulating statistics."""
-from typing import Any, Optional, Generic
+from typing import Any, Generic
 
 import jax
 import jax.numpy as jnp
@@ -34,7 +34,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
   """A wrapped class for an arbitrary weighted moving average."""
 
   weight: Numeric
-  raw_value: Optional[TArrayTree]
+  raw_value: TArrayTree | None
 
   @property
   def value(self) -> TArrayTree:
@@ -66,7 +66,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
         value,
     )
 
-  def sync(self, pmap_axis_name: Optional[str]):
+  def sync(self, pmap_axis_name: str | None):
     """Syncs the underlying array across devices."""
 
     if self.raw_value is None:
@@ -92,7 +92,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
   def zeros_array(
       cls,
       shape: Shape,
-      dtype: Optional[DType] = None,
+      dtype: DType | None = None,
   ) -> "WeightedMovingAverage[Array]":
     """Initializes a `WeightedMovingAverage` with a single array of zeros."""
 
@@ -118,7 +118,7 @@ class MultiChunkAccumulator(Generic[TArrayTree]):
 
   def __init__(
       self,
-      init_obj_value: Optional[TArrayTree],
+      init_obj_value: TArrayTree | None,
       weight: Numeric,
       multi_device: bool,
   ):

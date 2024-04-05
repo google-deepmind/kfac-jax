@@ -13,7 +13,7 @@
 # limitations under the License.
 """"K-FAC loss functions objects, tags and registration functions."""
 import abc
-from typing import Dict, Optional, Sequence, Tuple, Type
+from typing import Sequence
 
 import distrax
 import jax
@@ -28,7 +28,7 @@ Numeric = utils.Numeric
 PRNGKey = utils.PRNGKey
 Shape = utils.Shape
 DType = utils.DType
-LossFunctionInputs = Tuple[Array, ...]
+LossFunctionInputs = tuple[Array, ...]
 
 
 # pylint: disable=g-one-element-tuple
@@ -67,12 +67,12 @@ class LossFunction(utils.Finalizable):
 
   @property
   @abc.abstractmethod
-  def targets(self) -> Optional[Array]:
+  def targets(self) -> Array | None:
     """The targets (if present) used for evaluating the loss."""
 
   @property
   @abc.abstractmethod
-  def parameter_dependants(self) -> Tuple[Array, ...]:
+  def parameter_dependants(self) -> tuple[Array, ...]:
     """All the parameter dependent arrays of the loss."""
 
   @property
@@ -82,7 +82,7 @@ class LossFunction(utils.Finalizable):
 
   @property
   @abc.abstractmethod
-  def parameter_independants(self) -> Tuple[Numeric, ...]:
+  def parameter_independants(self) -> tuple[Numeric, ...]:
     """All the parameter independent arrays of the loss."""
 
   @property
@@ -103,20 +103,20 @@ class LossFunction(utils.Finalizable):
   @abc.abstractmethod
   def tree_flatten(
       self,
-  ) -> Tuple[Tuple[Optional[Array], ...], Dict[str, utils.Numeric]]:
+  ) -> tuple[tuple[Array | None, ...], dict[str, utils.Numeric]]:
     pass
 
   @classmethod
   def tree_unflatten(
-      cls: Type["LossFunction"],
-      aux_data: Dict[str, utils.Numeric],
-      children: Tuple[Optional[Array], ...],
+      cls: type["LossFunction"],
+      aux_data: dict[str, utils.Numeric],
+      children: tuple[Array | None, ...],
   ) -> "LossFunction":
     return cls(*children, **aux_data)  # pytype: disable=not-instantiable
 
   def evaluate(
       self,
-      targets: Optional[Array] = None,
+      targets: Array | None = None,
       coefficient_mode: str = "regular",
   ) -> Array:
     """Evaluates the loss function on the targets.
@@ -159,9 +159,9 @@ class LossFunction(utils.Finalizable):
 
   def grad_of_evaluate(
       self,
-      targets: Optional[Array],
+      targets: Array | None,
       coefficient_mode: str,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Evaluates the gradient of the loss function, w.r.t. its inputs.
 
     Args:
@@ -186,7 +186,7 @@ class LossFunction(utils.Finalizable):
   def multiply_ggn(
       self,
       vector: Sequence[Array],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Right-multiplies a vector by the GGN of the loss function.
 
     Here the GGN is the Generalized Gauss-Newton matrix (whose definition is
@@ -206,13 +206,13 @@ class LossFunction(utils.Finalizable):
   def multiply_ggn_unweighted(
       self,
       vector: Sequence[Array],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Unweighted version of :func:`~LossFunction.multiply_ggn`."""
 
   def multiply_ggn_factor(
       self,
       vector: Array,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Right-multiplies a vector by a factor B of the GGN.
 
     Here the GGN is the Generalized Gauss-Newton matrix (whose definition is
@@ -237,7 +237,7 @@ class LossFunction(utils.Finalizable):
   @abc.abstractmethod
   def multiply_ggn_factor_unweighted(
       self, vector: Array
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Unweighted version of :func:`~LossFunction.multiply_ggn_factor`."""
 
   def multiply_ggn_factor_transpose(
@@ -276,7 +276,7 @@ class LossFunction(utils.Finalizable):
   def multiply_ggn_factor_replicated_one_hot(
       self,
       index: Sequence[int],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Right-multiplies a replicated-one-hot vector by a factor B of the GGN.
 
     Here the GGN is the Generalized Gauss-Newton matrix (whose definition is
@@ -308,7 +308,7 @@ class LossFunction(utils.Finalizable):
   def multiply_ggn_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Unweighted version of :func:`~LossFunction.multiply_ggn_factor_replicated_one_hot`."""
 
   @property
@@ -321,18 +321,18 @@ class NegativeLogProbLoss(LossFunction):
   """Base class for loss functions that represent negative log-probability."""
 
   @property
-  def parameter_dependants(self) -> Tuple[Array, ...]:
+  def parameter_dependants(self) -> tuple[Array, ...]:
     return self.params
 
   @property
   @abc.abstractmethod
-  def params(self) -> Tuple[Array, ...]:
+  def params(self) -> tuple[Array, ...]:
     """Parameters to the underlying distribution."""
 
   def multiply_fisher(
       self,
       vector: Sequence[Array],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Right-multiplies a vector by the Fisher.
 
     Args:
@@ -350,13 +350,13 @@ class NegativeLogProbLoss(LossFunction):
   def multiply_fisher_unweighted(
       self,
       vector: Sequence[Array],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Unweighted version of :func:`~LossFunction.multiply_fisher`."""
 
   def multiply_fisher_factor(
       self,
       vector: Array,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Right-multiplies a vector by a factor B of the Fisher.
 
     Here the Fisher is the Fisher information matrix (i.e. expected outer-
@@ -384,7 +384,7 @@ class NegativeLogProbLoss(LossFunction):
   def multiply_fisher_factor_unweighted(
       self,
       vector: Array,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Unweighted version of  :func:`~LossFunction.multiply_fisher_factor`."""
 
   def multiply_fisher_factor_transpose(
@@ -425,7 +425,7 @@ class NegativeLogProbLoss(LossFunction):
   def multiply_fisher_factor_replicated_one_hot(
       self,
       index: Sequence[int],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Right-multiplies a replicated-one-hot vector by a factor B of the Fisher.
 
     Here the Fisher is the Fisher information matrix (i.e. expected outer-
@@ -459,7 +459,7 @@ class NegativeLogProbLoss(LossFunction):
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Unweighted version of :func:`~LossFunction.multiply_fisher_factor_replicated_one_hot`."""
 
   @property
@@ -475,7 +475,7 @@ class NegativeLogProbLoss(LossFunction):
       self,
       rng: Array,
       coefficient_mode: str,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Evaluates the gradient of the log probability on a random sample.
 
     Args:
@@ -503,13 +503,13 @@ class NaturalParamsNegativeLogProbLoss(NegativeLogProbLoss, abc.ABC):
   def multiply_ggn_unweighted(
       self,
       vector: Sequence[Array],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     return self.multiply_fisher_unweighted(vector)
 
   def multiply_ggn_factor_unweighted(
       self,
       vector: Array,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     return self.multiply_fisher_factor_unweighted(vector)
 
   def multiply_ggn_factor_transpose_unweighted(
@@ -521,7 +521,7 @@ class NaturalParamsNegativeLogProbLoss(NegativeLogProbLoss, abc.ABC):
   def multiply_ggn_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     return self.multiply_fisher_factor_replicated_one_hot_unweighted(index)
 
   @property
@@ -567,7 +567,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def __init__(
       self,
       mean: Array,
-      targets: Optional[Array] = None,
+      targets: Array | None = None,
       variance: Numeric = 0.5,
       weight: Numeric = 1.0,
       normalize_log_prob: bool = True,
@@ -604,7 +604,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._variance
 
   @property
-  def targets(self) -> Optional[Array]:
+  def targets(self) -> Array | None:
     return self._targets
 
   @property
@@ -612,7 +612,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._normalize_log_prob
 
   @property
-  def parameter_independants(self) -> Tuple[Numeric, ...]:
+  def parameter_independants(self) -> tuple[Numeric, ...]:
 
     arrays = (self.variance, self.weight)
 
@@ -627,7 +627,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return distrax.MultivariateNormalDiag(loc=self.mean, scale_diag=scale_diag)
 
   @property
-  def params(self) -> Tuple[Array]:
+  def params(self) -> tuple[Array]:
     return (self.mean,)
 
   def _evaluate(self, targets: Array) -> Array:
@@ -642,13 +642,13 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def multiply_fisher_unweighted(
       self,
       vector: Sequence[Array]
-  ) -> Tuple[Array]:
+  ) -> tuple[Array]:
     return (vector[0] / self.variance,)
 
   def multiply_fisher_factor_unweighted(
       self,
       vector: Array,
-  ) -> Tuple[Array]:
+  ) -> tuple[Array]:
     return (vector / jnp.sqrt(self.variance),)
 
   def multiply_fisher_factor_transpose_unweighted(
@@ -661,7 +661,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[Array]:
+  ) -> tuple[Array]:
     index = index[0]
     ones_slice = jnp.ones([self.mean.shape[0]])[..., None]
     output_slice = ones_slice / jnp.sqrt(self.variance)
@@ -669,7 +669,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def tree_flatten(
       self,
-  ) -> Tuple[Tuple[Array, Optional[Array]], Dict[str, utils.Numeric]]:
+  ) -> tuple[tuple[Array, Array | None], dict[str, utils.Numeric]]:
     aux = dict(variance=self.variance, weight=self.weight)
     return (self.mean, self.targets), aux
 
@@ -697,7 +697,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
       self,
       mean: Array,
       variance: Array,
-      targets: Optional[Array] = None,
+      targets: Array | None = None,
       weight: Numeric = 1.0,
   ):
     """Initializes the loss instance.
@@ -718,11 +718,11 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
     super().__init__(weight=weight)
 
   @property
-  def targets(self) -> Optional[Array]:
+  def targets(self) -> Array | None:
     return self._targets
 
   @property
-  def parameter_independants(self) -> Tuple[Numeric, ...]:
+  def parameter_independants(self) -> tuple[Numeric, ...]:
     arrays = (self.weight,)
     if self._targets is not None:
       arrays = (self._targets,) + arrays
@@ -734,7 +734,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
         loc=self._mean, scale_diag=jnp.sqrt(self._variance))
 
   @property
-  def params(self) -> Tuple[Array, Array]:
+  def params(self) -> tuple[Array, Array]:
     return self._mean, self._variance
 
   @property
@@ -760,14 +760,14 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
   def multiply_fisher_unweighted(
       self,
       vector: Sequence[Array],
-  ) -> Tuple[Array, Array]:
+  ) -> tuple[Array, Array]:
     mean_vec, var_vec = vector
     return self._fisher_mean * mean_vec, self._fisher_var * var_vec
 
   def multiply_fisher_factor_unweighted(
       self,
       vector: Array,
-  ) -> Tuple[Array, Array]:
+  ) -> tuple[Array, Array]:
     mean_vec, var_vec = jnp.split(vector, 2, axis=-1)
     result_mean_vec = self._fisher_mean_factor * mean_vec
     result_var_vec = self._fisher_var_factor * var_vec
@@ -785,7 +785,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[Array, Array]:
+  ) -> tuple[Array, Array]:
     [index] = index
 
     if index < int(self._mean.shape[-1]):
@@ -811,12 +811,12 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
   def multiply_ggn_unweighted(
       self,
       vector: Sequence[Array],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     raise NotImplementedError()
 
   def multiply_ggn_factor_unweighted(
       self, vector: Array
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     raise NotImplementedError()
 
   def multiply_ggn_factor_transpose_unweighted(
@@ -828,7 +828,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
   def multiply_ggn_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     raise NotImplementedError()
 
   @property
@@ -837,7 +837,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
 
   def tree_flatten(
       self,
-  ) -> Tuple[Tuple[Array, Array, Optional[Array]], Dict[str, utils.Numeric]]:
+  ) -> tuple[tuple[Array, Array, Array | None], dict[str, utils.Numeric]]:
     aux = dict(weight=self._weight)
     return (self._mean, self._variance, self._targets), aux
 
@@ -858,7 +858,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def __init__(
       self,
       logits: Array,
-      targets: Optional[Array] = None,
+      targets: Array | None = None,
       weight: Numeric = 1.0,
   ):
     """Initializes the loss instance.
@@ -873,11 +873,11 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     super().__init__(weight=weight)
 
   @property
-  def targets(self) -> Optional[Array]:
+  def targets(self) -> Array | None:
     return self._targets
 
   @property
-  def parameter_independants(self) -> Tuple[Numeric, ...]:
+  def parameter_independants(self) -> tuple[Numeric, ...]:
     arrays = (self.weight,)
     if self._targets is not None:
       arrays = (self._targets,) + arrays
@@ -893,19 +893,19 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self.dist.probs  # pytype: disable=bad-return-type
 
   @property
-  def params(self) -> Tuple[Array]:
+  def params(self) -> tuple[Array]:
     return (self._logits,)
 
   def multiply_fisher_unweighted(
       self,
       vector: Sequence[Array]
-  ) -> Tuple[Array]:
+  ) -> tuple[Array]:
     return (self._probs * (1 - self._probs) * vector[0],)
 
   def multiply_fisher_factor_unweighted(
       self,
       vector: Array
-  ) -> Tuple[Array]:
+  ) -> tuple[Array]:
     return (jnp.sqrt(self._probs * (1 - self._probs)) * vector,)
 
   def multiply_fisher_factor_transpose_unweighted(
@@ -918,7 +918,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[Array]:
+  ) -> tuple[Array]:
     [index] = index
     probs_slice = self._probs[:, index][..., None]
     output_slice = jnp.sqrt(probs_slice * (1 - probs_slice))
@@ -927,7 +927,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def tree_flatten(
       self,
-  ) -> Tuple[Tuple[Array, Optional[Array]], Dict[str, utils.Numeric]]:
+  ) -> tuple[tuple[Array, Array | None], dict[str, utils.Numeric]]:
     aux = dict(weight=self._weight)
     return (self._logits, self._targets), aux
 
@@ -949,8 +949,8 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def __init__(
       self,
       logits: Array,
-      targets: Optional[Array] = None,
-      mask: Optional[Array] = None,
+      targets: Array | None = None,
+      mask: Array | None = None,
       weight: Numeric = 1.0,
   ):
     """Initializes the loss instance.
@@ -979,22 +979,22 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     super().__init__(weight=weight)
 
   @property
-  def targets(self) -> Optional[Array]:
+  def targets(self) -> Array | None:
     return self._targets
 
   @property
-  def mask(self) -> Optional[Array]:
+  def mask(self) -> Array | None:
     return self._mask
 
   @property
-  def parameter_independants(self) -> Tuple[Numeric, ...]:
-    arrays: Tuple[Numeric, ...] = (self.weight,)  # pytype: disable=annotation-type-mismatch
+  def parameter_independants(self) -> tuple[Numeric, ...]:
+    arrays: tuple[Numeric, ...] = (self.weight,)  # pytype: disable=annotation-type-mismatch
 
     if self.mask is not None:
-      arrays: Tuple[Numeric, ...] = (self.mask,) + arrays  # pytype: disable=annotation-type-mismatch
+      arrays: tuple[Numeric, ...] = (self.mask,) + arrays  # pytype: disable=annotation-type-mismatch
 
     if self.targets is not None:
-      arrays: Tuple[Numeric, ...] = (self.targets,) + arrays  # pytype: disable=annotation-type-mismatch
+      arrays: tuple[Numeric, ...] = (self.targets,) + arrays  # pytype: disable=annotation-type-mismatch
 
     return arrays
 
@@ -1031,7 +1031,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       return jnp.sqrt(self.dist.probs)
 
   @property
-  def params(self) -> Tuple[Array]:
+  def params(self) -> tuple[Array]:
     return (self._logits,)
 
   @property
@@ -1041,7 +1041,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def multiply_fisher_unweighted(
       self,
       vector: Sequence[Array]
-  ) -> Tuple[Array]:
+  ) -> tuple[Array]:
 
     assert len(vector) == 1
 
@@ -1055,7 +1055,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def multiply_fisher_factor_unweighted(
       self,
       vector: Array
-  ) -> Tuple[Array]:
+  ) -> tuple[Array]:
 
     probs = self._probs
 
@@ -1081,7 +1081,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
       index: Sequence[int],
-  ) -> Tuple[Array]:
+  ) -> tuple[Array]:
 
     [index] = index
     probs = self._probs
@@ -1094,9 +1094,9 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def tree_flatten(
       self,
-  ) -> Tuple[
-      Tuple[Array, Optional[Array], Optional[Array]],
-      Dict[str, utils.Numeric]
+  ) -> tuple[
+      tuple[Array, Array | None, Array | None],
+      dict[str, utils.Numeric]
   ]:
     aux = dict(weight=self._weight)
     return (self._logits, self._targets, self._mask), aux
@@ -1198,7 +1198,7 @@ OneHotCategoricalLogitsNegativeLogProbLoss_tag = tags.LossTag(
 
 def register_normal_predictive_distribution(
     mean: Array,
-    targets: Optional[Array] = None,
+    targets: Array | None = None,
     variance: float = 0.5,
     weight: Numeric = 1.0,
     normalize_log_prob: bool = True,
@@ -1258,7 +1258,7 @@ def register_normal_predictive_distribution(
 
 def register_squared_error_loss(
     prediction: Array,
-    targets: Optional[Array] = None,
+    targets: Array | None = None,
     weight: Numeric = 1.0,
 ):
   """Registers a squared error loss function.
@@ -1304,7 +1304,7 @@ def register_squared_error_loss(
 
 def register_multi_bernoulli_predictive_distribution(
     logits: Array,
-    targets: Optional[Array] = None,
+    targets: Array | None = None,
     weight: Numeric = 1.0,
 ):
   """Registers a multi-Bernoulli predictive distribution.
@@ -1353,7 +1353,7 @@ def register_multi_bernoulli_predictive_distribution(
 
 def register_sigmoid_cross_entropy_loss(
     logits: Array,
-    targets: Optional[Array] = None,
+    targets: Array | None = None,
     weight: Numeric = 1.0,
 ):
   """Registers a sigmoid cross-entropy loss function.
@@ -1396,8 +1396,8 @@ def register_sigmoid_cross_entropy_loss(
 
 def register_categorical_predictive_distribution(
     logits: Array,
-    targets: Optional[Array] = None,
-    mask: Optional[Array] = None,
+    targets: Array | None = None,
+    mask: Array | None = None,
     weight: Numeric = 1.0,
 ):
   """Registers a categorical predictive distribution.
@@ -1466,8 +1466,8 @@ def register_categorical_predictive_distribution(
 
 def register_softmax_cross_entropy_loss(
     logits: Array,
-    targets: Optional[Array] = None,
-    mask: Optional[Array] = None,
+    targets: Array | None = None,
+    mask: Array | None = None,
     weight: Numeric = 1.0,
 ):
   """Registers a softmax cross-entropy loss function.

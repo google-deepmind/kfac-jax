@@ -15,7 +15,7 @@
 import functools
 import numbers
 import operator
-from typing import Any, Callable, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -56,7 +56,7 @@ class WithStagedMethods(misc.Finalizable):
   def __init__(
       self,
       multi_device: bool = False,
-      pmap_axis_name: Optional[str] = None,
+      pmap_axis_name: str | None = None,
       debug: bool = False,
       **parent_kwargs: Any,
   ):
@@ -95,7 +95,7 @@ class WithStagedMethods(misc.Finalizable):
     return self._multi_device
 
   @property
-  def pmap_axis_name(self) -> Optional[str]:
+  def pmap_axis_name(self) -> str | None:
     """The name of the `jax.pmap` axis to use for staged methods."""
     return self._pmap_axis_name
 
@@ -117,7 +117,7 @@ class WithStagedMethods(misc.Finalizable):
     """Indexes the `obj` PyTree leaves over leading axis if `multi_device`."""
     return parallel.get_first(obj) if self.multi_device else obj
 
-  def copy_obj(self, obj: Optional[TArrayTree]) -> Optional[TArrayTree]:
+  def copy_obj(self, obj: TArrayTree | None) -> TArrayTree | None:
     """Copies the object."""
     if self.multi_device:
       return parallel.pmap_copy_obj(obj)
@@ -134,8 +134,8 @@ class WithStagedMethods(misc.Finalizable):
 
 def staged(
     method: Callable[..., TArrayTree],
-    static_argnums: Optional[Union[int, Sequence[int]]] = None,
-    donate_argnums: Optional[Union[int, Sequence[int]]] = None,
+    static_argnums: int | Sequence[int] | None = None,
+    donate_argnums: int | Sequence[int] | None = None,
 ) -> Callable[..., TArrayTree]:
   """Makes the instance method staged.
 
@@ -172,7 +172,7 @@ def staged(
   if isinstance(donate_argnums, int):
     donate_argnums = (donate_argnums,)
   else:
-    donate_argnums: Tuple[int, ...] = tuple(donate_argnums)
+    donate_argnums: tuple[int, ...] = tuple(donate_argnums)
 
   bcast_argnums = static_argnums or ()
 

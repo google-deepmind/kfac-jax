@@ -16,7 +16,7 @@ import dataclasses
 import functools
 import itertools
 import pprint
-from typing import Any, Callable, Mapping, Optional, Sequence, TypeVar, Tuple, Union, Dict, Set
+from typing import Any, Callable, Mapping, Sequence, TypeVar
 
 from absl import logging
 import immutabledict
@@ -47,10 +47,10 @@ JaxprEqn = jax.core.JaxprEqn
 JaxprEqns = Sequence[JaxprEqn]
 T = TypeVar("T")
 J = TypeVar("J", Jaxpr, ClosedJaxpr)
-JaxprOrClosedJaxpr = Union[Jaxpr, ClosedJaxpr]
+JaxprOrClosedJaxpr = Jaxpr | ClosedJaxpr
 EquivalenceFunction = Callable[[JaxprEqn, JaxprEqn], bool]
 MakeVarFunc = Callable[[jax.core.AbstractValue], Var]
-VarProcessor = Callable[[Vars, MakeVarFunc], Tuple[Vars, JaxprEqns]]
+VarProcessor = Callable[[Vars, MakeVarFunc], tuple[Vars, JaxprEqns]]
 PatternComputeFunc = Callable[[Array, Sequence[Array]], Array]
 ParameterExtractorFunc = Callable[[JaxprEqns], Mapping[str, Any]]
 TagCtor = Callable[[Vars, Vars, JaxprEqns, MakeVarFunc], JaxprEqn]
@@ -170,7 +170,7 @@ class GraphMatcherComparator:
     self._special_eqn_equivalence_rules = dict(**special_eqn_equivalence_rules)
 
   @property
-  def commutative_ops_names(self) -> Set[str]:
+  def commutative_ops_names(self) -> set[str]:
     """The set of commutative ops."""
     return self._commutative_ops_names
 
@@ -242,12 +242,12 @@ class JaxprGraph:
   params_tree: PyTreeDef
   params_vars: Vars
   out_tree: PyTreeDef
-  tag_ctor: Optional[TagCtor]
+  tag_ctor: TagCtor | None
   # Until we stop supporting Python 3.7 we can't use @functools.cached_property,
   # so we set these attributes in __post_init__
-  losses_eqns: Tuple[tags.LossTagEqn, ...] = ()
+  losses_eqns: tuple[tags.LossTagEqn, ...] = ()
   var_to_creation_op: immutabledict.immutabledict = None  # pytype:disable=annotation-type-mismatch
-  manual_registrations: Tuple[tags.LayerTagEqn, ...] = ()
+  manual_registrations: tuple[tags.LayerTagEqn, ...] = ()
 
   def __post_init__(self):
     losses_eqns = tuple(
@@ -304,7 +304,7 @@ class JaxprGraph:
     return tuple(eqns)
   #
   # @functools.cached_property
-  # def losses_eqns(self) -> Tuple[tags.LossTagEqn, ...]:
+  # def losses_eqns(self) -> tuple[tags.LossTagEqn, ...]:
   #   return tuple(
   #       eqn for eqn in self.closed_jaxpr.jaxpr.eqns
   #       if isinstance(eqn.primitive, tags.LossTag)
@@ -317,7 +317,7 @@ class JaxprGraph:
   #            for eqn in self.jaxpr.eqns), []))
   #
   # @functools.cached_property
-  # def manual_registrations(self) -> Tuple[tags.LayerTagEqn, ...]:
+  # def manual_registrations(self) -> tuple[tags.LayerTagEqn, ...]:
   #   """Returns all manually registered tags."""
   #   registered_tags = []
   #   for eqn in self.jaxpr.eqns:
@@ -334,11 +334,11 @@ class JaxprGraph:
 def make_jax_graph(
     func: utils.Func,
     func_args: utils.FuncArgs,
-    params_index: Union[int, Sequence[int]],
+    params_index: int | Sequence[int],
     name: str,
     compute_only_loss_tags: bool,
     clean_broadcasts: bool,
-    tag_ctor: Optional[TagCtor] = None,
+    tag_ctor: TagCtor | None = None,
 ) -> JaxprGraph:
   """Creates a :class:`~JaxGraph` instance from the provided function and arguments."""
   in_tree = jax.tree_util.tree_structure(func_args)
@@ -430,10 +430,10 @@ class GraphPattern:
   compute_func: PatternComputeFunc
   parameters_extractor_func: ParameterExtractorFunc
   example_args: utils.FuncArgs
-  in_values_preprocessor: Optional[VarProcessor] = None
+  in_values_preprocessor: VarProcessor | None = None
   # Until we stop supporting Python 3.7 we can't use @functools.cached_property,
   # so we set this attribute in the property
-  _graph: Optional[JaxprGraph] = None
+  _graph: JaxprGraph | None = None
 
   @property
   def jaxpr(self) -> Jaxpr:
@@ -542,7 +542,7 @@ class GraphMatch:
 
   def create_eqn(
       self,
-      env: Dict[Var, Var],
+      env: dict[Var, Var],
       make_var_func: MakeVarFunc,
   ) -> JaxprEqns:
     """Creates a new ``JaxprEqn`` for the this match."""
@@ -569,7 +569,7 @@ def match_equations(
     input_vars: Vars,
     param_variables: Vars,
     graph_matcher_rules: GraphMatcherComparator,
-) -> Optional[Dict[Var, Var]]:
+) -> dict[Var, Var] | None:
   """Tries to continue matching the remaining equations to the Jaxpr graph.
 
   Args:
@@ -690,7 +690,7 @@ def match_pattern(
     root_eqn: JaxprEqn,
     pattern: GraphPattern,
     graph_matcher_rules: GraphMatcherComparator,
-) -> Optional[GraphMatch]:
+) -> GraphMatch | None:
   """Tries to match the ``pattern`` in the Jaxpr graph from the ``root_eqn``.
 
   Args:
@@ -743,7 +743,7 @@ def find_layer_tags_and_patterns(
     eqns_for_patterns: Sequence[JaxprEqn],
     graph_matcher_rules: GraphMatcherComparator,
     graph_patterns: Sequence[GraphPattern],
-) -> Tuple[Tuple[tags.LayerTagEqn, ...], Dict[Var, GraphMatch]]:
+) -> tuple[tuple[tags.LayerTagEqn, ...], dict[Var, GraphMatch]]:
   """Tries to automatically match ``patterns_to_match`` in the Jaxpr graph.
 
   The method returns a pair of ``(manual_registrations, matches)``, where
@@ -806,8 +806,8 @@ def find_layer_tags_and_patterns(
 
 def read_env(
     env: Mapping[Var, Array],
-    var: Union[jax.core.Literal, Vars],
-) -> Union[float, Array, Sequence[Array]]:
+    var: jax.core.Literal | Vars,
+) -> float | Array | Sequence[Array]:
   """Reads from the variable-to-array environment during tracing."""
   if isinstance(var, (list, tuple)):
     return jax.tree_util.tree_map(lambda x: read_env(env, x), var)
@@ -821,9 +821,9 @@ def read_env(
 
 
 def write_env(
-    env: Dict[Var, Array],
-    var: Union[Var, Vars],
-    val: Union[Array, Sequence[Array]],
+    env: dict[Var, Array],
+    var: Var | Vars,
+    val: Array | Sequence[Array],
 ):
   """Writes to the variable-to-array environment during tracing."""
   if isinstance(var, tuple):
@@ -1121,7 +1121,7 @@ def _normalization_haiku(
 def _normalization_haiku_preprocessor(
     in_vars: Vars,
     make_var_func: MakeVarFunc,
-) -> Tuple[Vars, JaxprEqns]:
+) -> tuple[Vars, JaxprEqns]:
   """Preprocesses the inputs to a Haiku normalization layer.
 
   The standard ``scale_and_shift`` represents the following canonical
@@ -1206,7 +1206,7 @@ class TagLocation:
       self,
       tag_eqn: JaxprEqn,
       base_name: str,
-      parent_equations: Sequence[Tuple[JaxprEqn, int]] = (),
+      parent_equations: Sequence[tuple[JaxprEqn, int]] = (),
   ):
     # assert isinstance(tag_eqn.primitive, tags.LayerTag)
     self.tag_eqn = tag_eqn
@@ -1329,7 +1329,7 @@ def _auto_register_tags(
     graph_patterns: Sequence[GraphPattern],
     register_orphans: bool,
     register_only_until_losses: bool,
-) -> Tuple[JaxprGraph, Sequence[TagLocation]]:
+) -> tuple[JaxprGraph, Sequence[TagLocation]]:
   """Internal function for automatic registration of layer tags."""
   higher_counters = {
       "cond": 0,

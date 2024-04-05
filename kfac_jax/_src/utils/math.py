@@ -14,7 +14,7 @@
 """K-FAC utilities for various mathematical operations."""
 import functools
 import string
-from typing import Callable, Optional, Sequence, Iterable, TypeVar, Tuple, Union
+from typing import Callable, Sequence, Iterable, TypeVar
 
 import jax
 from jax import lax
@@ -402,7 +402,7 @@ def psd_matrix_norm(
     matrix: Array,
     norm_type: str = "avg_diag",
     method_2norm: str = "lobpcg",
-    rng_key: Optional[PRNGKey] = None
+    rng_key: PRNGKey | None = None
 ) -> Numeric:
   """Computes one of several different matrix norms for PSD matrices.
 
@@ -577,7 +577,7 @@ def psd_matrix_norm(
 def pi_adjusted_kronecker_factors(
     *factors: Array,
     damping: Numeric
-) -> Tuple[Array, ...]:
+) -> tuple[Array, ...]:
   """Computes Kronecker factors with pi-adjusted factored damping.
 
   The `f1 kron f2 kron ... kron fn + damping * I` is not a Kronecker product
@@ -622,7 +622,7 @@ def pi_adjusted_kronecker_factors(
   # factors should behave the same as non-scalar factors for the sake of
   # consistent behavior as the layer widths shrink to 1.
 
-  def regular_case() -> Tuple[Array, ...]:
+  def regular_case() -> tuple[Array, ...]:
 
     num_non_scalars = sum(1 if f.size != 1 else 0 for f in factors)
 
@@ -676,7 +676,7 @@ def pi_adjusted_kronecker_factors(
 
     return tuple(u_hats)
 
-  def zero_case() -> Tuple[Array, ...]:
+  def zero_case() -> tuple[Array, ...]:
 
     # In the special case where for some reason one of the factors is zero, then
     # the we write each factor as `damping^(1/k) * I`.
@@ -748,7 +748,7 @@ def inverse_sqrt_psd_matrices(matrices: ArrayTree) -> ArrayTree:
 def pi_adjusted_kronecker_inverse(
     *factors: Array,
     damping: Numeric,
-) -> Tuple[Array, ...]:
+) -> tuple[Array, ...]:
   """Computes pi-adjusted factored damping inverses.
 
   The inverse of `(f1 kron f2 kron ... kron fn) + damping * I` is not Kronecker
@@ -782,8 +782,8 @@ def pi_adjusted_kronecker_inverse(
 def kronecker_product_axis_mul_v(
     factors: Sequence[Array],
     v: Array,
-    axis_groups: Optional[Sequence[Sequence[int]]] = None,
-    transpose: Union[bool, Sequence[bool]] = False,
+    axis_groups: Sequence[Sequence[int]] | None = None,
+    transpose: bool | Sequence[bool] = False,
 ):
   """Computes ``kron(*factors) rvec(v)`` where ``rvec`` is row-wise vectorization.
 
@@ -850,7 +850,7 @@ def kronecker_eigen_basis_axis_mul_v(
     q_factors: Sequence[Array],
     eigenvalues: Array,
     v: Array,
-    axis_groups: Optional[Sequence[Sequence[int]]] = None,
+    axis_groups: Sequence[Sequence[int]] | None = None,
 ):
   """Computes a matrix-vector product in a Kronecker product eigen-basis.
 
@@ -932,7 +932,7 @@ def kronecker_eigen_basis_mul_v(
   return kronecker_eigen_basis_axis_mul_v([q_b, q_a], eigenvalues, v)
 
 
-def _host_eigh(x: Array, *_) -> Tuple[Array, Array]:
+def _host_eigh(x: Array, *_) -> tuple[Array, Array]:
   """This calls the CPU numpy function for eigh."""
 
   shape_s = jax.ShapeDtypeStruct(x.shape[:-1], x.dtype)
@@ -944,7 +944,7 @@ def _host_eigh(x: Array, *_) -> Tuple[Array, Array]:
 def _eigh(
     x: Array,
     force_on_host: bool = False,
-) -> Tuple[Array, Array]:
+) -> tuple[Array, Array]:
   """Computes eigenvectors and eigenvalues, with optionally offloading to cpu."""
 
   if force_on_host:
@@ -965,7 +965,7 @@ def _eigh(
 def safe_psd_eigh(
     x: Array,
     force_on_host: bool = False,
-) -> Tuple[Array, Array]:
+) -> tuple[Array, Array]:
   """Computes the eigenvalue decomposition for a PSD matrix.
 
   The function is similar to `jax.numpy.linalg.eigh`, but it clips the returned

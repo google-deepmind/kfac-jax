@@ -15,14 +15,14 @@
 """K-FAC optimizer."""
 
 import functools
-from typing import Callable, Iterator, Optional, Sequence, Any, Generic, Tuple, Union, Dict
+from typing import Callable, Iterator, Sequence, Any, Generic, TypeAlias, Optional
 
 import jax
 from jax import lax
 import jax.numpy as jnp
 from kfac_jax._src import curvature_estimator
 from kfac_jax._src import utils
-from typing_extensions import TypeAlias
+
 
 # Types for annotation
 Array = utils.Array
@@ -31,33 +31,36 @@ Numeric = utils.Numeric
 Params = utils.Params
 Batch = utils.Batch
 FuncState = Any
-# FuncState = utils.FuncState
 FuncAux = utils.FuncAux
 
 OptimizerState: TypeAlias = "Optimizer.State"
-ScheduleType = Union[Callable[[Numeric, Optional[Numeric]], Numeric],
-                     Callable[[Numeric], Numeric]]
-FuncArgsVariants = Union[
-    Tuple[Params, Batch],
-    Tuple[Params, FuncState, Batch],
-    Tuple[Params, PRNGKey, Batch],
-    Tuple[Params, FuncState, PRNGKey, Batch],
-]
-FuncOutputs = Union[
-    Array,
-    Tuple[Array, FuncState],
-    Tuple[Array, FuncAux],
-    Tuple[Array, Tuple[FuncState, FuncAux]],
-]
+ScheduleType = (
+    Callable[[Numeric, Numeric | None], Numeric] |
+    Callable[[Numeric], Numeric]
+    )
+FuncArgsVariants = (
+    tuple[Params, Batch] |
+    tuple[Params, FuncState, Batch] |
+    tuple[Params, PRNGKey, Batch] |
+    tuple[Params, FuncState, PRNGKey, Batch]
+)
+FuncOutputs = (
+    Array |
+    tuple[Array, FuncState] |
+    tuple[Array, FuncAux] |
+    tuple[Array, tuple[FuncState, FuncAux]]
+)
 ValueFunc = Callable[..., FuncOutputs]
-ValueAndGradFunc = Callable[..., Tuple[FuncOutputs, Params]]
-ReturnWithFuncState = Tuple[
-    Params, OptimizerState, FuncState, Dict[str, Array]
+ValueAndGradFunc = Callable[..., tuple[FuncOutputs, Params]]
+BlockDiagonalCurvature = curvature_estimator.BlockDiagonalCurvature
+
+ReturnWithFuncState = tuple[
+    Params, OptimizerState, FuncState, dict[str, Array]
 ]
-ReturnWithoutFuncState = Tuple[
-    Params, OptimizerState, Dict[str, Array]
+ReturnWithoutFuncState = tuple[
+    Params, OptimizerState, dict[str, Array]
 ]
-ReturnEither = Union[ReturnWithFuncState, ReturnWithoutFuncState]
+ReturnEither = ReturnWithFuncState | ReturnWithoutFuncState
 
 
 class Optimizer(utils.WithStagedMethods):
@@ -78,12 +81,12 @@ class Optimizer(utils.WithStagedMethods):
     """
     velocities: Params
     estimator_state: curvature_estimator.BlockDiagonalCurvature.State
-    damping: Optional[Array]
+    damping: Array | None
     data_seen: Numeric
     step_counter: Numeric
 
     @classmethod
-    def from_dict(cls, dict_representation: Dict[str, Any]) -> OptimizerState:
+    def from_dict(cls, dict_representation: dict[str, Any]) -> OptimizerState:
       dict_representation["estimator_state"] = (
           curvature_estimator.BlockDiagonalCurvature.State.from_dict(
               dict_representation["estimator_state"]
@@ -99,12 +102,12 @@ class Optimizer(utils.WithStagedMethods):
       value_func_has_state: bool = False,
       value_func_has_rng: bool = False,
       use_adaptive_learning_rate: bool = False,
-      learning_rate_schedule: Optional[ScheduleType] = None,
+      learning_rate_schedule: ScheduleType | None = None,
       use_adaptive_momentum: bool = False,
-      momentum_schedule: Optional[ScheduleType] = None,
+      momentum_schedule: ScheduleType | None = None,
       use_adaptive_damping: bool = False,
-      damping_schedule: Optional[ScheduleType] = None,
-      initial_damping: Optional[Numeric] = None,
+      damping_schedule: ScheduleType | None = None,
+      initial_damping: Numeric | None = None,
       min_damping: Numeric = 1e-8,
       max_damping: Numeric = jnp.inf,
       include_damping_in_quad_change: bool = False,
@@ -114,23 +117,22 @@ class Optimizer(utils.WithStagedMethods):
       damping_upper_threshold: Numeric = 0.75,
       always_use_exact_qmodel_for_damping_adjustment: bool = False,
       precon_damping_mult: Numeric = 1.0,
-      norm_constraint: Optional[Numeric] = None,
+      norm_constraint: Numeric | None = None,
       num_burnin_steps: int = 10,
-      estimation_mode: Optional[str] = None,
-      custom_estimator_ctor: Optional[
-          Callable[..., curvature_estimator.BlockDiagonalCurvature]] = None,
+      estimation_mode: str | None = None,
+      custom_estimator_ctor: (
+          Callable[..., BlockDiagonalCurvature] | None) = None,
       curvature_ema: Numeric = 0.95,
       curvature_update_period: int = 1,
       inverse_update_period: int = 5,
       use_exact_inverses: bool = False,
-      batch_process_func: Optional[Callable[[Batch], Batch]] = None,
+      batch_process_func: Callable[[Batch], Batch] | None = None,
       register_only_generic: bool = False,
       patterns_to_skip: Sequence[str] = (),
       use_automatic_registration: bool = True,
-      auto_register_kwargs: Optional[Dict[str, Any]] = None,
-      layer_tag_to_block_ctor: Optional[
-          Dict[str, curvature_estimator.CurvatureBlockCtor]
-      ] = None,
+      auto_register_kwargs: dict[str, Any] | None = None,
+      layer_tag_to_block_ctor: (
+          dict[str, curvature_estimator.CurvatureBlockCtor] | None) = None,
       multi_device: bool = False,
       debug: bool = False,
       batch_size_extractor: Callable[
@@ -146,7 +148,7 @@ class Optimizer(utils.WithStagedMethods):
       distributed_inverses: bool = True,
       num_estimator_samples: int = 1,
       should_vmap_estimator_samples: bool = False,
-      norm_to_scale_identity_weight_per_block: Optional[str] = None,
+      norm_to_scale_identity_weight_per_block: str | None = None,
   ):
     """Initializes the K-FAC optimizer with the provided settings.
 
@@ -312,14 +314,14 @@ class Optimizer(utils.WithStagedMethods):
       register_only_generic: Boolean. Whether when running the auto-tagger to
         register only generic parameters, or allow it to use the graph matcher
         to automatically pick up any kind of layer tags. (Default: ``False``)
-      patterns_to_skip: Tuple. A list of any patterns that should be skipped by
+      patterns_to_skip: tuple. A list of any patterns that should be skipped by
         the graph matcher when auto-tagging. (Default: ``()``)
       use_automatic_registration: Bool. If ``True``, the optimizer will try to
         automatically register the layers of your network. (Default: ``True``)
       auto_register_kwargs: Any additional kwargs to be passed down to
         :func:`~auto_register_tags`, which is called by the curvature estimator.
         (Default: ``None``)
-      layer_tag_to_block_ctor: Dictionary. A mapping from layer tags to block
+      layer_tag_to_block_ctor: dictionary. A mapping from layer tags to block
         classes which to override the default choices of block approximation for
         that specific tag. See the documentation for
         :class:`~CurvatureEstimator` for a more detailed description. (Default:
@@ -423,7 +425,7 @@ class Optimizer(utils.WithStagedMethods):
       # TODO(jamesmartens,botev): invesigate if we actually need this anymore.
       def schedule_with_first_step_zero(
           global_step: Array,
-          data_seen: Optional[Numeric] = None,
+          data_seen: Numeric | None = None,
       ) -> Array:
 
         value = utils.call_func_with_conditional_kwargs(
@@ -486,8 +488,7 @@ class Optimizer(utils.WithStagedMethods):
       assert (not use_adaptive_learning_rate and not use_adaptive_momentum
               and not use_adaptive_damping)  # not currently supported
 
-    estimator_ctor = (
-        custom_estimator_ctor or curvature_estimator.BlockDiagonalCurvature)
+    estimator_ctor = (custom_estimator_ctor or BlockDiagonalCurvature)
 
     # Curvature estimator
     self._estimator = estimator_ctor(
@@ -526,7 +527,7 @@ class Optimizer(utils.WithStagedMethods):
     return self._l2_reg
 
   @property
-  def estimator(self) -> curvature_estimator.BlockDiagonalCurvature:
+  def estimator(self) -> BlockDiagonalCurvature:
     """The underlying curvature estimator used by the optimizer."""
     return self._estimator
 
@@ -536,14 +537,14 @@ class Optimizer(utils.WithStagedMethods):
     return self._damping_adaptation_decay ** self._damping_adaptation_interval
 
   @property
-  def _exact_powers_to_cache(self) -> Optional[Union[int, Sequence[int]]]:
+  def _exact_powers_to_cache(self) -> int | Sequence[int] | None:
     if self._use_exact_inverses and self._use_cached_inverses:
       return -1
     else:
       return None
 
   @property
-  def _approx_powers_to_cache(self) -> Optional[Union[int, Sequence[int]]]:
+  def _approx_powers_to_cache(self) -> int | Sequence[int] | None:
     if not self._use_exact_inverses and self._use_cached_inverses:
       return -1
     else:
@@ -551,29 +552,29 @@ class Optimizer(utils.WithStagedMethods):
 
   def should_update_damping(
       self,
-      state: "Optimizer.State",
+      state: OptimizerState,
   ) -> Array:
     """Whether at the current step the optimizer should update the damping."""
     return (state.step_counter + 1) % self._damping_adaptation_interval == 0
 
   def should_update_estimate_curvature(
-      self, state: "Optimizer.State"
-  ) -> Union[Array, bool]:
+      self, state: OptimizerState
+  ) -> Array | bool:
     """Whether at the current step the optimizer should update the curvature estimates."""
     if self._curvature_update_period == 1:
       return True
     return state.step_counter % self._curvature_update_period == 0
 
   def should_update_inverse_cache(
-      self, state: "Optimizer.State"
-  ) -> Union[Array, bool]:
+      self, state: OptimizerState
+  ) -> Array | bool:
     """Whether at the current step the optimizer should update the inverse curvature approximation."""
     return self._use_cached_inverses and (
         state.step_counter % self._inverse_update_period == 0)
 
   def should_sync_estimator(
-      self, state: "Optimizer.State"
-  ) -> Union[Array, bool]:
+      self, state: OptimizerState
+  ) -> Array | bool:
     """Whether at the current step the optimizer should update the inverse curvature approximation."""
 
     if self._use_cached_inverses:
@@ -586,7 +587,7 @@ class Optimizer(utils.WithStagedMethods):
       self,
       rng: PRNGKey,
       num: int,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Splits the ``rng`` key."""
     return tuple(jax.random.split(rng, num))
 
@@ -598,10 +599,10 @@ class Optimizer(utils.WithStagedMethods):
   def verify_args_and_get_step_counter(
       self,
       step_counter: Array,
-      learning_rate: Optional[Array] = None,
-      momentum: Optional[Array] = None,
-      damping: Optional[Array] = None,
-      global_step_int: Optional[int] = None,
+      learning_rate: Array | None = None,
+      momentum: Array | None = None,
+      damping: Array | None = None,
+      global_step_int: int | None = None,
   ) -> int:
     """Verifies that the arguments passed to the step function are correct."""
 
@@ -659,12 +660,12 @@ class Optimizer(utils.WithStagedMethods):
   @utils.staged
   def _setup_state_and_schedules(
       self,
-      learning_rate: Optional[Array],
-      momentum: Optional[Array],
-      damping: Optional[Array],
+      learning_rate: Array | None,
+      momentum: Array | None,
+      damping: Array | None,
       step_counter: Array,
       data_seen: Array,
-  ) -> Tuple[Optional[Array], Optional[Array], Array]:
+  ) -> tuple[Array | None, Array | None, Array]:
     """Helper function for setting up learning rate, momentum and damping."""
 
     # Compute schedules if applicable
@@ -694,8 +695,8 @@ class Optimizer(utils.WithStagedMethods):
       params: Params,
       rng: PRNGKey,
       batch: Batch,
-      func_state: Optional[FuncState],
-  ) -> Tuple[FuncArgsVariants, Array]:
+      func_state: FuncState | None,
+  ) -> tuple[FuncArgsVariants, Array]:
     """Helper function for setting up the model function arguments correctly."""
 
     # Preprocess the batch and construct correctly the function arguments
@@ -720,13 +721,11 @@ class Optimizer(utils.WithStagedMethods):
 
   def _maybe_update_estimator_state(
       self,
-      state: "Optimizer.State",
-      should_update: Union[Array, bool],
-      update_func: Callable[
-          ..., curvature_estimator.BlockDiagonalCurvature.State
-      ],
+      state: OptimizerState,
+      should_update: Array | bool,
+      update_func: Callable[..., BlockDiagonalCurvature.State],
       **update_func_kwargs,
-  ) -> "Optimizer.State":
+  ) -> OptimizerState:
     """Updates the estimator state if it is the right iteration."""
 
     # Copy this first since we mutate it later in this function.
@@ -742,13 +741,13 @@ class Optimizer(utils.WithStagedMethods):
 
   def _update_estimator_curvature(
       self,
-      estimator_state: curvature_estimator.BlockDiagonalCurvature.State,
+      estimator_state: BlockDiagonalCurvature.State,
       func_args: FuncArgsVariants,
       rng: PRNGKey,
       ema_old: Numeric,
       ema_new: Numeric,
-      sync: Union[Array, bool] = True
-  ) -> curvature_estimator.BlockDiagonalCurvature.State:
+      sync: Array | bool = True
+  ) -> BlockDiagonalCurvature.State:
     """Updates the curvature estimator state."""
 
     state = self.estimator.update_curvature_matrix_estimate(
@@ -770,13 +769,13 @@ class Optimizer(utils.WithStagedMethods):
 
   def _maybe_update_estimator_curvature(
       self,
-      state: "Optimizer.State",
+      state: OptimizerState,
       func_args: FuncArgsVariants,
       rng: PRNGKey,
       ema_old: Numeric,
       ema_new: Numeric,
-      sync: Union[Array, bool] = True,
-  ) -> "Optimizer.State":
+      sync: Array | bool = True,
+  ) -> OptimizerState:
     """Updates the curvature estimates if it is the right iteration."""
     return self._maybe_update_estimator_state(
         state,
@@ -793,8 +792,8 @@ class Optimizer(utils.WithStagedMethods):
   def _compute_loss_and_grads(
       self,
       func_args: FuncArgsVariants,
-      state: Optional["Optimizer.State"] = None,
-  ) -> Tuple[Array, Params, Optional[FuncState], Optional[FuncAux]]:
+      state: Optional[OptimizerState] = None,
+  ) -> tuple[Array, Params, FuncState | None, FuncAux | None]:
     """Computes the model loss value and its gradients."""
 
     del state
@@ -812,9 +811,9 @@ class Optimizer(utils.WithStagedMethods):
 
   def _maybe_update_inverse_cache(
       self,
-      state: "Optimizer.State",
+      state: OptimizerState,
       damping: Array,
-  ) -> "Optimizer.State":
+  ) -> OptimizerState:
     """Updates the estimator state cache if it is the right iteration."""
     return self._maybe_update_estimator_state(
         state,
@@ -830,7 +829,7 @@ class Optimizer(utils.WithStagedMethods):
   @utils.staged
   def _compute_preconditioned_gradient(
       self,
-      state: "Optimizer.State",
+      state: OptimizerState,
       grads: Params,
       damping: Array,
   ) -> Params:
@@ -849,7 +848,7 @@ class Optimizer(utils.WithStagedMethods):
   @utils.staged
   def _maybe_apply_norm_constraint(
       self, grads: Params, preconditioned_grads: Params, coefficient: Array
-  ) -> Tuple[Params, Optional[Params]]:
+  ) -> tuple[Params, Params | None]:
     """Scales precon grad to have F-weighted norm <= norm_constraint."""
     if self._norm_constraint is None:
       return preconditioned_grads, None
@@ -868,7 +867,7 @@ class Optimizer(utils.WithStagedMethods):
 
   def _compute_quad_change_for_damping(
       self,
-      state: "Optimizer.State",
+      state: OptimizerState,
       delta: Params,
       grads: Params,
       damping: Array,
@@ -889,14 +888,14 @@ class Optimizer(utils.WithStagedMethods):
 
   def _coefficients_and_quad_change(
       self,
-      state: "Optimizer.State",
+      state: OptimizerState,
       vectors: Sequence[Params],
       grads: Params,
-      learning_rate: Optional[Array],
-      momentum: Optional[Array],
+      learning_rate: Array | None,
+      momentum: Array | None,
       damping: Array,
       func_args: FuncArgsVariants,
-  ) -> Tuple[Tuple[Optional[Array], Optional[Array]], Array]:
+  ) -> tuple[tuple[Array | None, Array | None], Array]:
     """The correct update coefficients and corresponding quadratic change."""
 
     # Compute the coefficients of the update vectors
@@ -955,7 +954,7 @@ class Optimizer(utils.WithStagedMethods):
       old_loss: Array,
       quad_change: Array,
       new_func_args: FuncArgsVariants,
-  ) -> Tuple[Array, Array, Array]:
+  ) -> tuple[Array, Array, Array]:
     """Updates the damping parameter."""
 
     new_loss = self.compute_loss_value(new_func_args)
@@ -974,8 +973,8 @@ class Optimizer(utils.WithStagedMethods):
       params: Params,
       rng: PRNGKey,
       batch: Batch,
-      func_state: Optional[FuncState] = None,
-  ) -> "Optimizer.State":
+      func_state: FuncState | None = None,
+  ) -> OptimizerState:
     """A staged function to initialize the optimizer state ."""
 
     # Note that we can reuse the ng in the func_args construction below, as
@@ -1008,8 +1007,8 @@ class Optimizer(utils.WithStagedMethods):
       params: Params,
       rng: PRNGKey,
       batch: Batch,
-      func_state: Optional[FuncState] = None,
-  ) -> "Optimizer.State":
+      func_state: FuncState | None = None,
+  ) -> OptimizerState:
     """Initializes the optimizer and returns the appropriate optimizer state."""
 
     if not self.finalized:
@@ -1021,13 +1020,13 @@ class Optimizer(utils.WithStagedMethods):
   def _burnin(
       self,
       params: Params,
-      state: "Optimizer.State",
+      state: OptimizerState,
       rng: Array,
       batch: Batch,
-      func_state: Optional[FuncState],
+      func_state: FuncState | None,
       accumulator: utils.MultiChunkAccumulator,
-      sync: Union[Array, bool],
-  ) -> Tuple["Optimizer.State", utils.MultiChunkAccumulator]:
+      sync: Array | bool,
+  ) -> tuple[OptimizerState, utils.MultiChunkAccumulator]:
     """A single burnin step, updating only the curvature estimate."""
 
     # Copy this first since we mutate it later in this function.
@@ -1054,11 +1053,11 @@ class Optimizer(utils.WithStagedMethods):
       self,
       num_steps: int,
       params: Params,
-      state: "Optimizer.State",
+      state: OptimizerState,
       rng: PRNGKey,
       data_iterator: Iterator[Batch],
-      func_state: Optional[FuncState] = None,
-  ) -> Tuple["Optimizer.State", Optional[FuncState]]:
+      func_state: FuncState | None = None,
+  ) -> tuple[OptimizerState, FuncState | None]:
     """Runs all burnin steps required."""
 
     if num_steps > 0:
@@ -1084,13 +1083,13 @@ class Optimizer(utils.WithStagedMethods):
   def _step(
       self,
       params: Params,
-      state: "Optimizer.State",
+      state: OptimizerState,
       rng: Array,
       batch: Batch,
-      func_state: Optional[FuncState],
-      learning_rate: Optional[Array],
-      momentum: Optional[Array],
-      damping: Optional[Array]
+      func_state: FuncState | None,
+      learning_rate: Array | None,
+      momentum: Array | None,
+      damping: Array | None
   )-> ReturnEither:
     """A single full step of the optimizer."""
 
@@ -1241,15 +1240,15 @@ class Optimizer(utils.WithStagedMethods):
   def step(
       self,
       params: Params,
-      state: "Optimizer.State",
+      state: OptimizerState,
       rng: PRNGKey,
-      data_iterator: Optional[Iterator[Batch]] = None,
-      batch: Optional[Batch] = None,
-      func_state: Optional[FuncState] = None,
-      learning_rate: Optional[Array] = None,
-      momentum: Optional[Array] = None,
-      damping: Optional[Array] = None,
-      global_step_int: Optional[int] = None
+      data_iterator: Iterator[Batch] | None = None,
+      batch: Batch | None = None,
+      func_state: FuncState | None = None,
+      learning_rate: Array | None = None,
+      momentum: Array | None = None,
+      damping: Array | None = None,
+      global_step_int: int | None = None
   )-> ReturnEither:
     """Performs a single update step using the optimizer.
 
@@ -1343,8 +1342,8 @@ class Optimizer(utils.WithStagedMethods):
       vectors: Sequence[Params],
       grads: Params,
       func_args: FuncArgsVariants,
-      state: Optional["Optimizer.State"] = None,
-  ) -> Tuple[Array, Array, Array]:
+      state: Optional[OptimizerState] = None,
+  ) -> tuple[Array, Array, Array]:
     """Computes the components of the exact quadratic model."""
 
     del state
@@ -1367,10 +1366,10 @@ class Optimizer(utils.WithStagedMethods):
   @utils.auto_scope_method
   def compute_approx_quad_model(
       self,
-      state: "Optimizer.State",
+      state: OptimizerState,
       vectors: Sequence[Params],
       grads: Params,
-  ) -> Tuple[Array, Array, Array]:
+  ) -> tuple[Array, Array, Array]:
     """Computes the components of the approximate quadratic model."""
 
     # v_i^T C v_j
@@ -1408,11 +1407,11 @@ class Optimizer(utils.WithStagedMethods):
   @utils.staged
   def _solve_quad_model(
       self,
-      quad_model_parameters: Tuple[Array, Array, Array],
+      quad_model_parameters: tuple[Array, Array, Array],
       damping: Array,
       vectors: Sequence[Params],
-      fixed_coefficients: Optional[Sequence[Union[Numeric, None]]] = None,
-  ) -> Tuple[Tuple[Array, ...], Array]:
+      fixed_coefficients: Sequence[Numeric | None] | None = None,
+  ) -> tuple[tuple[Array, ...], Array]:
     """Solves for the optimal learning rate and momentum of the quadratic model.
 
     The quadratic model is represented as:
@@ -1518,7 +1517,7 @@ class Optimizer(utils.WithStagedMethods):
       new_loss: Array,
       quad_change: Array,
       current_damping: Array,
-  ) -> Tuple[Array, Array]:
+  ) -> tuple[Array, Array]:
     """Computes the reduction ratio and the updated value of the damping."""
 
     # Reduction ratio
@@ -1573,8 +1572,8 @@ def convert_value_and_grad_to_value_func(
 
 def make_func_args(
     params: Params,
-    func_state: Optional[FuncState],
-    rng: Optional[PRNGKey],
+    func_state: FuncState | None,
+    rng: PRNGKey | None,
     batch: Batch,
     has_state: bool,
     has_rng: bool,
@@ -1621,7 +1620,7 @@ def extract_func_outputs(
     raw_outputs: FuncOutputs,
     has_aux: bool,
     has_state: bool,
-) -> Tuple[Array, Optional[FuncState], Optional[FuncAux]]:
+) -> tuple[Array, FuncState | None, FuncAux | None]:
   """Converts the raw output of the model function into loss,func_state and aux.
 
   Args:

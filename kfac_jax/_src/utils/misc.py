@@ -16,7 +16,7 @@ import abc
 import dataclasses
 import functools
 import inspect
-from typing import Any, Callable, Iterator, Sequence, Type, Tuple, Union, Dict, TypeVar
+from typing import Any, Callable, Iterator, Sequence, TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -36,7 +36,7 @@ STATE_CLASSES_SERIALIZATION_DICT = {}
 
 def fake_element_from_iterator(
     iterator: Iterator[TArrayTree],
-) -> Tuple[TArrayTree, Iterator[TArrayTree]]:
+) -> tuple[TArrayTree, Iterator[TArrayTree]]:
   """Returns a zeroed-out initial element of the iterator "non-destructively".
 
   This function mutates the input iterator, hence after calling this function
@@ -65,9 +65,9 @@ def fake_element_from_iterator(
 
 
 def to_tuple_or_repeat(
-    x: Union[Numeric, Sequence[Numeric]],
+    x: Numeric | Sequence[Numeric],
     length: int,
-) -> Tuple[Numeric, ...]:
+) -> tuple[Numeric, ...]:
   """Converts `x` to a tuple of fixed length.
 
   If `x` is an array, it is split along its last axis to a tuple (assumed to
@@ -103,15 +103,15 @@ class State(abc.ABC):
   """Abstract class for state classes."""
 
   @classmethod
-  def field_names(cls) -> Tuple[str, ...]:
+  def field_names(cls) -> tuple[str, ...]:
     return tuple(field.name for field in dataclasses.fields(cls))  # pytype: disable=wrong-arg-types
 
   @classmethod
-  def field_types(cls) -> Dict[str, Type[Any]]:
+  def field_types(cls) -> dict[str, type[Any]]:
     return {field.name: field.type for field in dataclasses.fields(cls)}  # pytype: disable=wrong-arg-types
 
   @property
-  def field_values(self) -> Tuple[ArrayTree, ...]:
+  def field_values(self) -> tuple[ArrayTree, ...]:
     return tuple(getattr(self, name) for name in self.field_names())
 
   def copy(self: StateType) -> StateType:
@@ -119,14 +119,14 @@ class State(abc.ABC):
     (flattened, structure) = jax.tree_util.tree_flatten(self)
     return jax.tree_util.tree_unflatten(structure, flattened)
 
-  def tree_flatten(self) -> Tuple[Tuple[ArrayTree, ...], Tuple[str, ...]]:
+  def tree_flatten(self) -> tuple[tuple[ArrayTree, ...], tuple[str, ...]]:
     return self.field_values, self.field_names()
 
   @classmethod
   def tree_unflatten(
       cls,
-      aux_data: Tuple[str, ...],
-      children: Tuple[ArrayTree, ...],
+      aux_data: tuple[str, ...],
+      children: tuple[ArrayTree, ...],
   ):
     return cls(**dict(zip(aux_data, children)))
 
@@ -136,7 +136,7 @@ class State(abc.ABC):
             ")")
 
 
-def register_state_class(class_type: Type[Any]) -> Type[Any]:
+def register_state_class(class_type: type[Any]) -> type[Any]:
   """Extended dataclass decorator, which also registers the class as a PyTree.
 
   The function is equivalent to `dataclasses.dataclass`, but additionally

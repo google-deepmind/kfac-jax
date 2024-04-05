@@ -16,7 +16,7 @@ import abc
 import collections
 import functools
 import string
-from typing import Optional, Sequence, Any, Set, Tuple, Union, Dict, Mapping
+from typing import Sequence, Any, Mapping
 
 import jax
 import jax.numpy as jnp
@@ -35,8 +35,8 @@ Numeric = utils.Numeric
 PRNGKey = utils.PRNGKey
 Shape = utils.Shape
 DType = utils.DType
-ScalarOrSequence = Union[Scalar, Sequence[Scalar]]
-Cache = Dict[str, Union[Array, Dict[str, Array]]]
+ScalarOrSequence = Scalar | Sequence[Scalar]
+Cache = dict[str, Array | dict[str, Array]]
 
 # Special global variables
 # This is used for einsum strings
@@ -106,8 +106,8 @@ def get_default_eigen_decomposition_threshold() -> int:
 
 
 def _to_real_set(
-    number_or_sequence: Optional[ScalarOrSequence]
-) -> Set[Scalar]:
+    number_or_sequence: ScalarOrSequence | None
+) -> set[Scalar]:
   """Converts the optional number or sequence to a set."""
   if number_or_sequence is None:
     return set()
@@ -146,7 +146,7 @@ class CurvatureBlock(utils.Finalizable):
         this are updated via calls to :func:`~CurvatureBlock.update_cache`, and
         do not necessarily correspond to the most up-to-date curvature estimate.
     """
-    cache: Optional[Dict[str, Union[Array, Dict[str, Array]]]]
+    cache: dict[str, Array | dict[str, Array]] | None
 
   def __init__(self, layer_tag_eq: tags.LayerTagEqn, name: str):
     """Initializes the block.
@@ -173,7 +173,7 @@ class CurvatureBlock(utils.Finalizable):
     return primitive
 
   @property
-  def parameter_variables(self) -> Tuple[jax.core.Var, ...]:
+  def parameter_variables(self) -> tuple[jax.core.Var, ...]:
     """The parameter variables of the underlying Jax equation."""
 
     param_vars = []
@@ -187,7 +187,7 @@ class CurvatureBlock(utils.Finalizable):
     return tuple(param_vars)
 
   @property
-  def outputs_shapes(self) -> Tuple[Shape, ...]:
+  def outputs_shapes(self) -> tuple[Shape, ...]:
     """The shapes of the output variables of the block's tag equation."""
 
     output_vars = self.layer_tag_primitive.split_all_inputs(
@@ -196,7 +196,7 @@ class CurvatureBlock(utils.Finalizable):
     return jax.tree_util.tree_map(lambda x: x.aval.shape, output_vars)
 
   @property
-  def inputs_shapes(self) -> Tuple[Shape, ...]:
+  def inputs_shapes(self) -> tuple[Shape, ...]:
     """The shapes of the input variables of the block's tag equation."""
 
     input_vars = self.layer_tag_primitive.split_all_inputs(
@@ -205,7 +205,7 @@ class CurvatureBlock(utils.Finalizable):
     return jax.tree_util.tree_map(lambda x: x.aval.shape, input_vars)
 
   @property
-  def parameters_shapes(self) -> Tuple[Shape, ...]:
+  def parameters_shapes(self) -> tuple[Shape, ...]:
     """The shapes of the parameter variables of the block's tag equation."""
     return tuple(jax.tree_util.tree_map(
         lambda x: tuple(x.aval.shape), self.parameter_variables))
@@ -218,13 +218,13 @@ class CurvatureBlock(utils.Finalizable):
     return dtypes.pop()
 
   @property
-  def parameters_canonical_order(self) -> Tuple[int, ...]:
+  def parameters_canonical_order(self) -> tuple[int, ...]:
     """The canonical order of the parameter variables."""
 
     return tuple(np.argsort([p.count for p in self.parameter_variables]))
 
   @property
-  def layer_tag_extra_params(self) -> Dict[str, Any]:
+  def layer_tag_extra_params(self) -> dict[str, Any]:
     """Any extra parameters of passed into the Jax primitive of this block."""
 
     return self._layer_tag_eq.params
@@ -283,8 +283,8 @@ class CurvatureBlock(utils.Finalizable):
   def init(
       self,
       rng: PRNGKey,
-      exact_powers_to_cache: Optional[ScalarOrSequence],
-      approx_powers_to_cache: Optional[ScalarOrSequence],
+      exact_powers_to_cache: ScalarOrSequence | None,
+      approx_powers_to_cache: ScalarOrSequence | None,
       cache_eigenvalues: bool,
   ) -> "CurvatureBlock.State":
     """Initializes the state for this block.
@@ -320,8 +320,8 @@ class CurvatureBlock(utils.Finalizable):
   def _init(
       self,
       rng: PRNGKey,
-      exact_powers_to_cache: Set[Scalar],
-      approx_powers_to_cache: Set[Scalar],
+      exact_powers_to_cache: set[Scalar],
+      approx_powers_to_cache: set[Scalar],
       cache_eigenvalues: bool,
   ) -> "CurvatureBlock.State":
     """The non-public interface of ``init``."""
@@ -343,7 +343,7 @@ class CurvatureBlock(utils.Finalizable):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Computes ``(BlockMatrix + identity_weight I)**power`` times ``vector``.
 
     Args:
@@ -396,7 +396,7 @@ class CurvatureBlock(utils.Finalizable):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Performs matrix-vector multiplication, ignoring ``self.scale``."""
 
   def multiply(
@@ -406,7 +406,7 @@ class CurvatureBlock(utils.Finalizable):
       identity_weight: Numeric,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Computes ``(BlockMatrix + identity_weight I)`` times ``vector``."""
 
     return self.multiply_matpower(
@@ -425,7 +425,7 @@ class CurvatureBlock(utils.Finalizable):
       identity_weight: Numeric,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Computes ``(BlockMatrix + identity_weight I)^-1`` times ``vector``."""
 
     return self.multiply_matpower(
@@ -473,7 +473,7 @@ class CurvatureBlock(utils.Finalizable):
   def update_curvature_matrix_estimate(
       self,
       state: "CurvatureBlock.State",
-      estimation_data: Dict[str, Sequence[Array]],
+      estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -503,8 +503,8 @@ class CurvatureBlock(utils.Finalizable):
       self,
       state: "CurvatureBlock.State",
       identity_weight: Numeric,
-      exact_powers: Optional[ScalarOrSequence],
-      approx_powers: Optional[ScalarOrSequence],
+      exact_powers: ScalarOrSequence | None,
+      approx_powers: ScalarOrSequence | None,
       eigenvalues: bool,
   ) -> "CurvatureBlock.State":
     """Updates the cached estimates of the different powers specified.
@@ -536,8 +536,8 @@ class CurvatureBlock(utils.Finalizable):
       self,
       state: "CurvatureBlock.State",
       identity_weight: Numeric,
-      exact_powers: Set[Scalar],
-      approx_powers: Set[Scalar],
+      exact_powers: set[Scalar],
+      approx_powers: set[Scalar],
       eigenvalues: bool,
   ) -> "CurvatureBlock.State":
     """The cache updating function, ignoring ``self.scale``."""
@@ -591,8 +591,8 @@ class ScaledIdentity(CurvatureBlock):
   def _init(
       self,
       rng: PRNGKey,
-      exact_powers_to_cache: Set[Scalar],
-      approx_powers_to_cache: Set[Scalar],
+      exact_powers_to_cache: set[Scalar],
+      approx_powers_to_cache: set[Scalar],
       cache_eigenvalues: bool,
   ) -> CurvatureBlock.State:
 
@@ -617,7 +617,7 @@ class ScaledIdentity(CurvatureBlock):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
 
     del exact_power  # Unused
 
@@ -648,7 +648,7 @@ class ScaledIdentity(CurvatureBlock):
   def update_curvature_matrix_estimate(
       self,
       state: CurvatureBlock.State,
-      estimation_data: Dict[str, Sequence[Array]],
+      estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -660,8 +660,8 @@ class ScaledIdentity(CurvatureBlock):
       self,
       state: CurvatureBlock.State,
       identity_weight: Numeric,
-      exact_powers: Set[Scalar],
-      approx_powers: Set[Scalar],
+      exact_powers: set[Scalar],
+      approx_powers: set[Scalar],
       eigenvalues: bool,
   ) -> CurvatureBlock.State:
 
@@ -692,13 +692,13 @@ class Diagonal(CurvatureBlock, abc.ABC):
         diagonals of the curvature for each parameter that is part of the
         associated layer.
     """
-    diagonal_factors: Tuple[utils.WeightedMovingAverage]
+    diagonal_factors: tuple[utils.WeightedMovingAverage, ...]
 
   def _init(
       self,
       rng: PRNGKey,
-      exact_powers_to_cache: Set[Scalar],
-      approx_powers_to_cache: Set[Scalar],
+      exact_powers_to_cache: set[Scalar],
+      approx_powers_to_cache: set[Scalar],
       cache_eigenvalues: bool,
   ) -> "Diagonal.State":
 
@@ -734,7 +734,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
 
     # state_dependent_scale needs to be included because it won't be by the
     # caller of this function (multiply_matpower) when use_cached=True
@@ -764,8 +764,8 @@ class Diagonal(CurvatureBlock, abc.ABC):
       self,
       state: "Diagonal.State",
       identity_weight: Numeric,
-      exact_powers: Set[Scalar],
-      approx_powers: Set[Scalar],
+      exact_powers: set[Scalar],
+      approx_powers: set[Scalar],
       eigenvalues: bool,
   ) -> "Diagonal.State":
 
@@ -808,7 +808,7 @@ class Full(CurvatureBlock, abc.ABC):
       self,
       layer_tag_eq: tags.LayerTagEqn,
       name: str,
-      eigen_decomposition_threshold: Optional[int] = None,
+      eigen_decomposition_threshold: int | None = None,
   ):
     """Initializes the block.
 
@@ -855,7 +855,7 @@ class Full(CurvatureBlock, abc.ABC):
   def single_vector_to_parameters_list(
       self,
       vector: Array,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """Reverses the transformation ``self.parameters_list_to_single_vector``."""
 
     if vector.ndim != 1:
@@ -881,8 +881,8 @@ class Full(CurvatureBlock, abc.ABC):
   def _init(
       self,
       rng: PRNGKey,
-      exact_powers_to_cache: Set[Scalar],
-      approx_powers_to_cache: Set[Scalar],
+      exact_powers_to_cache: set[Scalar],
+      approx_powers_to_cache: set[Scalar],
       cache_eigenvalues: bool,
   ) -> "Full.State":
 
@@ -930,7 +930,7 @@ class Full(CurvatureBlock, abc.ABC):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
 
     vector = self.parameters_list_to_single_vector(vector)
 
@@ -989,8 +989,8 @@ class Full(CurvatureBlock, abc.ABC):
       self,
       state: "Full.State",
       identity_weight: Numeric,
-      exact_powers: Set[Scalar],
-      approx_powers: Set[Scalar],
+      exact_powers: set[Scalar],
+      approx_powers: set[Scalar],
       eigenvalues: bool,
   ) -> "Full.State":
 
@@ -1055,10 +1055,10 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
         curvature for each axis group.
     """
 
-    factors: Tuple[utils.WeightedMovingAverage, ...]
+    factors: tuple[utils.WeightedMovingAverage, ...]
 
     @classmethod
-    def from_dict(cls, dict_rep: Dict[str, Any]) -> "KroneckerFactored.State":
+    def from_dict(cls, dict_rep: dict[str, Any]) -> "KroneckerFactored.State":
       class_name = dict_rep.pop("__class__", cls.__name__)
       assert class_name == cls.__name__
       return cls(
@@ -1072,7 +1072,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       self,
       layer_tag_eq: tags.LayerTagEqn,
       name: str,
-      axis_groups: Optional[Sequence[Sequence[int]]] = None,
+      axis_groups: Sequence[Sequence[int]] | None = None,
   ):
 
     # Even though the superclass constructor will set this later, we need to do
@@ -1101,7 +1101,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
     """Combines all parameters to a single non axis grouped array."""
 
   @abc.abstractmethod
-  def array_to_parameters_shaped_list(self, array: Array) -> Tuple[Array, ...]:
+  def array_to_parameters_shaped_list(self, array: Array) -> tuple[Array, ...]:
     """An inverse transformation of ``self.parameters_shaped_list_to_array``."""
 
   @property
@@ -1139,7 +1139,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
   def grouped_array_to_parameters_shaped_list(
       self,
       grouped_array: Array,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
     """An inverse transformation of ``self.parameter_shaped_list_to_grouped_array``."""
     array = jnp.reshape(grouped_array, self.array_shape)
     return self.array_to_parameters_shaped_list(array)
@@ -1147,8 +1147,8 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
   def _init(
       self,
       rng: PRNGKey,
-      exact_powers_to_cache: Set[Scalar],
-      approx_powers_to_cache: Set[Scalar],
+      exact_powers_to_cache: set[Scalar],
+      approx_powers_to_cache: set[Scalar],
       cache_eigenvalues: bool,
   ) -> "KroneckerFactored.State":
 
@@ -1206,7 +1206,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       power: Scalar,
       exact_power: bool,
       use_cached: bool,
-  ) -> Tuple[Array, ...]:
+  ) -> tuple[Array, ...]:
 
     assert len(state.factors) == self.grouped_array_ndim
 
@@ -1404,7 +1404,7 @@ class TwoKroneckerFactored(KroneckerFactored):
       [w] = parameters_shaped_list
       return w.reshape([-1, w.shape[-1]])
 
-  def array_to_parameters_shaped_list(self, array: Array) -> Tuple[Array, ...]:
+  def array_to_parameters_shaped_list(self, array: Array) -> tuple[Array, ...]:
 
     if self.has_bias:
       w, b = array[:-1], array[-1]
@@ -1442,7 +1442,7 @@ class NaiveDiagonal(Diagonal):
   def update_curvature_matrix_estimate(
       self,
       state: "NaiveDiagonal.State",
-      estimation_data: Dict[str, Sequence[Array]],
+      estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1471,7 +1471,7 @@ class NaiveFull(Full):
   def update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: Dict[str, Sequence[Array]],
+      estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1527,7 +1527,7 @@ class DenseDiagonal(Diagonal):
   def update_curvature_matrix_estimate(
       self,
       state: "Diagonal.State",
-      estimation_data: Dict[str, Sequence[Array]],
+      estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1560,7 +1560,7 @@ class DenseFull(Full):
   def update_curvature_matrix_estimate(
       self,
       state: "Full.State",
-      estimation_data: Dict[str, Sequence[Array]],
+      estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1636,7 +1636,7 @@ class Conv2DDiagonal(Diagonal):
       self,
       layer_tag_eq: tags.LayerTagEqn,
       name: str,
-      max_elements_for_vmap: Optional[int] = None,
+      max_elements_for_vmap: int | None = None,
   ):
     """Initializes the block.
 
@@ -1695,7 +1695,7 @@ class Conv2DDiagonal(Diagonal):
   def update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
-      estimation_data: Dict[str, Sequence[Array]],
+      estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1731,7 +1731,7 @@ class Conv2DFull(Full):
       self,
       layer_tag_eq: tags.LayerTagEqn,
       name: str,
-      max_elements_for_vmap: Optional[int] = None,
+      max_elements_for_vmap: int | None = None,
   ):
     """Initializes the block.
 
@@ -1798,7 +1798,7 @@ class Conv2DFull(Full):
   def update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: Dict[str, Sequence[Array]],
+      estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -1890,7 +1890,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   def compute_inputs_stats(
       self,
       inputs: Array,
-      weighting_array: Optional[Array] = None,
+      weighting_array: Array | None = None,
   ) -> Array:
     """Computes the statistics for the inputs factor."""
     batch_size = inputs.shape[0]
@@ -2021,7 +2021,7 @@ class ScaleAndShiftDiagonal(Diagonal):
   def update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
-      estimation_data: Dict[str, Sequence[Array]],
+      estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
@@ -2083,7 +2083,7 @@ class ScaleAndShiftFull(Full):
   def update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: Dict[str, Sequence[Array]],
+      estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
