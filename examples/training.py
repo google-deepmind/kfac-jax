@@ -18,7 +18,7 @@ import copy
 import functools
 import os
 import time
-from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Union
+from typing import Any, Callable, Iterator
 
 from absl import logging
 import jax
@@ -160,7 +160,7 @@ class SupervisedExperiment(abc.ABC):
       has_aux: bool,
       has_rng: bool,
       has_func_state: bool,
-      eval_splits: Tuple[str, ...] = ("train", "test"),
+      eval_splits: tuple[str, ...] = ("train", "test"),
       batch_size_calculator_ctor: BatchSizeCalculatorCtor = BatchSizeCalculator,
   ):
     """Initializes experiment.
@@ -263,12 +263,12 @@ class SupervisedExperiment(abc.ABC):
   @property
   def train_inputs(
       self,
-  ) -> Union[Iterator[Batch], Tuple[Iterator[Batch], Iterator[Batch]]]:
+  ) -> Iterator[Batch] | tuple[Iterator[Batch], Iterator[Batch]]:
     """The training data iterator."""
     return self.train_input
 
   @property
-  def eval_input(self) -> Dict[str, Callable[[], Iterator[Batch]]]:
+  def eval_input(self) -> dict[str, Callable[[], Iterator[Batch]]]:
 
     """Returns all evaluation iterators constructors."""
     if self._eval_input is None:
@@ -304,7 +304,7 @@ class SupervisedExperiment(abc.ABC):
 
   def _update_polyak_average(
       self,
-      params_polyak: Optional[WeightedMovingAverage[Params]],
+      params_polyak: WeightedMovingAverage[Params] | None,
       params: Params
   ) -> WeightedMovingAverage[Params]:
     """Updates the polyak-averaged version of the parameters."""
@@ -347,7 +347,7 @@ class SupervisedExperiment(abc.ABC):
 
   def create_optimizer(
       self,
-  ) -> Union[optimizers.OptaxWrapper, kfac_jax.Optimizer]:
+  ) -> optimizers.OptaxWrapper | kfac_jax.Optimizer:
     """Creates the optimizer specified in the experiment's config."""
     optimizer_config = copy.deepcopy(self.config.optimizer)
     return optimizers.create_optimizer(
@@ -454,7 +454,7 @@ class SupervisedExperiment(abc.ABC):
   ) -> Iterator[Batch]:
     """Constructs the training dataset."""
 
-  def train_step(self, global_step: Array, rng: PRNGKey) -> Dict[str, Numeric]:
+  def train_step(self, global_step: Array, rng: PRNGKey) -> dict[str, Numeric]:
     """Performs a single training step."""
 
     del global_step  # Unused
@@ -517,12 +517,12 @@ class SupervisedExperiment(abc.ABC):
       self,
       global_step: Array,
       params: Params,
-      params_polyak: Optional[WeightedMovingAverage[Params]],
+      params_polyak: WeightedMovingAverage[Params] | None,
       func_state: FuncState,
-      opt_state: Union[kfac_jax.Optimizer.State, optimizers.OptaxState],
+      opt_state: kfac_jax.Optimizer.State | optimizers.OptaxState,
       rng: PRNGKey,
       batch: Batch,
-  ) -> Dict[str, Array]:
+  ) -> dict[str, Array]:
     """Evaluates a single batch."""
 
     del global_step  # This might be used in subclasses
@@ -566,7 +566,7 @@ class SupervisedExperiment(abc.ABC):
       self,
       global_step: Array,
       rng: PRNGKey,
-  ) -> Dict[str, Numeric]:
+  ) -> dict[str, Numeric]:
     """Runs the evaluation of the currently loaded model parameters."""
 
     all_stats = dict()
@@ -627,7 +627,7 @@ class JaxlineExperiment(SupervisedExperiment, experiment.AbstractExperiment):
       global_step: Array,
       rng: PRNGKey,
       **unused_kwargs,
-  ) -> Dict[str, Numeric]:
+  ) -> dict[str, Numeric]:
     self.maybe_initialize_state()
     return self.train_step(global_step, rng)
 
@@ -636,7 +636,7 @@ class JaxlineExperiment(SupervisedExperiment, experiment.AbstractExperiment):
       global_step: Array,
       rng: PRNGKey,
       **unused_kwargs,
-  ) -> Dict[str, Numeric]:
+  ) -> dict[str, Numeric]:
     return self.run_evaluation(global_step, rng)
 
 
@@ -646,8 +646,8 @@ def train_standalone_supervised(
     experiment_ctor: Callable[
         [str, PRNGKey, ml_collections.ConfigDict], JaxlineExperiment
     ],
-    storage_folder: Optional[str],
-) -> Dict[str, Array]:
+    storage_folder: str | None,
+) -> dict[str, Array]:
   """Run an experiment without the Jaxline runtime."""
 
   rng = jax.random.PRNGKey(random_seed)

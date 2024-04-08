@@ -14,7 +14,7 @@
 """Asserts all public symbols are covered in the docs."""
 import inspect
 import types
-from typing import Any, Mapping, Set, Sequence, Tuple
+from typing import Any, Mapping, Sequence
 
 import kfac_jax
 from sphinx import application
@@ -23,7 +23,7 @@ from sphinx import errors
 
 
 def get_public_functions(
-    root_module: types.ModuleType) -> Sequence[Tuple[str, types.FunctionType]]:
+    root_module: types.ModuleType) -> Sequence[tuple[str, types.FunctionType]]:
   """Returns `(function_name, function)` for all functions of `root_module`."""
   fns = []
   for name in dir(root_module):
@@ -34,7 +34,7 @@ def get_public_functions(
 
 
 def get_public_symbols(
-    root_module: types.ModuleType) -> Sequence[Tuple[str, types.FunctionType]]:
+    root_module: types.ModuleType) -> Sequence[tuple[str, types.FunctionType]]:
   """Returns `(symbol_name, symbol)` for all symbols of `root_module`."""
   fns = []
   for name in getattr(root_module, "__all__"):
@@ -56,7 +56,7 @@ class CoverageCheck(builders.Builder):
 
   def finish(self) -> None:
 
-    def public_symbols() -> Set[str]:
+    def public_symbols() -> set[str]:
       symbols = set()
       for symbol_name, _ in get_public_symbols(kfac_jax):
         symbols.add("kfac_jax." + symbol_name)

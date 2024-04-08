@@ -13,7 +13,7 @@
 # limitations under the License.
 """Using Haiku's Resnet50 v2 implementation for ImageNet."""
 import functools
-from typing import Any, Dict, Mapping, Tuple, Union
+from typing import Any, Mapping
 
 import chex
 import haiku as hk
@@ -35,7 +35,7 @@ def resnet50(
     bn_config["cross_replica_axis"] = "kfac_axis"
 
   def func(
-      batch: Union[chex.Array, Mapping[str, chex.Array]],
+      batch: chex.Array | Mapping[str, chex.Array],
       is_training: bool
   ) -> chex.Array:
     """Evaluates the network."""
@@ -64,9 +64,9 @@ def resnet50_loss(
     bn_decay_rate: float = 0.9,
     batch_norm_synced: bool = False,
     **kwargs: Any,
-) -> Tuple[
+) -> tuple[
     chex.Array,
-    Union[Dict[str, chex.Array], Tuple[hk.State, Dict[str, chex.Array]]]
+    dict[str, chex.Array] | tuple[hk.State, dict[str, chex.Array]]
 ]:
   """Evaluates the loss of the Resnet50 model."""
 

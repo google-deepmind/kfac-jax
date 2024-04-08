@@ -176,9 +176,9 @@ def _inner_product_float64(obj1: ArrayTree, obj2: ArrayTree) -> Array:
   #   elements_inner_products = jax.tree_util.tree_map(array_ip, obj1, obj2)
 
   #   flat_list = jax.tree_util.tree_leaves(elements_inner_products)
-  #   result = flat_List[0]
+  #   result = flat_list[0]
 
-  #   for element_ip in flat_List[1:]:
+  #   for element_ip in flat_list[1:]:
   #     result = result + element_ip
 
   # return jnp.array(result, dtype=original_dtype)

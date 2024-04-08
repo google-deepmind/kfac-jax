@@ -14,7 +14,7 @@
 """Utility functions for computing and automatically registering losses."""
 import types
 
-from typing import Any, Optional, Sequence, Tuple, Dict
+from typing import Any, Sequence
 
 import haiku as hk
 import jax
@@ -52,7 +52,7 @@ def sigmoid_cross_entropy(
     labels: Array,
     weight: float = 1.0,
     register_loss: bool = True,
-    extra_registration_kwargs: Optional[Dict[str, Any]] = None,
+    extra_registration_kwargs: dict[str, Any] | None = None,
     registration_module: types.ModuleType = kfac_jax,
 ) -> Array:
   """Sigmoid cross-entropy loss."""
@@ -79,8 +79,8 @@ def softmax_cross_entropy(
     labels: Array,
     weight: Numeric = 1.0,
     register_loss: bool = True,
-    mask: Optional[Array] = None,
-    extra_registration_kwargs: Optional[Dict[str, Any]] = None,
+    mask: Array | None = None,
+    extra_registration_kwargs: dict[str, Any] | None = None,
     registration_module: types.ModuleType = kfac_jax,
 ) -> Array:
   """Softmax cross entropy loss."""
@@ -146,7 +146,7 @@ def squared_error(
     targets: Array,
     weight: float = 1.0,
     register_loss: bool = True,
-    extra_registration_kwargs: Optional[Dict[str, Any]] = None,
+    extra_registration_kwargs: dict[str, Any] | None = None,
     registration_module: types.ModuleType = kfac_jax,
 ) -> Array:
   """Squared error loss."""
@@ -226,11 +226,11 @@ def classifier_loss_and_stats(
     top_k_stats: Sequence[int] = (1, 5),
     average_loss: bool = True,
     register_loss: bool = True,
-    mask: Optional[Array] = None,
+    mask: Array | None = None,
     normalization_mode: str = "batch_size_only",
-    extra_registration_kwargs: Optional[Dict[str, Any]] = None,
+    extra_registration_kwargs: dict[str, Any] | None = None,
     registration_module: types.ModuleType = kfac_jax,
-) -> Tuple[Array, Dict[str, Array]]:
+) -> tuple[Array, dict[str, Array]]:
   """Softmax cross-entropy with regularizer and accuracy statistics."""
 
   batch_size = logits.shape[0]

@@ -13,7 +13,7 @@
 # limitations under the License.
 """Haiku implementation of a small convolutional classifier for MNIST."""
 import functools
-from typing import Mapping, Tuple, Union, Dict
+from typing import Mapping
 
 import haiku as hk
 import jax
@@ -30,7 +30,7 @@ PRNGKey = kfac_jax.utils.PRNGKey
 
 def convolutional_classifier() -> hk.Transformed:
   """Constructs a Haiku transformed object of the classifier network."""
-  def func(batch: Union[Array, Mapping[str, Array]]) -> Array:
+  def func(batch: Array | Mapping[str, Array]) -> Array:
     """Evaluates the classifier."""
     if isinstance(batch, Mapping):
       batch = batch["images"]
@@ -60,7 +60,7 @@ def classifier_loss(
     l2_reg: Numeric,
     is_training: bool,
     average_loss: bool = True,
-) -> Tuple[Array, Dict[str, Array]]:
+) -> tuple[Array, dict[str, Array]]:
   """Evaluates the loss of the classifier network."""
 
   logits = convolutional_classifier().apply(params, batch["images"])

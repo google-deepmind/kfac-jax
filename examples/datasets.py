@@ -15,7 +15,7 @@
 
 """
 import types
-from typing import Callable, Dict, Iterator, Optional, Tuple
+from typing import Callable, Iterator
 
 import jax
 import jax.numpy as jnp
@@ -27,9 +27,9 @@ tfds = tensorflow_datasets
 
 # Types for annotation
 Array = jax.Array
-Shape = Tuple[int, ...]
-Batch = Dict[str, Array]
-TfBatch = Dict[str, tf.Tensor]
+Shape = tuple[int, ...]
+Batch = dict[str, Array]
+TfBatch = dict[str, tf.Tensor]
 
 # Special global variables
 _IMAGENET_MEAN_RGB = (0.485, 0.456, 0.406)
@@ -49,7 +49,7 @@ def mnist_dataset(
     repeat: bool,
     shuffle: bool,
     drop_remainder: bool,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     multi_device: bool = True,
     reshuffle_each_iteration: bool = True,
     dtype: str = "float32",
@@ -97,7 +97,7 @@ def mnist_dataset(
   def preprocess_batch(
       images: tf.Tensor,
       labels: tf.Tensor
-  ) -> Dict[str, tf.Tensor]:
+  ) -> dict[str, tf.Tensor]:
     """Standard reshaping of the images to (28, 28)."""
     images = tf.image.convert_image_dtype(images, dtype)
     single_example_shape = [784] if flatten_images else [28, 28]
@@ -134,7 +134,7 @@ def mnist_dataset(
 
 def imagenet_num_examples_and_split(
     split: str
-) -> Tuple[int, tensorflow_datasets.Split]:
+) -> tuple[int, tensorflow_datasets.Split]:
   """Returns the number of examples in the given split of Imagenet."""
 
   if split == "train":
@@ -162,10 +162,10 @@ def imagenet_dataset(
     cache: bool = False,
     dtype: jnp.dtype = jnp.float32,
     image_size: Shape = (224, 224),
-    data_dir: Optional[str] = None,
-    extra_preprocessing_func: Optional[
-        Callable[[Array, Array],
-                 Tuple[Array, Array]]] = None,
+    data_dir: str | None = None,
+    extra_preprocessing_func: (
+        Callable[[Array, Array], tuple[Array, Array]] | None
+        ) = None,
 ) -> Iterator[Batch]:
   """Standard ImageNet dataset pipeline.
 
@@ -252,7 +252,7 @@ def imagenet_dataset(
     def scan_fn(
         seed_: tf.Tensor,
         data: TfBatch,
-    ) -> Tuple[tf.Tensor, Tuple[TfBatch, tf.Tensor]]:
+    ) -> tuple[tf.Tensor, tuple[TfBatch, tf.Tensor]]:
       new_seeds = tf.random.experimental.stateless_split(seed_, num=2)
       return new_seeds[0], (data, new_seeds[1])
 
@@ -260,9 +260,9 @@ def imagenet_dataset(
     ds = ds.scan(tf_seed, scan_fn)
 
   def preprocess(
-      example: Dict[str, tf.Tensor],
-      seed_: Optional[tf.Tensor] = None
-  ) -> Dict[str, tf.Tensor]:
+      example: dict[str, tf.Tensor],
+      seed_: tf.Tensor | None = None
+  ) -> dict[str, tf.Tensor]:
 
     image = _imagenet_preprocess_image(
         image_bytes=example["image"],
@@ -346,8 +346,8 @@ def _distorted_bounding_box_crop(
     bbox: tf.Tensor,
     seed: tf.Tensor,
     min_object_covered: float,
-    aspect_ratio_range: Tuple[float, float],
-    area_range: Tuple[float, float],
+    aspect_ratio_range: tuple[float, float],
+    area_range: tuple[float, float],
     max_attempts: int,
 ) -> tf.Tensor:
   """Generates cropped_image using one of the bboxes randomly distorted for Imagenet."""
@@ -396,7 +396,7 @@ def _decode_and_random_crop(
 
 def _decode_and_center_crop(
     image_bytes: tf.Tensor,
-    jpeg_shape: Optional[tf.Tensor] = None,
+    jpeg_shape: tf.Tensor | None = None,
     image_size: Shape = (224, 224),
 ) -> tf.Tensor:
   """Crops to center of image with padding then scales for Imagenet."""

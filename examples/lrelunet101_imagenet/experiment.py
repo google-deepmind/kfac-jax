@@ -13,7 +13,7 @@
 # limitations under the License.
 """Vanilla network (derived from a ResNet) with LReLU from the TAT paper."""
 import functools
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Mapping, Sequence
 
 import haiku as hk
 from jax import nn
@@ -30,7 +30,7 @@ Numeric = kfac_jax.utils.Numeric
 PRNGKey = kfac_jax.utils.PRNGKey
 Shape = kfac_jax.utils.Shape
 DType = kfac_jax.utils.DType
-FloatStrOrBool = Union[str, float, bool]
+FloatStrOrBool = str | float | bool
 
 
 class ScaledUniformOrthogonal(hk.initializers.Initializer):
@@ -100,11 +100,11 @@ class BlockV2(hk.Module):
   def __init__(
       self,
       channels: int,
-      stride: Union[int, Sequence[int]],
+      stride: int | Sequence[int],
       bottleneck: bool,
       activation: Callable[[jnp.ndarray], jnp.ndarray],
-      w_init: Optional[Any],
-      name: Optional[str] = None,
+      w_init: Any,
+      name: str | None = None,
   ):
     """Initializes the module instance."""
     super().__init__(name=name)
@@ -162,11 +162,11 @@ class BlockGroup(hk.Module):
       self,
       channels: int,
       num_blocks: int,
-      stride: Union[int, Sequence[int]],
+      stride: int | Sequence[int],
       bottleneck: bool,
       activation: Callable[[jnp.ndarray], jnp.ndarray],
-      w_init: Optional[Any],
-      name: Optional[str] = None,
+      w_init: Any,
+      name: str | None = None,
   ):
     """Initializes the block group."""
 
@@ -229,11 +229,11 @@ class LReLUNet(hk.Module):
       self,
       num_classes: int,
       depth: int,
-      w_init: Optional[Any] = ScaledUniformOrthogonal(),
-      logits_config: Optional[Mapping[str, Any]] = None,
-      initial_conv_config: Optional[Mapping[str, FloatStrOrBool]] = None,
+      w_init: Any = ScaledUniformOrthogonal(),
+      logits_config: Mapping[str, Any] | None = None,
+      initial_conv_config: Mapping[str, FloatStrOrBool] | None = None,
       dropout_rate: float = 0.0,
-      name: Optional[str] = None,
+      name: str | None = None,
   ):
     """Initializes the network module.
 
@@ -329,7 +329,7 @@ def lrelunet(
 ) -> hk.Transformed:
   """Constructs a Haiku transformed object of the LReLUNet101 network."""
   def func(
-      batch: Union[Array, Mapping[str, Array]],
+      batch: Array | Mapping[str, Array],
       is_training: bool
   ) -> Array:
     """Evaluates the network."""
@@ -351,9 +351,9 @@ def lrelunet_loss(
     num_classes: int = 1000,
     depth: int = 101,
     **kwargs: Any,
-) -> Tuple[
+) -> tuple[
     Array,
-    Union[Dict[str, Array], Tuple[hk.State, Dict[str, Array]]]
+    dict[str, Array] | tuple[hk.State, dict[str, Array]]
 ]:
   """Evaluates the loss of the LReLUNet model."""
   logits = lrelunet(num_classes=num_classes, depth=depth, **kwargs).apply(

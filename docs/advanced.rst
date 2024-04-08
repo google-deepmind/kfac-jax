@@ -89,7 +89,7 @@ steps:
         y: chex.Array,
         x: chex.Array,
         w: chex.Array,
-        b: Optional[chex.Array] = None,
+        b: chex.Array | None = None,
         **kwargs,
     ) -> chex.Array:
       """Registers a dense layer: ``y = matmul(x, w) + b``."""
@@ -181,7 +181,7 @@ KFAC-JAX):
           ema_old: chex.Numeric,
           ema_new: chex.Numeric,
           batch_size: int,
-          pmap_axis_name: Optional[str],
+          pmap_axis_name: str | None,
       ) -> TwoKroneckerFactored.State:
         del pmap_axis_name
         x, = estimation_data["inputs"]

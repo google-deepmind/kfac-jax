@@ -13,7 +13,7 @@
 # limitations under the License.
 """Utilities for setting up different optimizers."""
 import functools
-from typing import Any, Callable, Dict, Iterator, Mapping, NamedTuple, Optional, Sequence, Tuple, Type, Union
+from typing import Any, Callable, Iterator, Mapping, NamedTuple, Sequence, Type
 
 from absl import logging
 import jax
@@ -51,9 +51,9 @@ class Preconditioner:
       self,
       value_func: ValueFunc,
       l2_reg: Numeric = 0.0,
-      damping: Optional[float] = None,
-      damping_schedule: Optional[ScheduleType] = None,
-      norm_constraint: Optional[Numeric] = None,
+      damping: float | None = None,
+      damping_schedule: ScheduleType | None = None,
+      norm_constraint: Numeric | None = None,
       estimation_mode: str = "fisher_gradients",
       curvature_ema: Numeric = 0.95,
       curvature_update_period: int = 1,
@@ -62,10 +62,10 @@ class Preconditioner:
       use_sqrt_inv: bool = False,
       register_only_generic: bool = False,
       patterns_to_skip: Sequence[str] = (),
-      auto_register_kwargs: Optional[Dict[str, Any]] = None,
-      layer_tag_to_block_ctor: Optional[
-          Dict[str, kfac_jax.curvature_estimator.CurvatureBlockCtor]
-      ] = None,
+      auto_register_kwargs: dict[str, Any] | None = None,
+      layer_tag_to_block_ctor: (
+          dict[str, kfac_jax.curvature_estimator.CurvatureBlockCtor] | None
+      ) = None,
       pmap_axis_name: str = "kfac_axis",
       batch_size_extractor: Callable[
           [Batch], Numeric
@@ -74,7 +74,7 @@ class Preconditioner:
       distributed_precon_apply: bool = True,
       num_samples: int = 1,
       should_vmap_samples: bool = False,
-      norm_to_scale_identity_weight_per_block: Optional[str] = None,
+      norm_to_scale_identity_weight_per_block: str | None = None,
   ):
     """Initializes the curvature estimator and preconditioner.
 
@@ -207,7 +207,7 @@ class Preconditioner:
     )
 
   @property
-  def _exact_powers_to_cache(self) -> Optional[Union[int, Sequence[int]]]:
+  def _exact_powers_to_cache(self) -> int | Sequence[int] | None:
 
     if self._use_exact_inverses and self._use_cached_inverses:
       return -1
@@ -215,7 +215,7 @@ class Preconditioner:
       return None
 
   @property
-  def _approx_powers_to_cache(self) -> Optional[Union[int, Sequence[int]]]:
+  def _approx_powers_to_cache(self) -> int | Sequence[int] | None:
 
     if not self._use_exact_inverses and self._use_cached_inverses:
       return -1
@@ -233,7 +233,7 @@ class Preconditioner:
 
   def get_identity_weight(
       self, state: PreconditionState
-  ) -> Union[Array, float]:
+  ) -> Array | float:
 
     damping = self._damping
 
@@ -256,7 +256,7 @@ class Preconditioner:
 
   def should_update_estimator_curvature(
       self, state: PreconditionState
-  ) -> Union[Array, bool]:
+  ) -> Array | bool:
     """Whether at the current step the preconditioner should update the curvature estimates."""
 
     if self._curvature_update_period == 1:
@@ -266,7 +266,7 @@ class Preconditioner:
 
   def should_sync_estimate_curvature(
       self, state: PreconditionState
-  ) -> Union[Array, bool]:
+  ) -> Array | bool:
     """Whether at the current step the preconditioner should synchronize (pmean) the curvature estimates."""
 
     # sync only before inverses are calculated (either for updating the
@@ -278,7 +278,7 @@ class Preconditioner:
 
   def should_update_inverse_cache(
       self, state: PreconditionState
-  ) -> Union[Array, bool]:
+  ) -> Array | bool:
     """Whether at the current step the preconditioner should update the inverse cache."""
 
     if not self._use_cached_inverses:
@@ -317,7 +317,7 @@ class Preconditioner:
       rng: PRNGKey,
       ema_old: Numeric,
       ema_new: Numeric,
-      sync: Union[Array, bool] = True
+      sync: Array | bool = True
   ) -> EstimatorState:
     """Updates the curvature estimator state."""
 
@@ -344,8 +344,8 @@ class Preconditioner:
       state: PreconditionState,
       func_args: FuncArgsVariants,
       rng: PRNGKey,
-      decay_old_ema: Union[Array, bool] = True,
-      sync: Union[Array, bool] = True,
+      decay_old_ema: Array | bool = True,
+      sync: Array | bool = True,
   ) -> PreconditionState:
     """Updates the curvature estimates if it is the right iteration."""
 
@@ -389,7 +389,7 @@ class Preconditioner:
   def _maybe_update_estimator_state(
       self,
       state: PreconditionState,
-      should_update: Union[Array, bool],
+      should_update: Array | bool,
       update_func: Callable[..., EstimatorState],
       **update_func_kwargs,
   ) -> PreconditionState:
@@ -495,7 +495,7 @@ class Preconditioner:
 
 class OptaxAndPreconditionState(NamedTuple):
   optax_state: OptaxState
-  precond_state: Optional[PreconditionState] = None
+  precond_state: PreconditionState | None = None
 
 
 class OptaxWrapper:
@@ -510,7 +510,7 @@ class OptaxWrapper:
       learning_rate: ScheduleType,
       optax_optimizer_ctor: OptaxCtor,
       batch_process_func: Callable[[Batch], Batch] = lambda x: x,
-      preconditioner: Optional[Preconditioner] = None,
+      preconditioner: Preconditioner | None = None,
       include_norms_in_stats: bool = False,
       include_per_param_norms_in_stats: bool = False,
   ):
@@ -603,7 +603,7 @@ class OptaxWrapper:
           params: Params,
           rng: PRNGKey,
           batch: Batch,
-          func_state: Optional[FuncState] = None,
+          func_state: FuncState | None = None,
       ) -> PreconditionState:
         """Maybe initializes the PreconditionState."""
 
@@ -630,7 +630,7 @@ class OptaxWrapper:
       params: Params,
       rng: PRNGKey,
       batch: Batch,
-      func_state: Optional[FuncState] = None,
+      func_state: FuncState | None = None,
   ) -> OptaxAndPreconditionState:
     """Initializes the optimizer and returns the appropriate optimizer state."""
     return self._pmap_init(params, rng, batch, func_state)
@@ -641,12 +641,12 @@ class OptaxWrapper:
       state: OptaxAndPreconditionState,
       rng: PRNGKey,
       batch: Batch,
-      func_state: Optional[FuncState] = None,
-      global_step_int: Optional[int] = None,
-  ) -> Union[
-      Tuple[Params, OptaxAndPreconditionState, FuncState, Mapping[str, Array]],
-      Tuple[Params, OptaxAndPreconditionState, Mapping[str, Array]],
-  ]:
+      func_state: FuncState | None = None,
+      global_step_int: int | None = None,
+  ) -> (
+      tuple[Params, OptaxAndPreconditionState, FuncState, Mapping[str, Array]] |
+      tuple[Params, OptaxAndPreconditionState, Mapping[str, Array]]
+  ):
     """A single step of optax."""
 
     rng_func, rng_precon = jax.random.split(rng)
@@ -734,12 +734,12 @@ class OptaxWrapper:
       state: OptaxAndPreconditionState,
       rng: PRNGKey,
       data_iterator: Iterator[Batch],
-      func_state: Optional[FuncState] = None,
-      global_step_int: Optional[int] = None,
-  ) -> Union[
-      Tuple[Params, Any, FuncState, Mapping[str, Array]],
-      Tuple[Params, Any, Mapping[str, Array]],
-  ]:
+      func_state: FuncState | None = None,
+      global_step_int: int | None = None,
+  ) -> (
+      tuple[Params, OptaxAndPreconditionState, FuncState, Mapping[str, Array]] |
+      tuple[Params, OptaxAndPreconditionState, Mapping[str, Array]]
+  ):
     """A step with similar interface to KFAC."""
 
     rng_init, rng_step = self._pmap_rng_split(rng, 2)
@@ -805,7 +805,7 @@ def tf1_rmsprop(
 
 def linear_interpolation(
     x: Numeric,
-    interpolation_points: Tuple[Tuple[float, float], ...]
+    interpolation_points: tuple[tuple[float, float], ...]
 ) -> Array:
   """Performs linear interpolation between the interpolation points."""
 
@@ -842,7 +842,7 @@ def linear_interpolation(
 def imagenet_sgd_schedule(
     global_step: Numeric,
     dataset_size: int,
-    train_total_batch_size: Optional[int],
+    train_total_batch_size: int | None,
     **_: Any,
 ) -> Array:
   """Standard linear scaling schedule for ImageNet."""
@@ -910,16 +910,16 @@ def kfac_resnet50_schedule(
 def cosine_schedule(
     global_step: Numeric,
     dataset_size: int,
-    train_total_batch_size: Optional[int],
-    total_steps: Optional[int],
-    total_epochs: Optional[float],
+    train_total_batch_size: int | None,
+    total_steps: int | None,
+    total_epochs: float | None,
     peak_learning_rate: float,
     initial_learning_rate: float = 1e-7,
     end_learning_rate: float = 0.0,
-    warmup_epochs: Optional[float] = None,
-    warmup_steps: Optional[int] = None,
-    warmup_fraction: Optional[float] = None,
-    data_seen: Optional[Numeric] = None,
+    warmup_epochs: float | None = None,
+    warmup_steps: int | None = None,
+    warmup_fraction: float | None = None,
+    data_seen: Numeric | None = None,
     **_: Any,
 ) -> Numeric:
   """A cosine schedule described in the TAT paper."""
@@ -1001,14 +1001,14 @@ def cosine_schedule(
 def stepwise_schedule(
     global_step: Numeric,
     dataset_size: int,
-    train_total_batch_size: Optional[int],
+    train_total_batch_size: int | None,
     lr_decay_factors: Sequence[float],
     initial_learning_rate: float,
-    epoch_boundaries: Optional[Sequence[float]] = None,
-    warmup_epochs: Optional[float] = None,
-    step_boundaries: Optional[Sequence[float]] = None,
-    warmup_steps: Optional[int] = None,
-    data_seen: Optional[Numeric] = None,
+    epoch_boundaries: Sequence[float] | None = None,
+    warmup_epochs: float | None = None,
+    step_boundaries: Sequence[float] | None = None,
+    warmup_steps: int | None = None,
+    data_seen: Numeric | None = None,
     **_: Any,
 ) -> Numeric:
   """A basic stepwise schedule."""
@@ -1078,15 +1078,15 @@ def stepwise_schedule(
 def exponential_decay_schedule(
     global_step: int,
     dataset_size: int,
-    train_total_batch_size: Optional[int],
-    total_steps: Optional[int],
-    total_epochs: Optional[float],
+    train_total_batch_size: int | None,
+    total_steps: int | None,
+    total_epochs: float | None,
     init_value: float,
     end_value: float,
-    start_epochs: Optional[float] = None,
-    start_steps: Optional[int] = None,
-    start_fraction: Optional[float] = None,
-    data_seen: Optional[Numeric] = None,
+    start_epochs: float | None = None,
+    start_steps: int | None = None,
+    start_fraction: float | None = None,
+    data_seen: Numeric | None = None,
     **_: Any,
 ):
   """Exponential decay schedule."""
@@ -1162,16 +1162,16 @@ def exponential_decay_schedule(
 def polynomial_schedule(
     global_step: int,
     dataset_size: int,
-    train_total_batch_size: Optional[int],
-    total_steps: Optional[int],
-    total_epochs: Optional[float],
+    train_total_batch_size: int | None,
+    total_steps: int | None,
+    total_epochs: float | None,
     init_value: float,
     end_value: float,
     power: Numeric = 1,
-    start_epochs: Optional[float] = None,
-    start_steps: Optional[int] = None,
-    start_fraction: Optional[float] = None,
-    data_seen: Optional[Numeric] = None,
+    start_epochs: float | None = None,
+    start_steps: int | None = None,
+    start_fraction: float | None = None,
+    data_seen: Numeric | None = None,
     **_: Any,
 ):
   """Polynomial schedule (defaults to linear)."""
@@ -1269,7 +1269,7 @@ def construct_schedule(
 
 
 def kfac_bn_registration_kwargs(bn_registration: str) -> Mapping[
-    str, Union[Tuple[str, ...], Mapping[str, Type[kfac_jax.CurvatureBlock]]]
+    str, tuple[str, ...] | Mapping[str, Type[kfac_jax.CurvatureBlock]]
 ]:
   """Constructs KFAC kwargs for the given batch-norm registration strategy."""
 
@@ -1300,9 +1300,9 @@ def create_optimizer(
     has_rng: bool,
     dataset_size: int,
     train_total_batch_size: int,
-    total_steps: Optional[int],
-    total_epochs: Optional[float],
-) -> Union[OptaxWrapper, kfac_jax.Optimizer]:
+    total_steps: int | None,
+    total_epochs: float | None,
+) -> OptaxWrapper | kfac_jax.Optimizer:
   """Creates an optimizer from the provided configuration."""
 
   value_and_grad_func = jax.value_and_grad(train_model_func, has_aux=has_aux)

@@ -13,7 +13,6 @@
 # limitations under the License.
 """Testing the functionality of the patches second moment computation."""
 import itertools
-from typing import Tuple, Union
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -61,9 +60,9 @@ class TestPatchesMoments(parameterized.TestCase):
   def test_num_locations(
       self,
       h_and_w: int,
-      kernel_shape: Tuple[int, int],
-      strides: Tuple[int, int],
-      padding: Union[str, Tuple[Tuple[int, int], Tuple[int, int]]],
+      kernel_shape: tuple[int, int],
+      strides: tuple[int, int],
+      padding: str | tuple[tuple[int, int], tuple[int, int]],
   ):
     """Tests calculation of the number of convolutional locations."""
     spatial_shape = (h_and_w, h_and_w)
@@ -101,9 +100,9 @@ class TestPatchesMoments(parameterized.TestCase):
       self,
       c: int,
       h_and_w: int,
-      kernel_spatial_shape: Tuple[int, int],
-      strides: Tuple[int, int],
-      padding: Union[str, Tuple[Tuple[int, int], Tuple[int, int]]],
+      kernel_spatial_shape: tuple[int, int],
+      strides: tuple[int, int],
+      padding: str | tuple[tuple[int, int], tuple[int, int]],
       data_format: str,
       per_channel: bool,
   ):

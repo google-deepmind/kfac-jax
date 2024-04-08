@@ -13,7 +13,7 @@
 # limitations under the License.
 """Module with models used for testing."""
 import functools
-from typing import Any, Callable, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Mapping, Sequence
 
 import distrax
 import haiku as hk
@@ -27,19 +27,19 @@ utils = kfac_jax.utils
 
 Array = kfac_jax.utils.Array
 PRNGKey = kfac_jax.utils.PRNGKey
-LayerValues = List[Tuple[Array, Array]]
-LayerInputs = Tuple[Array, LayerValues, Optional[Tuple[Array, ...]]]
-LossOutputs = Union[
-    List[List[Array]],
-    List[Array],
-    Tuple[List[Array], LayerValues]
-]
+LayerValues = list[tuple[Array, Array]]
+LayerInputs = tuple[Array, LayerValues, tuple[Array, ...] | None]
+LossOutputs = (
+    list[list[Array]] |
+    list[Array] |
+    tuple[list[Array], LayerValues]
+)
 
 
 def _extract_params(
     instance: hk.Module,
     names: Sequence[str],
-) -> Tuple[Array, Optional[Array]]:
+) -> tuple[Array, Array | None]:
   """Extracts the weights and bias parameters or `None` if don't exists."""
   params = [None] * len(names)
   for name, v in instance.params_dict().items():
@@ -210,7 +210,7 @@ class _VanillaRNN(hk.VanillaRNN):
       activation: Callable[[LayerInputs], LayerInputs],
       explicit_tagging: bool = False,
       double_bias: bool = True,
-      name: Optional[str] = None
+      name: str | None = None
   ):
     super().__init__(hidden_size, double_bias, name=name)
     self.activation = activation
@@ -221,7 +221,7 @@ class _VanillaRNN(hk.VanillaRNN):
       inputs: LayerInputs,
       prev_state: Array,
       *_,
-  ) -> Tuple[Tuple[Array, LayerValues], Array]:
+  ) -> tuple[tuple[Array, LayerValues], Array]:
     x, layer_values, aux = inputs
     input_to_hidden = _Linear(
         self.hidden_size, explicit_tagging=self.explicit_tagging)
@@ -375,9 +375,9 @@ def autoencoder(
 ) -> hk.Transformed:
   """Constructs a Haiku transformed object of the autoencoder network."""
   def func(
-      batch: Union[Array, Mapping[str, Array]],
-      aux: Optional[Tuple[Array, ...]] = None,
-  ) -> Tuple[Array, LayerValues]:
+      batch: Array | Mapping[str, Array],
+      aux: tuple[Array, ...] | None = None,
+  ) -> tuple[Array, LayerValues]:
     images = batch["images"] if isinstance(batch, Mapping) else batch
     images = images.reshape([images.shape[0], -1])
     layers = []
@@ -442,7 +442,7 @@ def autoencoder_with_two_losses(
     params: utils.Params,
     batch: utils.Batch,
     layer_widths: Sequence[int],
-    aux: Optional[Tuple[Array, ...]] = None,
+    aux: tuple[Array, ...] | None = None,
     explicit_tagging: bool = False,
     return_losses_outputs: bool = False,
     return_layer_values: bool = False,
@@ -485,9 +485,9 @@ def conv_classifier(
 ) -> hk.Transformed:
   """Constructs a Haiku transformed object of a convolutional classifier."""
   def func(
-      batch: Union[Array, Mapping[str, Array]],
-      aux: Optional[Tuple[Array, ...]] = None,
-  ) -> Tuple[Array, LayerValues]:
+      batch: Array | Mapping[str, Array],
+      aux: tuple[Array, ...] | None = None,
+  ) -> tuple[Array, LayerValues]:
     images = batch["images"] if isinstance(batch, Mapping) else batch
     layers = []
     # Conv channels
@@ -552,7 +552,7 @@ def conv_classifier_loss(
     batch: utils.Batch,
     num_classes: int,
     layer_channels: Sequence[int],
-    aux: Optional[Tuple[Array, ...]] = None,
+    aux: tuple[Array, ...] | None = None,
     l2_reg: float = 0.0,
     explicit_tagging: bool = False,
     return_losses_outputs: bool = False,
@@ -586,8 +586,8 @@ def layer_stack_with_scan_mlp(
   """A model that uses ``hk.experimental.layer_stack`` with scan."""
   def scan_fn(
       x: Array,
-      aux: Optional[Tuple[Array, ...]] = None,
-  ) -> Tuple[Array, LayerValues]:
+      aux: tuple[Array, ...] | None = None,
+  ) -> tuple[Array, LayerValues]:
     layers = []
     for w in layer_widths:
       layers.append(_Linear(w, explicit_tagging=explicit_tagging))
@@ -601,9 +601,9 @@ def layer_stack_with_scan_mlp(
     return output, layer_values
 
   def func(
-      batch: Union[Array, Mapping[str, Array]],
-      aux: Optional[Tuple[Array, ...]] = None,
-  ) -> Tuple[Array, LayerValues]:
+      batch: Array | Mapping[str, Array],
+      aux: tuple[Array, ...] | None = None,
+  ) -> tuple[Array, LayerValues]:
     x = batch["images"] if isinstance(batch, Mapping) else batch
 
     stack = hk.experimental.layer_stack(2, with_per_layer_inputs=True)(scan_fn)
@@ -657,9 +657,9 @@ def vanilla_rnn_with_scan(
 ) -> hk.Transformed:
   """A model that uses an RNN with scan."""
   def func(
-      batch: Union[Array, Mapping[str, Array]],
-      aux: Optional[Tuple[Array, ...]] = None,
-  ) -> Tuple[Array, LayerValues]:
+      batch: Array | Mapping[str, Array],
+      aux: tuple[Array, ...] | None = None,
+  ) -> tuple[Array, LayerValues]:
     x = batch["images"] if isinstance(batch, Mapping) else batch
 
     core = _VanillaRNN(

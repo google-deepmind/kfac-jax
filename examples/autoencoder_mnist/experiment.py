@@ -13,7 +13,7 @@
 # limitations under the License.
 """Haiku implementation of the standard MNIST Autoencoder."""
 import functools
-from typing import Mapping, Tuple, Union, Dict
+from typing import Mapping
 
 import haiku as hk
 import jax
@@ -32,7 +32,7 @@ PRNGKey = kfac_jax.utils.PRNGKey
 
 def autoencoder() -> hk.Transformed:
   """Constructs a Haiku transformed object of the autoencoder."""
-  def func(batch: Union[Array, Mapping[str, Array]]) -> Array:
+  def func(batch: Array | Mapping[str, Array]) -> Array:
     """Evaluates the autoencoder."""
     if isinstance(batch, Mapping):
       batch = batch["images"]
@@ -59,11 +59,11 @@ def autoencoder() -> hk.Transformed:
 
 def autoencoder_loss(
     params: hk.Params,
-    batch: Union[Array, Mapping[str, Array]],
+    batch: Array | Mapping[str, Array],
     l2_reg: Numeric,
     is_training: bool,
     average_loss: bool = True,
-) -> Tuple[Array, Dict[str, Array]]:
+) -> tuple[Array, dict[str, Array]]:
   """Evaluates the loss of the autoencoder."""
 
   if isinstance(batch, Mapping):

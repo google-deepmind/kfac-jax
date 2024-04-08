@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Testing all the tracing mechanisms from tracer.py."""
-from typing import Any, Callable, Mapping, Tuple
+from typing import Any, Callable, Mapping
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -57,11 +57,11 @@ class TestTracer(parameterized.TestCase):
       data_point_shapes: Mapping[str, Shape],
       rng: PRNGKey,
       data_size: int = 4,
-  ) -> Tuple[
+  ) -> tuple[
       models.hk.Params,
       Mapping[str, Array],
       models.hk.Params,
-      Tuple[Tuple[Array, ...], ...]
+      tuple[tuple[Array, ...], ...]
   ]:
     """Generates random data for any testing."""
     data = {}
