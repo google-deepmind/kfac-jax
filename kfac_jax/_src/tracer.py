@@ -704,7 +704,7 @@ def _layer_tag_vjp(
 
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 
-    return read(layer_input_vars)
+    return read(layer_input_vars)  # pytype: disable=bad-return-type
 
   def forward_aux(
       aux: dict[Var, Array]
