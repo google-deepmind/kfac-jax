@@ -27,6 +27,7 @@ from kfac_jax._src import patches_second_moment as psm
 from kfac_jax._src import tag_graph_matcher as tgm
 from kfac_jax._src import utils
 import numpy as np
+from typing_extensions import Self
 
 # Types for annotation
 Array = utils.Array
@@ -114,7 +115,7 @@ def _to_real_set(
   elif isinstance(number_or_sequence, set):
     return number_or_sequence
   elif isinstance(number_or_sequence, (float, int)):
-    return {number_or_sequence}  # pytype: disable=bad-return-type
+    return {number_or_sequence}
   elif (isinstance(number_or_sequence, collections.abc.Sequence) and
         all(isinstance(x, (int, float)) for x in number_or_sequence)):
     return set(number_or_sequence)
@@ -241,7 +242,7 @@ class CurvatureBlock(utils.Finalizable):
 
     return sum(utils.product(shape) for shape in self.parameters_shapes)
 
-  def scale(self, state: "CurvatureBlock.State", use_cache: bool) -> Numeric:
+  def scale(self, state: State, use_cache: bool) -> Numeric:
     """A scalar pre-factor of the curvature approximation.
 
     Importantly, all methods assume that whenever a user requests cached values,
@@ -271,7 +272,7 @@ class CurvatureBlock(utils.Finalizable):
     """A fixed scalar pre-factor of the curvature (e.g. constant)."""
     return 1.0
 
-  def state_dependent_scale(self, state: "CurvatureBlock.State") -> Numeric:
+  def state_dependent_scale(self, state: State) -> Numeric:
     """A scalar pre-factor of the curvature, computed from the most fresh curvature estimate."""
     del state  # Unused
     return 1.0
@@ -286,7 +287,7 @@ class CurvatureBlock(utils.Finalizable):
       exact_powers_to_cache: ScalarOrSequence | None,
       approx_powers_to_cache: ScalarOrSequence | None,
       cache_eigenvalues: bool,
-  ) -> "CurvatureBlock.State":
+  ) -> State:
     """Initializes the state for this block.
 
     Args:
@@ -323,21 +324,21 @@ class CurvatureBlock(utils.Finalizable):
       exact_powers_to_cache: set[Scalar],
       approx_powers_to_cache: set[Scalar],
       cache_eigenvalues: bool,
-  ) -> "CurvatureBlock.State":
+  ) -> State:
     """The non-public interface of ``init``."""
 
   @abc.abstractmethod
   def sync(
       self,
-      state: "CurvatureBlock.State",
+      state: State,
       pmap_axis_name: str,
-  ) -> "CurvatureBlock.State":
+  ) -> State:
     """Syncs the state across different devices (does not sync the cache)."""
 
   @utils.auto_scope_method
   def multiply_matpower(
       self,
-      state: "CurvatureBlock.State",
+      state: State,
       vector: Sequence[Array],
       identity_weight: Numeric,
       power: Scalar,
@@ -390,7 +391,7 @@ class CurvatureBlock(utils.Finalizable):
   @abc.abstractmethod
   def _multiply_matpower_unscaled(
       self,
-      state: "CurvatureBlock.State",
+      state: State,
       vector: Sequence[Array],
       identity_weight: Numeric,
       power: Scalar,
@@ -401,7 +402,7 @@ class CurvatureBlock(utils.Finalizable):
 
   def multiply(
       self,
-      state: "CurvatureBlock.State",
+      state: State,
       vector: Sequence[Array],
       identity_weight: Numeric,
       exact_power: bool,
@@ -420,7 +421,7 @@ class CurvatureBlock(utils.Finalizable):
 
   def multiply_inverse(
       self,
-      state: "CurvatureBlock.State",
+      state: State,
       vector: Sequence[Array],
       identity_weight: Numeric,
       exact_power: bool,
@@ -440,7 +441,7 @@ class CurvatureBlock(utils.Finalizable):
   @utils.auto_scope_method
   def eigenvalues(
       self,
-      state: "CurvatureBlock.State",
+      state: State,
       use_cached: bool,
   ) -> Array:
     """Computes the eigenvalues for this block approximation.
@@ -464,7 +465,7 @@ class CurvatureBlock(utils.Finalizable):
   @abc.abstractmethod
   def _eigenvalues_unscaled(
       self,
-      state: "CurvatureBlock.State",
+      state: State,
       use_cached: bool,
   ) -> Array:
     """Computes the eigenvalues for this block, ignoring `self.scale`."""
@@ -472,12 +473,12 @@ class CurvatureBlock(utils.Finalizable):
   @abc.abstractmethod
   def update_curvature_matrix_estimate(
       self,
-      state: "CurvatureBlock.State",
+      state: State,
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-  ) -> "CurvatureBlock.State":
+  ) -> State:
     """Updates the block's curvature estimates using the ``info`` provided.
 
     Each block *in general* estimates a moving average of its associated
@@ -501,12 +502,12 @@ class CurvatureBlock(utils.Finalizable):
   @utils.auto_scope_method
   def update_cache(
       self,
-      state: "CurvatureBlock.State",
+      state: State,
       identity_weight: Numeric,
       exact_powers: ScalarOrSequence | None,
       approx_powers: ScalarOrSequence | None,
       eigenvalues: bool,
-  ) -> "CurvatureBlock.State":
+  ) -> State:
     """Updates the cached estimates of the different powers specified.
 
     Args:
@@ -534,24 +535,24 @@ class CurvatureBlock(utils.Finalizable):
   @abc.abstractmethod
   def _update_cache(
       self,
-      state: "CurvatureBlock.State",
+      state: State,
       identity_weight: Numeric,
       exact_powers: set[Scalar],
       approx_powers: set[Scalar],
       eigenvalues: bool,
-  ) -> "CurvatureBlock.State":
+  ) -> State:
     """The cache updating function, ignoring ``self.scale``."""
 
   @utils.auto_scope_method
-  def to_dense_matrix(self, state: "CurvatureBlock.State") -> Array:
+  def to_dense_matrix(self, state: State) -> Array:
     """Returns a dense representation of the approximate curvature matrix."""
     return self.scale(state, False) * self._to_dense_unscaled(state)
 
   @abc.abstractmethod
-  def _to_dense_unscaled(self, state: "CurvatureBlock.State") -> Array:
+  def _to_dense_unscaled(self, state: State) -> Array:
     """A dense representation of the curvature, ignoring ``self.scale``."""
 
-  def norm(self, state: "CurvatureBlock.State", norm_type: str) -> Numeric:
+  def norm(self, state: State, norm_type: str) -> Numeric:
     """Computes the norm of the curvature block, according to ``norm_type``."""
 
     return self.scale(state, False) * self._norm_unscaled(state, norm_type)
@@ -559,7 +560,7 @@ class CurvatureBlock(utils.Finalizable):
   @abc.abstractmethod
   def _norm_unscaled(
       self,
-      state: "CurvatureBlock.State",
+      state: State,
       norm_type: str
   ) -> Numeric:
     """Like ``norm`` but with ``self.scale`` not included."""
@@ -639,7 +640,7 @@ class ScaledIdentity(CurvatureBlock):
 
   def _eigenvalues_unscaled(
       self,
-      state: "CurvatureBlock.State",
+      state: CurvatureBlock.State,
       use_cached: bool,
   ) -> Array:
     return jnp.ones([self.dim])
@@ -700,7 +701,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
       exact_powers_to_cache: set[Scalar],
       approx_powers_to_cache: set[Scalar],
       cache_eigenvalues: bool,
-  ) -> "Diagonal.State":
+  ) -> State:
 
     del rng
 
@@ -714,9 +715,9 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
   def sync(
       self,
-      state: "Diagonal.State",
+      state: State,
       pmap_axis_name: str,
-  ) -> "Diagonal.State":
+  ) -> State:
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -728,7 +729,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
   def _multiply_matpower_unscaled(
       self,
-      state: "Diagonal.State",
+      state: State,
       vector: Sequence[Array],
       identity_weight: Numeric,
       power: Scalar,
@@ -754,7 +755,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
   def _eigenvalues_unscaled(
       self,
-      state: "Diagonal.State",
+      state: State,
       use_cached: bool,
   ) -> Array:
     return jnp.concatenate([f.value.flatten() for f in state.diagonal_factors],
@@ -762,16 +763,16 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
   def _update_cache(
       self,
-      state: "Diagonal.State",
+      state: State,
       identity_weight: Numeric,
       exact_powers: set[Scalar],
       approx_powers: set[Scalar],
       eigenvalues: bool,
-  ) -> "Diagonal.State":
+  ) -> State:
 
     return state.copy()
 
-  def _to_dense_unscaled(self, state: "Diagonal.State") -> Array:
+  def _to_dense_unscaled(self, state: State) -> Array:
 
     # Extract factors in canonical order
     factors = [state.diagonal_factors[i].value.flatten()
@@ -884,7 +885,7 @@ class Full(CurvatureBlock, abc.ABC):
       exact_powers_to_cache: set[Scalar],
       approx_powers_to_cache: set[Scalar],
       cache_eigenvalues: bool,
-  ) -> "Full.State":
+  ) -> State:
 
     del rng
 
@@ -911,9 +912,9 @@ class Full(CurvatureBlock, abc.ABC):
 
   def sync(
       self,
-      state: "Full.State",
+      state: State,
       pmap_axis_name: str,
-  ) -> "Full.State":
+  ) -> State:
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -924,7 +925,7 @@ class Full(CurvatureBlock, abc.ABC):
 
   def _multiply_matpower_unscaled(
       self,
-      state: "Full.State",
+      state: State,
       vector: Sequence[Array],
       identity_weight: Numeric,
       power: Scalar,
@@ -975,7 +976,7 @@ class Full(CurvatureBlock, abc.ABC):
 
   def _eigenvalues_unscaled(
       self,
-      state: "Full.State",
+      state: State,
       use_cached: bool,
   ) -> Array:
 
@@ -987,12 +988,12 @@ class Full(CurvatureBlock, abc.ABC):
 
   def _update_cache(
       self,
-      state: "Full.State",
+      state: State,
       identity_weight: Numeric,
       exact_powers: set[Scalar],
       approx_powers: set[Scalar],
       eigenvalues: bool,
-  ) -> "Full.State":
+  ) -> State:
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1025,7 +1026,7 @@ class Full(CurvatureBlock, abc.ABC):
 
     return state
 
-  def _to_dense_unscaled(self, state: "Full.State") -> Array:
+  def _to_dense_unscaled(self, state: State) -> Array:
 
     # Permute the matrix according to the parameters canonical order
     return utils.block_permuted(
@@ -1058,7 +1059,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
     factors: tuple[utils.WeightedMovingAverage, ...]
 
     @classmethod
-    def from_dict(cls, dict_rep: dict[str, Any]) -> "KroneckerFactored.State":
+    def from_dict(cls, dict_rep: dict[str, Any]) -> Self:
       class_name = dict_rep.pop("__class__", cls.__name__)
       assert class_name == cls.__name__
       return cls(
@@ -1150,7 +1151,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       exact_powers_to_cache: set[Scalar],
       approx_powers_to_cache: set[Scalar],
       cache_eigenvalues: bool,
-  ) -> "KroneckerFactored.State":
+  ) -> State:
 
     cache = {}
     factors = []
@@ -1186,9 +1187,9 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
   def sync(
       self,
-      state: "KroneckerFactored.State",
+      state: State,
       pmap_axis_name: str,
-  ) -> "KroneckerFactored.State":
+  ) -> State:
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1200,7 +1201,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
   def _multiply_matpower_unscaled(
       self,
-      state: "KroneckerFactored.State",
+      state: State,
       vector: Sequence[Array],
       identity_weight: Numeric,
       power: Scalar,
@@ -1294,7 +1295,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
   def _eigenvalues_unscaled(
       self,
-      state: "KroneckerFactored.State",
+      state: State,
       use_cached: bool,
   ) -> Array:
 
@@ -1311,14 +1312,14 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
     return utils.outer_product(*s)
 
-  def _update_cache(  # pytype: disable=signature-mismatch  # numpy-scalars
+  def _update_cache(
       self,
-      state: "KroneckerFactored.State",
+      state: State,
       identity_weight: Numeric,
-      exact_powers: Numeric,
-      approx_powers: Numeric,
+      exact_powers: set[Scalar],
+      approx_powers: set[Scalar],
       eigenvalues: bool,
-  ) -> "KroneckerFactored.State":
+  ) -> State:
 
     assert len(state.factors) == self.grouped_array_ndim
 
@@ -1413,7 +1414,7 @@ class TwoKroneckerFactored(KroneckerFactored):
     else:
       return tuple([array.reshape(self.parameters_shapes[0])])
 
-  def _to_dense_unscaled(self, state: "KroneckerFactored.State") -> Array:
+  def _to_dense_unscaled(self, state: KroneckerFactored.State) -> Array:
 
     assert 0 < self.number_of_parameters <= 2
     inputs_factor = state.factors[0].value
@@ -1441,12 +1442,12 @@ class NaiveDiagonal(Diagonal):
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
-      state: "NaiveDiagonal.State",
+      state: Diagonal.State,
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-  ) -> "NaiveDiagonal.State":
+  ) -> Diagonal.State:
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1526,12 +1527,12 @@ class DenseDiagonal(Diagonal):
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
-      state: "Diagonal.State",
+      state: Diagonal.State,
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-  ) -> "Diagonal.State":
+  ) -> Diagonal.State:
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1559,12 +1560,12 @@ class DenseFull(Full):
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
-      state: "Full.State",
+      state: Full.State,
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
-  ) -> "Full.State":
+  ) -> Full.State:
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()

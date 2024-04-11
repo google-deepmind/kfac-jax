@@ -28,50 +28,9 @@
 import inspect
 import os
 import sys
-import typing
-
-
-def _add_annotations_import(path):
-  """Appends a future annotations import to the file at the given path."""
-  with open(path) as f:
-    contents = f.read()
-  if contents.startswith('from __future__ import annotations'):
-    # If we run sphinx multiple times then we will append the future import
-    # multiple times too.
-    return
-
-  assert contents.startswith('#'), (path, contents.split('\n')[0])
-  with open(path, 'w') as f:
-    # NOTE: This is subtle and not unit tested, we're prefixing the first line
-    # in each Python file with this future import. It is important to prefix
-    # not insert a newline such that source code locations are accurate (we link
-    # to GitHub). The assertion above ensures that the first line in the file is
-    # a comment so it is safe to prefix it.
-    f.write('from __future__ import annotations  ')
-    f.write(contents)
-
-
-def _recursive_add_annotations_import():
-  for path, _, files in os.walk('../kfac_jax/'):
-    for file in files:
-      if file.endswith('.py'):
-        _add_annotations_import(os.path.abspath(os.path.join(path, file)))
-
-
-if 'READTHEDOCS' in os.environ:
-  _recursive_add_annotations_import()
-
-# TODO(b/254461517) Remove the annotation filtering when we drop Python 3.8
-# support.
-# We remove `None` type annotations as this breaks Sphinx under Python 3.7 and
-# 3.8 with error `AssertionError: Invalid annotation [...] None is not a class.`
-filter_nones = lambda x: dict((k, v) for k, v in x.items() if v is not None)
-typing.get_type_hints = lambda obj, *unused: filter_nones(obj.__annotations__)
-sys.path.insert(0, os.path.abspath('../'))
-sys.path.append(os.path.abspath('ext'))
 
 import kfac_jax
-import sphinxcontrib.katex as katex
+from sphinxcontrib import katex
 
 # -- Project information -----------------------------------------------------
 

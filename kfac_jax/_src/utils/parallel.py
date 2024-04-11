@@ -80,16 +80,14 @@ def index_if_not_scalar(value: Numeric, index: int = 0) -> Numeric:
 
   if isinstance(value, Array):
 
-    if value.ndim > 0:  # pytype: disable=attribute-error  # numpy-scalars
+    if value.ndim > 0:
       return value[index]
     else:
       return value
 
   elif isinstance(value, (float, int)):
     return value
-
-  else:
-    raise ValueError("The input should be an instance of `Numeric`.")
+  raise ValueError("The input should be an instance of `Numeric`.")
 
 
 def get_first(obj: TArrayTree) -> TArrayTree:

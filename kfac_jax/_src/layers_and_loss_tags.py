@@ -207,7 +207,7 @@ class LayerTag(core.Primitive):
     self._num_outputs = num_outputs
     self._num_inputs = num_inputs
 
-    jax.interpreters.mlir.register_lowering(self, self._mlir_lowering)  # pytype: disable=wrong-arg-types  # numpy-scalars
+    jax.interpreters.mlir.register_lowering(self, self._mlir_lowering)
     jax.interpreters.ad.deflinear(self, self._transpose)
     jax.interpreters.ad.primitive_transposes[self] = self._transpose
     # This line defines how does the tag behave under vmap. It is required for
@@ -274,12 +274,16 @@ class LayerTag(core.Primitive):
   def impl(self, *operands: Array, **_: Any) -> Array:
     return self.get_outputs(*operands)
 
-  def abstract_eval(self, *operands: Array, **_: Any) -> Array:
+  def abstract_eval(
+      self,
+      *operands: Array,
+      **_: Any
+  ) -> Array | tuple[Array, jax.core.Effects]:
     jax_version = (
         jax.__version_info__ if hasattr(jax, "__version_info__")
         else tuple(map(int, jax.__version__.split("."))))
     if jax_version > (0, 3, 4):
-      return self.get_outputs(*operands), jax.core.no_effects  # pytype: disable=bad-return-type  # numpy-scalars
+      return self.get_outputs(*operands), jax.core.no_effects
     return self.get_outputs(*operands)
 
   def _batching(

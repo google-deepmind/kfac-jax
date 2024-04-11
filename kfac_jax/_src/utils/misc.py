@@ -298,7 +298,7 @@ def auto_scope_function(func: Callable[..., T]) -> Callable[..., T]:
   return wrapped
 
 
-def default_batch_size_extractor(batch: types.Batch) -> Numeric:
+def default_batch_size_extractor(batch: types.Batch) -> int:
   """Computes the batch size as the size of axis `0` of the first element."""
   return jax.tree_util.tree_leaves(batch)[0].shape[0]
 

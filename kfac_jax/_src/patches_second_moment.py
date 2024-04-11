@@ -19,8 +19,8 @@ import jax
 from jax import interpreters
 from jax import lax
 import jax.numpy as jnp
-
 from kfac_jax._src import utils
+from typing_extensions import Self
 
 # Types for annotation
 T = TypeVar("T")
@@ -89,7 +89,7 @@ class _ConvSpec:
     """Returns the spatial sizes of the given shape, under this spec layout."""
     return tuple(shape[i] for i in self.spatial_axes)
 
-  def expand_spatial_axes(self) -> "_ConvSpec":
+  def expand_spatial_axes(self) -> Self:
     """Expands the layout spatial axes by preserving `n` and `c` order."""
     n_axis = self.n_axis + sum(self.n_axis > axis for axis in self.spatial_axes)
     c_axis = self.c_axis + sum(self.c_axis > axis for axis in self.spatial_axes)
@@ -99,7 +99,7 @@ class _ConvSpec:
       spatial_axes.append(spatial_axes[-1] + 1)
     return _ConvSpec([n_axis, c_axis, *spatial_axes])
 
-  def swap_n_and_c(self) -> "_ConvSpec":
+  def swap_n_and_c(self) -> Self:
     """Swaps the batch and channel indices of the layout."""
     return _ConvSpec([self.c_axis, self.n_axis, *self.spatial_axes])
 
@@ -115,7 +115,7 @@ class _ConvSpec:
     assert all(r is not None for r in result)
     return tuple(result)
 
-  def change_nhwc_to_ihwo(self) -> "_ConvSpec":
+  def change_nhwc_to_ihwo(self) -> Self:
     """Changes the layout from `NHWC` to `IHWO` where `I=C`, `O=N`."""
     # Change the spec: NHWC -> IHWO where I=C, O=N
     order = [i - 2 if i > self.spatial_axes[1] else i for i in self.order[:4]]

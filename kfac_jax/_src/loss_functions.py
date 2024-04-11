@@ -21,6 +21,7 @@ import jax.numpy as jnp
 
 from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import utils
+from typing_extensions import Self
 
 
 Array = utils.Array
@@ -93,7 +94,7 @@ class LossFunction(utils.Finalizable):
   def copy_with_different_inputs(
       self,
       parameter_dependants: Sequence[Array],
-  ) -> "LossFunction":
+  ) -> Self:
     """Creates a copy of the loss function object, but with different inputs."""
     array_args, aux = self.tree_flatten()
     array_args = (tuple(parameter_dependants) +
@@ -108,10 +109,10 @@ class LossFunction(utils.Finalizable):
 
   @classmethod
   def tree_unflatten(
-      cls: type["LossFunction"],
+      cls,
       aux_data: dict[str, utils.Numeric],
       children: tuple[Array | None, ...],
-  ) -> "LossFunction":
+  ) -> Self:
     return cls(*children, **aux_data)  # pytype: disable=not-instantiable
 
   def evaluate(
@@ -987,14 +988,14 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._mask
 
   @property
-  def parameter_independants(self) -> tuple[Numeric, ...]:
-    arrays: tuple[Numeric, ...] = (self.weight,)  # pytype: disable=annotation-type-mismatch
+  def parameter_independants(self) -> tuple[Numeric | None, ...]:
+    arrays = (self.weight,)
 
     if self.mask is not None:
-      arrays: tuple[Numeric, ...] = (self.mask,) + arrays  # pytype: disable=annotation-type-mismatch
+      arrays = (self.mask,) + arrays
 
     if self.targets is not None:
-      arrays: tuple[Numeric, ...] = (self.targets,) + arrays  # pytype: disable=annotation-type-mismatch
+      arrays = (self.targets,) + arrays
 
     return arrays
 

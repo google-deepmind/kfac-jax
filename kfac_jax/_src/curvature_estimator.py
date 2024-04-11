@@ -118,7 +118,7 @@ class ImplicitExactCurvature:
       self,
       func: utils.Func,
       params_index: int = 0,
-      batch_size_extractor: Callable[[utils.Batch], Numeric] =
+      batch_size_extractor: Callable[[utils.Batch], int] =
       utils.default_batch_size_extractor,
   ):
     """Initializes the ImplicitExactCurvature instance.
@@ -149,7 +149,7 @@ class ImplicitExactCurvature:
     )
     self._batch_size_extractor = batch_size_extractor
 
-  def batch_size(self, func_args: utils.FuncArgs) -> Numeric:
+  def batch_size(self, func_args: utils.FuncArgs) -> int:
     """The expected batch size given a list of loss instances."""
     return self._batch_size_extractor(func_args[-1])
 
@@ -556,10 +556,10 @@ class ImplicitExactCurvature:
     batch_size = self.batch_size(func_args)
 
     if mode == "fisher":
-      return (tuple(loss.fisher_factor_inner_shape for loss in losses),  # pytype: disable=bad-return-type  # numpy-scalars
+      return (tuple(loss.fisher_factor_inner_shape for loss in losses),
               batch_size)
     elif mode == "ggn":
-      return tuple(loss.ggn_factor_inner_shape for loss in losses), batch_size  # pytype: disable=bad-return-type  # numpy-scalars
+      return tuple(loss.ggn_factor_inner_shape for loss in losses), batch_size
     else:
       raise ValueError(f"Unrecognized mode: {mode}")
 
@@ -1067,7 +1067,8 @@ class BlockDiagonalCurvature(
   @property
   def jaxpr(self) -> tracer.ProcessedJaxpr:
     self._check_finalized()
-    return self._jaxpr  # pytype: disable=bad-return-type  # always-use-return-annotations
+    assert self._jaxpr is not None
+    return self._jaxpr
 
   @property
   def params_structure_vector_of_indices(self) -> utils.Params:
@@ -1173,7 +1174,7 @@ class BlockDiagonalCurvature(
       exact_powers_to_cache: curvature_blocks.ScalarOrSequence | None,
       approx_powers_to_cache: curvature_blocks.ScalarOrSequence | None,
       cache_eigenvalues: bool = False,
-  ) -> "BlockDiagonalCurvature.State":
+  ) -> State:
 
     if not self.finalized:
       self.finalize(func_args)
@@ -1198,9 +1199,9 @@ class BlockDiagonalCurvature(
 
   def _sync_state(
       self,
-      state: "BlockDiagonalCurvature.State",
+      state: State,
       pmap_axis_name: str | None,
-  ) -> "BlockDiagonalCurvature.State":
+  ) -> State:
 
     block_states = []
 
@@ -1215,9 +1216,9 @@ class BlockDiagonalCurvature(
   @utils.auto_scope_method
   def sync(
       self,
-      state: "BlockDiagonalCurvature.State",
+      state: State,
       pmap_axis_name: str | None,
-  ) -> "BlockDiagonalCurvature.State":
+  ) -> State:
 
     return jax.lax.cond(
         state.synced,
@@ -1229,7 +1230,7 @@ class BlockDiagonalCurvature(
   @utils.auto_scope_method
   def multiply_matpower(
       self,
-      state: "BlockDiagonalCurvature.State",
+      state: State,
       parameter_structured_vector: utils.Params,
       identity_weight: Numeric | Sequence[Numeric],
       power: Scalar,
@@ -1291,7 +1292,7 @@ class BlockDiagonalCurvature(
   @utils.auto_scope_method
   def block_eigenvalues(
       self,
-      state: "BlockDiagonalCurvature.State",
+      state: State,
       use_cached: bool,
   ) -> tuple[Array, ...]:
     """Computes the eigenvalues for each block of the curvature estimator.
@@ -1315,7 +1316,7 @@ class BlockDiagonalCurvature(
   @utils.auto_scope_method
   def eigenvalues(
       self,
-      state: "BlockDiagonalCurvature.State",
+      state: State,
       use_cached: bool,
   ) -> Array:
 
@@ -1386,14 +1387,14 @@ class BlockDiagonalCurvature(
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
-      state: "BlockDiagonalCurvature.State",
+      state: State,
       ema_old: Numeric,
       ema_new: Numeric,
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
       estimation_mode: str | None = None,
-  ) -> "BlockDiagonalCurvature.State":
+  ) -> State:
 
     if not self.finalized:
       self.finalize(func_args)
@@ -1520,14 +1521,14 @@ class BlockDiagonalCurvature(
   @utils.auto_scope_method
   def update_cache(
       self,
-      state: "BlockDiagonalCurvature.State",
+      state: State,
       identity_weight: Numeric | Sequence[Numeric],
       exact_powers: curvature_blocks.ScalarOrSequence | None,
       approx_powers: curvature_blocks.ScalarOrSequence | None,
       eigenvalues: bool,
       pmap_axis_name: str | None,
       norm_to_scale_identity_weight_per_block: str | None = None,
-  ) -> "BlockDiagonalCurvature.State":
+  ) -> State:
 
     identity_weight = utils.to_tuple_or_repeat(identity_weight, self.num_blocks)
 
@@ -1599,19 +1600,13 @@ class BlockDiagonalCurvature(
     )
 
   @utils.auto_scope_method
-  def to_diagonal_block_dense_matrix(
-      self,
-      state: "BlockDiagonalCurvature.State",
-  ) -> tuple[Array, ...]:
+  def to_diagonal_block_dense_matrix(self, state: State) -> tuple[Array, ...]:
     """Returns a tuple of arrays with explicit dense matrices of each block."""
     return tuple(block.to_dense_matrix(block_state) for block, block_state in
                  zip(self.blocks, state.blocks_states))
 
   @utils.auto_scope_method
-  def to_dense_matrix(
-      self,
-      state: "BlockDiagonalCurvature.State"
-  ) -> Array:
+  def to_dense_matrix(self, state: State) -> Array:
     return scipy.linalg.block_diag(*self.to_diagonal_block_dense_matrix(state))
 
 

@@ -572,7 +572,7 @@ class SupervisedExperiment(abc.ABC):
     all_stats = dict()
 
     # Evaluates both the train and eval split metrics
-    for name, dataset_iter_thunk in self.eval_input.items():  # pytype: disable=attribute-error
+    for name, dataset_iter_thunk in self.eval_input.items():
       logging.info("Running evaluation for %s", name)
 
       averaged_stats = kfac_jax.utils.MultiChunkAccumulator.empty(True)

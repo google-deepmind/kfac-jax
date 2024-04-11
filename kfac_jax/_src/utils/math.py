@@ -776,7 +776,7 @@ def pi_adjusted_kronecker_inverse(
   """
 
   return invert_psd_matrices(
-      pi_adjusted_kronecker_factors(*factors, damping=damping))  # pytype: disable=bad-return-type
+      pi_adjusted_kronecker_factors(*factors, damping=damping))
 
 
 def kronecker_product_axis_mul_v(

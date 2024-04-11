@@ -243,35 +243,6 @@ class JaxprGraph:
   params_vars: Vars
   out_tree: PyTreeDef
   tag_ctor: TagCtor | None
-  # Until we stop supporting Python 3.7 we can't use @functools.cached_property,
-  # so we set these attributes in __post_init__
-  losses_eqns: tuple[tags.LossTagEqn, ...] = ()
-  var_to_creation_op: immutabledict.immutabledict = None  # pytype:disable=annotation-type-mismatch
-  manual_registrations: tuple[tags.LayerTagEqn, ...] = ()
-
-  def __post_init__(self):
-    losses_eqns = tuple(
-        eqn for eqn in self.closed_jaxpr.jaxpr.eqns
-        if isinstance(eqn.primitive, tags.LossTag)
-    )
-    var_to_creation_op = immutabledict.immutabledict(
-        sum(([(var, eqn) for var in eqn.outvars]
-             for eqn in self.jaxpr.eqns), [])
-    )
-    registered_tags = []
-    for eqn in self.jaxpr.eqns:
-      if isinstance(eqn.primitive, tags.LayerTag):
-        for param in eqn.primitive.split_all_inputs(eqn.invars)[2]:
-          if param not in self.params_vars:
-            raise ValueError(f"One of the parameters of the manual layer "
-                             f"registration equation: {eqn} is not part of the "
-                             f"parameters of the global function.")
-        registered_tags.append(eqn)
-    manual_registrations = tuple(registered_tags)
-
-    object.__setattr__(self, "losses_eqns", losses_eqns)
-    object.__setattr__(self, "var_to_creation_op", var_to_creation_op)
-    object.__setattr__(self, "manual_registrations", manual_registrations)
 
   @property
   def jaxpr(self) -> Jaxpr:
@@ -302,33 +273,33 @@ class JaxprGraph:
           to_process_eqns.append(self.var_to_creation_op[v])
           processed_vars.add(v)
     return tuple(eqns)
-  #
-  # @functools.cached_property
-  # def losses_eqns(self) -> tuple[tags.LossTagEqn, ...]:
-  #   return tuple(
-  #       eqn for eqn in self.closed_jaxpr.jaxpr.eqns
-  #       if isinstance(eqn.primitive, tags.LossTag)
-  #   )
-  #
-  # @functools.cached_property
-  # def var_to_creation_op(self) -> immutabledict.immutabledict:
-  #   return immutabledict.immutabledict(
-  #       sum(([(var, eqn) for var in eqn.outvars]
-  #            for eqn in self.jaxpr.eqns), []))
-  #
-  # @functools.cached_property
-  # def manual_registrations(self) -> tuple[tags.LayerTagEqn, ...]:
-  #   """Returns all manually registered tags."""
-  #   registered_tags = []
-  #   for eqn in self.jaxpr.eqns:
-  #     if isinstance(eqn.primitive, tags.LayerTag):
-  #       for param in eqn.primitive.split_all_inputs(eqn.invars)[2]:
-  #         if param not in self.params_vars:
-  #           raise ValueError("One of the parameters of the manual layer "
-  #                            f"registration equation: {eqn} is not part of "
-  #                            "the parameters of the global function.")
-  #       registered_tags.append(eqn)
-  #   return tuple(registered_tags)
+
+  @functools.cached_property
+  def losses_eqns(self) -> tuple[tags.LossTagEqn, ...]:
+    return tuple(
+        eqn for eqn in self.closed_jaxpr.jaxpr.eqns
+        if isinstance(eqn.primitive, tags.LossTag)
+    )
+
+  @functools.cached_property
+  def var_to_creation_op(self) -> immutabledict.immutabledict:
+    return immutabledict.immutabledict(
+        sum(([(var, eqn) for var in eqn.outvars]
+             for eqn in self.jaxpr.eqns), []))
+
+  @functools.cached_property
+  def manual_registrations(self) -> tuple[tags.LayerTagEqn, ...]:
+    """Returns all manually registered tags."""
+    registered_tags = []
+    for eqn in self.jaxpr.eqns:
+      if isinstance(eqn.primitive, tags.LayerTag):
+        for param in eqn.primitive.split_all_inputs(eqn.invars)[2]:
+          if param not in self.params_vars:
+            raise ValueError("One of the parameters of the manual layer "
+                             f"registration equation: {eqn} is not part of "
+                             "the parameters of the global function.")
+        registered_tags.append(eqn)
+    return tuple(registered_tags)
 
 
 def make_jax_graph(
@@ -431,9 +402,6 @@ class GraphPattern:
   parameters_extractor_func: ParameterExtractorFunc
   example_args: utils.FuncArgs
   in_values_preprocessor: VarProcessor | None = None
-  # Until we stop supporting Python 3.7 we can't use @functools.cached_property,
-  # so we set this attribute in the property
-  _graph: JaxprGraph | None = None
 
   @property
   def jaxpr(self) -> Jaxpr:
@@ -443,22 +411,18 @@ class GraphPattern:
   def param_vars(self) -> Vars:
     return self.graph.params_vars
 
-  @property
+  @functools.cached_property
   def graph(self) -> JaxprGraph:
     """A :class:`JaxprGraph` representation of the pattern."""
-    if self._graph is None:
-      jnp_args = jax.tree_util.tree_map(jnp.asarray, self.example_args)
-      graph = make_jax_graph(
-          func=self.compute_func,
-          func_args=jnp_args,
-          params_index=1,
-          name=self.name,
-          compute_only_loss_tags=False,
-          clean_broadcasts=True,
-      )
-      object.__setattr__(self, "_graph", graph)
-    assert self._graph is not None
-    return self._graph
+    jnp_args = jax.tree_util.tree_map(jnp.asarray, self.example_args)
+    return make_jax_graph(
+        func=self.compute_func,
+        func_args=jnp_args,
+        params_index=1,
+        name=self.name,
+        compute_only_loss_tags=False,
+        clean_broadcasts=True,
+    )
 
   def tag_ctor(
       self,
@@ -513,32 +477,18 @@ class GraphMatch:
   pattern: GraphPattern
   variables_map: Mapping[Var, Var]
   graph_eqns: JaxprEqns
-  # Until we stop supporting Python 3.7 we can't use @functools.cached_property,
-  # so we set these attributes in __post_init__
-  output_var: Var = None  # pytype:disable=annotation-type-mismatch
-  param_graph_variables: Vars = ()
-
-  def __post_init__(self):
-    # Until we stop supporting Python 3.7 we can't use
-    # @functools.cached_property, so we set here additional attributes.
-    output_var = self.variables_map[self.pattern.jaxpr.outvars[0]]
-    param_graph_variables = [self.variables_map[p]
-                             for p in self.pattern.graph.params_vars]
-
-    object.__setattr__(self, "output_var", output_var)
-    object.__setattr__(self, "param_graph_variables", param_graph_variables)
 
   @property
   def name(self) -> str:
     return self.pattern.name
-  #
-  # @functools.cached_property
-  # def output_var(self) -> Var:
-  #   return self._variables_map[self.pattern.jaxpr.outvars[0]]
-  #
-  # @functools.cached_property
-  # def param_graph_variables(self) -> Vars:
-  #   return [self._variables_map[p] for p in self.pattern.graph.params_vars]
+
+  @functools.cached_property
+  def output_var(self) -> Var:
+    return self.variables_map[self.pattern.jaxpr.outvars[0]]
+
+  @functools.cached_property
+  def param_graph_variables(self) -> Vars:
+    return [self.variables_map[p] for p in self.pattern.graph.params_vars]
 
   def create_eqn(
       self,
@@ -841,18 +791,13 @@ def write_env(
 def to_closed_jaxpr(jaxpr: JaxprOrClosedJaxpr) -> ClosedJaxpr:
   if isinstance(jaxpr, Jaxpr):
     return ClosedJaxpr(jaxpr=jaxpr, consts=[])
-  else:
-    return jaxpr
+  return jaxpr
 
 
-def to_jaxpr_or_closed_jaxpr(
-    closed_jaxpr: ClosedJaxpr,
-    original: J,
-) -> J:
+def to_jaxpr_or_closed_jaxpr(closed_jaxpr: ClosedJaxpr, original: J) -> J:
   if isinstance(original, Jaxpr):
     return closed_jaxpr.jaxpr
-  else:
-    return closed_jaxpr
+  return closed_jaxpr
 
 
 def apply_to_higher_order_primitives(eqn, func, *args, **kwargs):

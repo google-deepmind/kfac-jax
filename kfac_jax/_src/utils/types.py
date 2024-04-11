@@ -61,7 +61,7 @@ def abstract_objects_equal(
                                 jax.tree_util.tree_leaves(obj2))))
 
 
-def get_float_dtype_and_check_consistency(obj: ArrayTree) -> DType:
+def get_float_dtype_and_check_consistency(obj: ArrayTree) -> DType | None:
   """Checks that all leaves have the same float dtype, and returns this."""
 
   leaves = jax.tree_util.tree_leaves(obj)
@@ -81,4 +81,4 @@ def get_float_dtype_and_check_consistency(obj: ArrayTree) -> DType:
     else:
       raise ValueError("Non-float dtype detected.")
 
-  return dtype  # pytype: disable=bad-return-type  # jnp-type
+  return dtype

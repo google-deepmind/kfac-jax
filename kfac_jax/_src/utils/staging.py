@@ -109,7 +109,7 @@ class WithStagedMethods(misc.Finalizable):
     """Whether we are in a staging context while compiling staged methods."""
     return self._in_staging
 
-  def staging_context(self) -> "StagingContext":
+  def staging_context(self) -> StagingContext:
     """Returns a staging context manager, linked to this instance."""
     return self.StagingContext(self)
 
