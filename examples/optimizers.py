@@ -676,7 +676,7 @@ class OptaxWrapper:
         has_state=self._value_func_has_state,
     )
 
-    loss, stats, grads = kfac_jax.utils.pmean_if_pmap(  # pytype: disable=wrong-keyword-args
+    loss, stats, grads = kfac_jax.utils.pmean_if_pmap(
         (loss, stats, grads), axis_name=self.pmap_axis_name
     )
 
@@ -968,9 +968,7 @@ def cosine_schedule(
     else:
       total_data = total_steps * train_total_batch_size
 
-    # Optax uses chex which has an inconsistent definition of "Numeric" from
-    # what we use here.
-    return optax.warmup_cosine_decay_schedule(  # pytype: disable=bad-return-type
+    val = optax.warmup_cosine_decay_schedule(
         init_value=initial_learning_rate,
         peak_value=peak_learning_rate,
         end_value=end_learning_rate,
@@ -983,15 +981,16 @@ def cosine_schedule(
     if warmup_fraction is not None:
       warmup_steps = warmup_fraction * total_steps
 
-    # Optax uses chex which has an inconsistent definition of "Numeric" from
-    # what we use here.
-    return optax.warmup_cosine_decay_schedule(  # pytype: disable=bad-return-type
+    val = optax.warmup_cosine_decay_schedule(
         init_value=initial_learning_rate,
         peak_value=peak_learning_rate,
         end_value=end_learning_rate,
         warmup_steps=warmup_steps,
         decay_steps=total_steps,
     )(global_step)
+
+  assert isinstance(val, Numeric)
+  return val
 
 
 # TODO(jamesmartens,kazukiosawa,botev): change these argument names to be not be
@@ -1135,7 +1134,7 @@ def exponential_decay_schedule(
     else:
       total_data = total_steps * train_total_batch_size
 
-    return optax.exponential_decay(
+    val = optax.exponential_decay(
         init_value=init_value,
         end_value=end_value,
         decay_rate=end_value / init_value,
@@ -1148,15 +1147,16 @@ def exponential_decay_schedule(
     if start_fraction is not None:
       start_steps = start_fraction * total_steps
 
-    # Optax uses chex which has an inconsistent definition of "Numeric" from
-    # what we use here.
-    return optax.exponential_decay(  # pytype: disable=bad-return-type
+    val = optax.exponential_decay(
         init_value=init_value,
         end_value=end_value,
         decay_rate=end_value / init_value,
         transition_begin=start_steps,
         transition_steps=total_steps - start_steps,
     )(global_step)
+
+  assert isinstance(val, Numeric)
+  return val
 
 
 def polynomial_schedule(
@@ -1220,7 +1220,7 @@ def polynomial_schedule(
     else:
       total_data = total_steps * train_total_batch_size
 
-    return optax.polynomial_schedule(
+    val = optax.polynomial_schedule(
         init_value=init_value,
         end_value=end_value,
         power=power,
@@ -1233,15 +1233,16 @@ def polynomial_schedule(
     if start_fraction is not None:
       start_steps = start_fraction * total_steps
 
-    # Optax uses chex which has an inconsistent definition of "Numeric" from
-    # what we use here.
-    return optax.polynomial_schedule(  # pytype: disable=bad-return-type
+    val = optax.polynomial_schedule(
         init_value=init_value,
         end_value=end_value,
         power=power,
         transition_begin=start_steps,
         transition_steps=total_steps - start_steps,
     )(global_step)
+
+  assert isinstance(val, Numeric)
+  return val
 
 
 def construct_schedule(

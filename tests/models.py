@@ -345,12 +345,14 @@ def squared_error_loss(
   """A squared error loss computed for the given model function."""
   x, y = batch["images"], batch["targets"]
 
+  assert isinstance(y, Array)
+
   y_hat, layer_values = model_func(
-      explicit_tagging=explicit_tagging, output_dim=y.shape[-1],  # pytype: disable=attribute-error  # numpy-scalars
+      explicit_tagging=explicit_tagging, output_dim=y.shape[-1],
   ).apply(params, x)
 
-  assert y_hat.shape == y.shape  # pytype: disable=attribute-error  # numpy-scalars
-  y = y.reshape((-1, y.shape[-1]))  # pytype: disable=attribute-error  # numpy-scalars
+  assert y_hat.shape == y.shape
+  y = y.reshape((-1, y.shape[-1]))
   y_hat = y_hat.reshape((-1, y_hat.shape[-1]))
 
   loss_functions.register_squared_error_loss(y_hat, y, weight=0.5)
@@ -404,8 +406,11 @@ def linear_squared_error_autoencoder_loss(
     return_layer_values: bool = False,
 ) -> LossOutputs:
   """A linear autoencoder with squared error."""
-  batch["images"] = batch["images"].reshape(batch["images"].shape[0], -1)  # type: ignore  # numpy-scalars
-  batch["targets"] = batch["images"]  # pytype: disable=unsupported-operands  # numpy-scalars
+  assert isinstance(batch, dict) and "images" in batch
+  assert isinstance(batch["images"], Array)
+
+  batch["images"] = batch["images"].reshape(batch["images"].shape[0], -1)
+  batch["targets"] = batch["images"]
   model_func = functools.partial(
       autoencoder, layer_widths=layer_widths, activation=_special_identity)
   return squared_error_loss(
@@ -428,7 +433,9 @@ def autoencoder_deterministic_loss(
     activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
 ) -> Array:
   """Evaluate the autoencoder with a deterministic loss."""
-  x = batch["images"].reshape((batch["images"].shape[0], -1))  # pytype: disable=attribute-error  # numpy-scalars
+  assert isinstance(batch, dict) and "images" in batch
+  assert isinstance(batch["images"], Array)
+  x = batch["images"].reshape((batch["images"].shape[0], -1))
   logits, _ = autoencoder(
       layer_widths, x.shape[-1], explicit_tagging, activation=activation,
   ).apply(params, x)
@@ -449,7 +456,9 @@ def autoencoder_with_two_losses(
     activation: Callable[[LayerInputs], LayerInputs] = _special_tanh,
 ) -> LossOutputs:
   """Evaluate the autoencoder with two losses."""
-  x = batch["images"].reshape((batch["images"].shape[0], -1))  # pytype: disable=attribute-error  # numpy-scalars
+  assert isinstance(batch, dict) and "images" in batch
+  assert isinstance(batch["images"], Array)
+  x = batch["images"].reshape((batch["images"].shape[0], -1))
 
   logits, layer_values = autoencoder(
       layer_widths, x.shape[-1], explicit_tagging, activation=activation,
@@ -464,10 +473,11 @@ def autoencoder_with_two_losses(
   if return_losses_outputs:
     return [[logits], [logits]]
 
-  loss_1: Array = - distrax.Bernoulli(logits=logits).log_prob(x)  # pytype: disable=annotation-type-mismatch
-  scale_diag = jnp.ones_like(logits) * jnp.sqrt(0.5)
-  loss_2: Array = - distrax.MultivariateNormalDiag(  # pytype: disable=annotation-type-mismatch
-      loc=logits, scale_diag=scale_diag).log_prob(x)
+  loss_1 = - distrax.Bernoulli(logits=logits).log_prob(x)
+  loss_2 = - distrax.MultivariateNormalDiag(
+      loc=logits, scale_diag=jnp.ones_like(logits) * jnp.sqrt(0.5)).log_prob(x)
+
+  assert isinstance(loss_1, Array) and isinstance(loss_2, Array)
 
   if return_layer_values:
     return [loss_1, 0.1 * loss_2], layer_values
@@ -669,11 +679,11 @@ def vanilla_rnn_with_scan(
     if aux is None:
       aux = None
       unroll_in = (x, list(), None)
-      (x, layer_values), _ = hk.dynamic_unroll(core, unroll_in, init_state)
+      (x, _), _ = hk.dynamic_unroll(core, unroll_in, init_state)
     else:
       aux_rnn, aux = aux
       unroll_in = (x, list(), aux_rnn)
-      (x, layer_values), _ = hk.dynamic_unroll(core, unroll_in, init_state)
+      (x, _), _ = hk.dynamic_unroll(core, unroll_in, init_state)
 
     layer_values = list()
     # We need this in order the dense tag to recognize things correctly

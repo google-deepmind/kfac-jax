@@ -41,7 +41,7 @@ FuncState = kfac_jax.utils.FuncState
 WeightedMovingAverage = kfac_jax.utils.WeightedMovingAverage
 
 InitFunc = Callable[[PRNGKey, Batch], Params]
-BatchSizeCalculatorCtor = Callable[[int, int, str], "BatchSizeCalculator"]
+BatchSizeCalculatorCtor = Callable[..., "BatchSizeCalculator"]
 ExperimentBatchSizes = collections.namedtuple(
     "ExperimentBatchSizes", ["train", "eval"]
 )
@@ -54,7 +54,7 @@ def is_exactly_one_not_none(*args):
 class BatchSizeCalculator:
   """A class for computing the batch size in different ways."""
 
-  def __init__(self, total: int, per_device: int, mode: str):
+  def __init__(self, mode: str, total: int, per_device: int):
     if total == -1:
       total = None
     if per_device == -1:
@@ -190,10 +190,10 @@ class SupervisedExperiment(abc.ABC):
     self.has_func_state = has_func_state
     self.eval_splits = eval_splits
     self.batch_size = ExperimentBatchSizes(
-        train=batch_size_calculator_ctor(  # pytype: disable=wrong-keyword-args
+        train=batch_size_calculator_ctor(
             mode="train", **self.config.batch_size.train
         ),
-        eval=batch_size_calculator_ctor(  # pytype: disable=wrong-keyword-args
+        eval=batch_size_calculator_ctor(
             mode="eval", **self.config.batch_size.eval
         ),
     )

@@ -1851,7 +1851,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   @property
   def weights_spatial_size(self) -> int:
     """The spatial filter size of the weights."""
-    return utils.product(self.weights_spatial_shape)  # pytype: disable=bad-return-type  # numpy-scalars
+    return utils.product(dim for dim in self.weights_spatial_shape)
 
   @property
   def inputs_spatial_shape(self) -> Shape:

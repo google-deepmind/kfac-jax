@@ -53,8 +53,8 @@ class ScaledUniformOrthogonal(hk.initializers.Initializer):
     self.scale = scale
     self.axis = axis
 
-  def __call__(self, shape: Shape, dtype: DType) -> Array:  # pytype: disable=signature-mismatch  # numpy-scalars
-    # This has essentially copied from https://github.com/deepmind/dks
+  def __call__(self, shape: Shape, dtype: DType) -> Array:
+    # This has essentially been copied from https://github.com/deepmind/dks
 
     if self.axis != -1:
       raise ValueError("Invalid axis value for Delta initializations. "

@@ -14,7 +14,7 @@
 """Utility functions for computing and automatically registering losses."""
 import types
 
-from typing import Any, Sequence
+from typing import Any, Sequence, Mapping
 
 import haiku as hk
 import jax
@@ -34,15 +34,14 @@ def l2_regularizer(
     haiku_exclude_biases: bool,
 ) -> Array:
   """Computes an L2 regularizer."""
+  assert isinstance(params, Mapping)
 
   if haiku_exclude_batch_norm:
-    params = hk.data_structures.filter(  # pytype: disable=wrong-arg-types
-        lambda m, n, p: "batchnorm" not in m, params)
+    params = hk.data_structures.filter(
+        lambda m, _, __: "batchnorm" not in m, params)
 
   if haiku_exclude_biases:
-    params = hk.data_structures.filter(  # pytype: disable=wrong-arg-types
-        lambda m, n, p: n != "b", params
-    )
+    params = hk.data_structures.filter(lambda _, n, __: n != "b", params)
 
   return 0.5 * kfac_jax.utils.inner_product(params, params)
 

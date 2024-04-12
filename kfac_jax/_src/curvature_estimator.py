@@ -579,7 +579,7 @@ class ImplicitExactCurvature:
     losses, _ = self._loss_tags_vjp(func_args)  # pytype: disable=attribute-error  # always-use-return-annotations
     batch_size = self.batch_size(func_args)
 
-    return (tuple(tuple(x.shape for x in loss.parameter_dependants)  # pytype: disable=bad-return-type  # numpy-scalars
+    return (tuple(tuple(x.shape for x in loss.parameter_dependants)
                   for loss in losses),
             batch_size)
 

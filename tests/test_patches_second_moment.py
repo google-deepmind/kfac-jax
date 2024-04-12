@@ -29,7 +29,7 @@ utils = kfac_jax.utils
 class TestPatchesMoments(parameterized.TestCase):
   """Test class for the patches second moment functions."""
 
-  def assertAllClose(
+  def assert_all_close(
       self,
       x: utils.PyTree,
       y: utils.PyTree,
@@ -81,15 +81,15 @@ class TestPatchesMoments(parameterized.TestCase):
         spatial_padding=padding)
     self.assertEqual(num_locations, num_location_fast)
 
-  @parameterized.parameters(list(itertools.product(  # pytype: disable=wrong-arg-types
-      [3],  # c
-      [8, 16],  # h
-      [(1, 2), (3, 3), (4, 5)],  # kernel_shape
-      [(1, 1), (1, 2), (1, 3),
-       (2, 2), (2, 3), (3, 3)],  # strides
-      ["VALID", "SAME"],  # padding
-      ["NHWC", "NCHW"],  # data_format
-      [False, True],  # per_channel
+  @parameterized.parameters(list(itertools.product(
+      (3,),  # c
+      (8, 16),  # h
+      ((1, 2), (3, 3), (4, 5)),  # kernel_shape
+      ((1, 1), (1, 2), (1, 3),
+       (2, 2), (2, 3), (3, 3)),  # strides
+      ("VALID", "SAME"),  # padding
+      ("NHWC", "NCHW"),  # data_format
+      (False, True),  # per_channel
   )) + [
       (3, 9, (2, 2), (2, 2), ((0, 0), (2, 3)), "NHWC", False),  # custom padding
       (3, 9, (2, 2), (2, 2), ((0, 0), (2, 3)), "NHWC", True),  # custom padding
@@ -168,8 +168,8 @@ class TestPatchesMoments(parameterized.TestCase):
           lambda x: x / normalizer, (matrix, vector, matrix_fast, vector_fast)
           # pylint: disable=cell-var-from-loop
       )
-      self.assertAllClose(matrix, matrix_fast)
-      self.assertAllClose(vector, vector_fast)
+      self.assert_all_close(matrix, matrix_fast)
+      self.assert_all_close(vector, vector_fast)
 
 
 if __name__ == "__main__":
