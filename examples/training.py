@@ -368,7 +368,6 @@ class SupervisedExperiment(abc.ABC):
     """Initializes all the experiment's state variables."""
 
     if self._params is not None:
-      logging.info("Loaded from checkpoint, not initializing parameters.")
       return
 
     init_rng = kfac_jax.utils.replicate_all_local_devices(self.init_rng)
