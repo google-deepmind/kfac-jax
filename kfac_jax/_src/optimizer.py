@@ -412,29 +412,13 @@ class Optimizer(utils.WithStagedMethods):
         value_and_grad_func,
         has_aux=value_func_has_aux or value_func_has_state,
     )
+
     self._l2_reg = l2_reg
+
     self._use_adaptive_learning_rate = use_adaptive_learning_rate
     self._learning_rate_schedule = learning_rate_schedule
     self._use_adaptive_momentum = use_adaptive_momentum
-
-    if momentum_schedule is not None:
-
-      # TODO(jamesmartens,botev): invesigate if we actually need this anymore.
-      def schedule_with_first_step_zero(
-          global_step: Array,
-          data_seen: Numeric | None = None,
-      ) -> Array:
-
-        value = utils.call_func_with_conditional_kwargs(
-            momentum_schedule, global_step, data_seen=data_seen)
-        check = jnp.equal(global_step, 0)
-
-        return check * jnp.zeros_like(value) + (1 - check) * value
-
-      self._momentum_schedule = schedule_with_first_step_zero
-
-    else:
-      self._momentum_schedule = None
+    self._momentum_schedule = momentum_schedule
 
     self._use_adaptive_damping = use_adaptive_damping
     self._damping_schedule = damping_schedule
@@ -449,6 +433,7 @@ class Optimizer(utils.WithStagedMethods):
     self._always_use_exact_qmodel_for_damping_adjustment = (
         always_use_exact_qmodel_for_damping_adjustment)
     self._precon_damping_mult = precon_damping_mult
+
     self._norm_constraint = norm_constraint
     self._num_burnin_steps = num_burnin_steps
     self._curvature_ema = curvature_ema
@@ -649,7 +634,7 @@ class Optimizer(utils.WithStagedMethods):
       damping: Array | None,
       step_counter: Array,
       data_seen: Array,
-  ) -> tuple[Array | None, Array | None, Array]:
+  ) -> tuple[Numeric | None, Numeric | None, Numeric]:
     """Helper function for setting up learning rate, momentum and damping."""
 
     # Compute schedules if applicable
@@ -830,6 +815,7 @@ class Optimizer(utils.WithStagedMethods):
       self, grads: Params, preconditioned_grads: Params, coefficient: Array
   ) -> tuple[Params, Params | None]:
     """Scales precon grad to have F-weighted norm <= norm_constraint."""
+
     if self._norm_constraint is None:
       return preconditioned_grads, None
 
@@ -875,7 +861,7 @@ class Optimizer(utils.WithStagedMethods):
       momentum: Array | None,
       damping: Array,
       func_args: FuncArgsVariants,
-  ) -> tuple[tuple[Array | None, Array | None], Numeric]:
+  ) -> tuple[tuple[Numeric, Numeric], Numeric]:
     """The correct update coefficients and corresponding quadratic change."""
 
     # Compute the coefficients of the update vectors
@@ -893,6 +879,7 @@ class Optimizer(utils.WithStagedMethods):
 
     else:
       assert all(c is not None for c in coefficients)
+      coefficients: tuple[Numeric, Numeric]
 
       if self._use_adaptive_damping:
         delta = self.weighted_sum_of_objects(vectors, coefficients)
@@ -1210,7 +1197,9 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._value_func_has_state:
       return params, state, func_state, stats
+
     assert func_state is None
+
     return params, state, stats
 
   def step(
@@ -1387,7 +1376,7 @@ class Optimizer(utils.WithStagedMethods):
       damping: Array,
       vectors: Sequence[Params],
       fixed_coefficients: Sequence[Numeric | None] | None = None,
-  ) -> tuple[tuple[Array, ...], Array]:
+  ) -> tuple[tuple[Numeric, ...], Array]:
     """Solves for the optimal learning rate and momentum of the quadratic model.
 
     The quadratic model is represented as:
@@ -1408,8 +1397,9 @@ class Optimizer(utils.WithStagedMethods):
       quad_model_parameters: The computed matrices A, D and vector b.
       damping: The damping to use for evaluating the quadratic model.
       vectors: The parameter-like vectors for which to evaluate.
-      fixed_coefficients: A list of values and None indicating which weights are
-          fixed, and the quadratic is solved only for those that aren't.
+      fixed_coefficients: A list over the vectors of the fixed numerical values
+        to use for their coefficients. For each of these that is None, the
+        quadratic model is minimized to compute the 'optimal' coefficient value.
     Returns:
      A list of coefficients which are the solution (and include any values that
      are not None from fixed_weights) and the value of the quadratic model
@@ -1440,6 +1430,7 @@ class Optimizer(utils.WithStagedMethods):
     # since the convention everywhere else is to sync quantities immediately
     # after they are first computed).
     A, A_damped, b = utils.pmean_if_pmap((A, A_damped, b), self.pmap_axis_name)
+
     # This needs explicit annotation
     A_damped: Array
 
@@ -1453,9 +1444,8 @@ class Optimizer(utils.WithStagedMethods):
         w = - lax.cond(special_case, lambda: b, lambda: b / A_damped[0])
 
       elif len(fixed_coefficients) == 2:
-        # This special case arises at the first iteration, because all
-        # velocities are zeros.
         w = - utils.psd_solve_maybe_zero_last_idx(A_damped, b)
+
       else:
         raise NotImplementedError()
 
@@ -1469,22 +1459,23 @@ class Optimizer(utils.WithStagedMethods):
 
       w = [None, None]
       index = fixed_coefficients.index(None)
-      w[1 - index] = jnp.asarray([fixed_coefficients[1 - index]])
+      w[1 - index] = fixed_coefficients[1 - index]
 
-      b_extra = A_damped[1 - index, index: index + 1] * w[1 - index]
-      A_solve = A_damped[index: index + 1, index: index + 1]
-      b_solve = b[index: index + 1] + b_extra
+      b_extra = A_damped[1 - index, index] * w[1 - index]
       # pylint: enable=invalid-name
 
-      w[index] = - b_solve / A_solve[0]
-      w = jnp.concatenate(w, axis=0)
+      w[index] = -(b[index] + b_extra) / A_damped[index, index]
 
     else:
       raise NotImplementedError()
 
-    quadratic_value = self.compute_quadratic_model_value(A, A_damped, b, w)
+    w = tuple(w)
+    w: tuple[Numeric, ...]
 
-    return tuple(w), quadratic_value
+    quadratic_value = self.compute_quadratic_model_value(
+        A, A_damped, b, jnp.array(w))
+
+    return w, quadratic_value
 
   @utils.staged
   def _compute_new_damping_and_rho(
