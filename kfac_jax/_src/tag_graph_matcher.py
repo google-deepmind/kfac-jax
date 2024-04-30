@@ -335,15 +335,30 @@ def make_jax_graph(
         else:
           eqns.append(eqn)
         sub_graph_vars.update(
-            v for v in eqn.invars if not isinstance(v, jax.core.Literal))
+            v for v in eqn.invars if not isinstance(v, jax.core.Literal)
+        )
 
-    consts_i = [i for i, c in enumerate(closed_jaxpr.jaxpr.constvars)
-                if c in sub_graph_vars]
+    consts_i = [
+        i
+        for i, c in enumerate(closed_jaxpr.jaxpr.constvars)
+        if c in sub_graph_vars
+    ]
+
+    debug_info = closed_jaxpr.jaxpr.debug_info
+    if debug_info is not None:
+      debug_info = jax.core.JaxprDebugInfo(
+          debug_info.traced_for,
+          debug_info.func_src_info,
+          debug_info.arg_names,
+          tuple([None for _ in range(len(loss_tags_output_vars))]),
+      )
+
     closed_jaxpr = ClosedJaxpr(
         jaxpr=closed_jaxpr.jaxpr.replace(
             eqns=eqns[::-1],
             constvars=[closed_jaxpr.jaxpr.constvars[i] for i in consts_i],
             outvars=loss_tags_output_vars[::-1],
+            debug_info=debug_info,
         ),
         consts=[closed_jaxpr.consts[i] for i in consts_i],
     )
