@@ -37,6 +37,18 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
   raw_value: TArrayTree | None
 
   @property
+  def ndim(self) -> int:
+    return self.raw_value.ndim
+
+  @property
+  def shape(self) -> Shape:
+    return self.raw_value.shape
+
+  @property
+  def dtype(self) -> DType:
+    return self.raw_value.dtype
+
+  @property
   def value(self) -> TArrayTree:
     """The value of the underlying arrays data structure."""
     return jax.tree_util.tree_map(lambda x: x / self.weight, self.raw_value)

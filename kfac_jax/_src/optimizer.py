@@ -857,9 +857,9 @@ class Optimizer(utils.WithStagedMethods):
       state: State,
       vectors: Sequence[Params],
       grads: Params,
-      learning_rate: Array | None,
-      momentum: Array | None,
-      damping: Array,
+      learning_rate: Numeric | None,
+      momentum: Numeric | None,
+      damping: Numeric,
       func_args: FuncArgsVariants,
   ) -> tuple[tuple[Numeric, Numeric], Numeric]:
     """The correct update coefficients and corresponding quadratic change."""

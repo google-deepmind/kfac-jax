@@ -830,6 +830,9 @@ def kronecker_product_axis_mul_v(
   result = v
   for group, factor, f_str in zip(axis_groups, factors, factor_strs):
 
+    if factor is None:
+      continue
+
     # This flattens all axis in `group` of `result` into a single one.
     shape = v.shape[:min(group)] + (-1,) + v.shape[max(group) + 1:]
     vector = result.reshape(shape)

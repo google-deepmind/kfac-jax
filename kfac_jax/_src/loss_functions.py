@@ -13,6 +13,7 @@
 # limitations under the License.
 """"K-FAC loss functions objects, tags and registration functions."""
 import abc
+import functools
 from typing import Sequence
 
 import distrax
@@ -33,6 +34,62 @@ LossFunctionInputs = tuple[Array, ...]
 
 
 # pylint: disable=g-one-element-tuple
+# @functools.partial(jax.custom_vjp, nondiff_argnums=(1,))
+# def sqrt_bound_derivative(
+#     x: jax.Array,
+#     max_gradient: float | jax.Array,
+# ) -> jax.Array:
+#   """Computes a square root with a gradient clipped at `max_gradient`."""
+#   del max_gradient  # unused
+#   return jnp.sqrt(x)
+
+
+# def stable_sqrt_fwd(
+#     x: jax.Array, _: float | jax.Array
+# ) -> tuple[jax.Array, tuple[jax.Array]]:  # pylint: disable=g-one-element-tuple
+#   return jnp.sqrt(x), (x,)
+
+
+# def stable_sqrt_bwd(
+#     max_gradient: float | jax.Array,
+#     res: tuple[jax.Array],  # pylint: disable=g-one-element-tuple
+#     g: jax.Array,
+# ) -> tuple[jax.Array]:  # pylint: disable=g-one-element-tuple
+#   (x,) = res
+#   x_pre = jnp.maximum(x, 1 / (4 * max_gradient**2))
+#   return jax.vjp(jnp.sqrt, x_pre)[1](g)
+
+
+# sqrt_bound_derivative.defvjp(stable_sqrt_fwd, stable_sqrt_bwd)
+
+
+@functools.partial(jax.custom_jvp, nondiff_argnums=(1,))
+def sqrt_bound_derivative(
+    x: jax.Array,
+    max_gradient: float | jax.Array,
+) -> jax.Array:
+  """Computes a square root with a gradient clipped at `max_gradient`."""
+  del max_gradient  # unused
+  return jnp.sqrt(x)
+
+
+def stable_sqrt_fwd(
+    max_gradient: float | jax.Array,
+    primals: tuple[jax.Array],
+    tangents: tuple[jax.Array],
+) -> tuple[jax.Array, jax.Array]:
+  """Forward mode autodiff of square-root."""
+  (x,) = primals
+  x_pre = jnp.maximum(x, 1 / (4 * max_gradient**2))
+
+  _, tangent = jax.jvp(jnp.sqrt, (x_pre,), tangents)
+
+  return jnp.sqrt(jnp.maximum(x, 0.0)), tangent
+
+
+sqrt_bound_derivative.defjvp(stable_sqrt_fwd)
+
+stable_sqrt = functools.partial(sqrt_bound_derivative, max_gradient=1000.0)
 
 
 class LossFunction(utils.Finalizable):
@@ -907,7 +964,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       vector: Array
   ) -> tuple[Array]:
-    return (jnp.sqrt(self._probs * (1 - self._probs)) * vector,)
+    return (stable_sqrt(self._probs * (1 - self._probs)) * vector,)
 
   def multiply_fisher_factor_transpose_unweighted(
       self,
@@ -922,7 +979,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   ) -> tuple[Array]:
     [index] = index
     probs_slice = self._probs[:, index][..., None]
-    output_slice = jnp.sqrt(probs_slice * (1 - probs_slice))
+    output_slice = stable_sqrt(probs_slice * (1 - probs_slice))
     return (insert_slice_in_zeros(
         output_slice, 1, self._logits.shape[1], index),)
 
@@ -1027,9 +1084,9 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     """The square root of ``self.probs``."""
 
     if self.mask is not None:
-      return jnp.sqrt(self.dist.probs) * self.mask[..., None]
+      return stable_sqrt(self.dist.probs) * self.mask[..., None]
     else:
-      return jnp.sqrt(self.dist.probs)
+      return stable_sqrt(self.dist.probs)
 
   @property
   def params(self) -> tuple[Array]:
