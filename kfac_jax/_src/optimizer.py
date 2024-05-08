@@ -844,7 +844,7 @@ class Optimizer(utils.WithStagedMethods):
     assert not (self._use_adaptive_learning_rate or self._use_adaptive_momentum)
 
     if self._always_use_exact_qmodel_for_damping_adjustment:
-      quad_model = self.compute_exact_quad_model(
+      quad_model = self.compute_exact_quad_model_filtered(
           [delta], grads, func_args, state=state)
     else:
       quad_model = self.compute_approx_quad_model(state, [delta], grads)
@@ -873,8 +873,8 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._use_adaptive_learning_rate or self._use_adaptive_momentum:
 
-      quad_model = self.compute_exact_quad_model(vectors, grads, func_args,
-                                                 state=state)
+      quad_model = self.compute_exact_quad_model_filtered(
+          vectors, grads, func_args, state=state, coefficients=coefficients)
       return self._solve_quad_model(quad_model, damping, vectors, coefficients)
 
     else:
@@ -1300,6 +1300,45 @@ class Optimizer(utils.WithStagedMethods):
       A matrix with i,j entry equal to ``self.l2_reg * v_i^T v_j``.
     """
     return self.l2_reg * utils.matrix_of_inner_products(vectors)
+
+  @utils.auto_scope_method
+  def compute_exact_quad_model_filtered(
+      self,
+      vectors: Sequence[Params],
+      grads: Params,
+      func_args: FuncArgsVariants,
+      state: State | None = None,
+      coefficients: Sequence[Numeric | None] | None = None,
+  ) -> tuple[Array, Array, Array]:
+    """Computes the components of the exact quadratic model."""
+    # We check the coefficients for zeros to save computing the expensive matrix
+    # vector products for vectors that will eventually be multiplied by zero.
+    if coefficients is None:
+      return self.compute_exact_quad_model(vectors, grads, func_args, state)
+    assert len(vectors) == len(coefficients)
+    # only deal with the two vector case
+    assert len(vectors) == 2
+
+    def if_momentum_coeff_zero(vectors, *args):
+      # only pass in the vectors that won't be multiplied by zero
+      quad_model = self.compute_exact_quad_model(vectors[:1], *args)
+
+      # repad the quad model with zeroes for the removed entries
+      # this will be handled downstream
+      return tuple(
+          jnp.pad(arr, [(0, 1)] * arr.ndim, constant_values=0.0)
+          for arr in quad_model
+      )
+    # add a check here to save compiling both branches in the static case
+    if isinstance(coefficients[1], float) and coefficients[1] == 0.0:
+      return if_momentum_coeff_zero(vectors, grads, func_args, state)
+
+    return jax.lax.cond(
+        coefficients[1] == 0.0,
+        if_momentum_coeff_zero,
+        self.compute_exact_quad_model,
+        vectors, grads, func_args, state
+    )
 
   @utils.auto_scope_method
   def compute_exact_quad_model(
