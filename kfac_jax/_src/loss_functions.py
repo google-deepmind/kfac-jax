@@ -907,7 +907,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       self,
       vector: Array
   ) -> tuple[Array]:
-    return (jnp.sqrt(self._probs * (1 - self._probs)) * vector,)
+    return (utils.stable_sqrt(self._probs * (1 - self._probs)) * vector,)
 
   def multiply_fisher_factor_transpose_unweighted(
       self,
@@ -922,7 +922,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   ) -> tuple[Array]:
     [index] = index
     probs_slice = self._probs[:, index][..., None]
-    output_slice = jnp.sqrt(probs_slice * (1 - probs_slice))
+    output_slice = utils.stable_sqrt(probs_slice * (1 - probs_slice))
     return (insert_slice_in_zeros(
         output_slice, 1, self._logits.shape[1], index),)
 
@@ -1027,9 +1027,9 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     """The square root of ``self.probs``."""
 
     if self.mask is not None:
-      return jnp.sqrt(self.dist.probs) * self.mask[..., None]
+      return utils.stable_sqrt(self.dist.probs) * self.mask[..., None]
     else:
-      return jnp.sqrt(self.dist.probs)
+      return utils.stable_sqrt(self.dist.probs)
 
   @property
   def params(self) -> tuple[Array]:

@@ -1107,3 +1107,32 @@ def loop_and_parallelize_average(
         [averaged_value, remainder_value], [avg_weight, remainder_weight])
 
   return average_func
+
+
+@functools.partial(jax.custom_jvp, nondiff_argnums=(1,))
+def _sqrt_bound_derivative(
+    x: jax.Array,
+    max_gradient: float | jax.Array,
+) -> jax.Array:
+  """Computes a square root with a gradient clipped at `max_gradient`."""
+  del max_gradient  # unused
+  return jnp.sqrt(x)
+
+
+def _stable_sqrt_fwd(
+    max_gradient: float | jax.Array,
+    primals: tuple[jax.Array],  # pylint: disable=g-one-element-tuple
+    tangents: tuple[jax.Array],  # pylint: disable=g-one-element-tuple
+) -> tuple[jax.Array, jax.Array]:
+  """Forward mode autodiff of square-root."""
+  (x,) = primals
+  x_pre = jnp.maximum(x, 1 / (4 * max_gradient**2))
+
+  _, tangent = jax.jvp(jnp.sqrt, (x_pre,), tangents)
+
+  return jnp.sqrt(x), tangent
+
+
+_sqrt_bound_derivative.defjvp(_stable_sqrt_fwd)
+
+stable_sqrt = functools.partial(_sqrt_bound_derivative, max_gradient=1000.0)
