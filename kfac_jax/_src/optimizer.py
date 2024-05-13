@@ -1527,7 +1527,7 @@ class Optimizer(utils.WithStagedMethods):
     """Computes the reduction ratio and the updated value of the damping."""
 
     # Reduction ratio
-    rho = (new_loss - old_loss) / quad_change
+    rho = (new_loss * 1e9 - old_loss * 1e9) / (quad_change * 1e9)
     rho_not_nan = jnp.nan_to_num(rho, nan=-100.0)
 
     # Update damping
