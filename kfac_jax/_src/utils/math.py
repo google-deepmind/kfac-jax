@@ -728,7 +728,7 @@ def invert_psd_matrices(
     assert m.ndim <= 1
     return 1.0 / m
 
-  return jax.tree_map(invert_psd_matrix, matrices)
+  return jax.tree_util.tree_map(invert_psd_matrix, matrices)
 
 
 def inverse_sqrt_psd_matrices(matrices: ArrayTree) -> ArrayTree:
@@ -742,7 +742,7 @@ def inverse_sqrt_psd_matrices(matrices: ArrayTree) -> ArrayTree:
     assert m.ndim <= 1
     return 1.0 / jnp.sqrt(m)
 
-  return jax.tree_map(inverse_sqrt_psd_matrix, matrices)
+  return jax.tree_util.tree_map(inverse_sqrt_psd_matrix, matrices)
 
 
 def pi_adjusted_kronecker_inverse(

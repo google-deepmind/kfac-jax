@@ -287,7 +287,7 @@ class TestEstimator(parameterized.TestCase):
           jax.tree_util.tree_structure(params), v_e_leaves)
       r_e = implicit.multiply_hessian(func_args, v_e)
       flat_r_e = jax.tree_util.tree_leaves(
-          jax.tree_map(lambda x: x.flatten(), r_e))
+          jax.tree_util.tree_map(lambda x: x.flatten(), r_e))
       return index + 1, jnp.concatenate(flat_r_e, axis=0)
 
     _, hessian = jax.lax.scan(mul_e_i, 0, None, length=block_estimator.dim)
