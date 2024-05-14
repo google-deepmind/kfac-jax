@@ -1318,6 +1318,10 @@ class Optimizer(utils.WithStagedMethods):
     assert len(vectors) == len(coefficients)
     # only deal with the two vector case
     assert len(vectors) == 2
+    # don't allow adaptive momentum without adaptive learning rate
+    # this makes the padding simpler
+    if coefficients[1] is None:
+      assert coefficients[0] is None
 
     def if_momentum_coeff_zero(vectors, *args):
       # only pass in the vectors that won't be multiplied by zero
