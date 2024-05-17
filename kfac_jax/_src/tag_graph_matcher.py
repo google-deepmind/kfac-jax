@@ -350,7 +350,7 @@ def make_jax_graph(
           debug_info.traced_for,
           debug_info.func_src_info,
           debug_info.arg_names,
-          tuple([None for _ in range(len(loss_tags_output_vars))]),
+          ("",) * len(loss_tags_output_vars),
       )
 
     closed_jaxpr = ClosedJaxpr(
