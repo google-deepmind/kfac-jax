@@ -715,6 +715,7 @@ class Optimizer(utils.WithStagedMethods):
       rng: PRNGKey,
       ema_old: Numeric,
       ema_new: Numeric,
+      damping: Numeric,
       sync: Array | bool = True
   ) -> BlockDiagonalCurvature.State:
     """Updates the curvature estimator state."""
@@ -723,6 +724,7 @@ class Optimizer(utils.WithStagedMethods):
         state=estimator_state,
         ema_old=ema_old,
         ema_new=ema_new,
+        identity_weight=damping,
         # Note that the batch is always the last entry of FuncArgsVariantsdef
         batch_size=self._batch_size_extractor(func_args[-1]),
         rng=rng,
@@ -743,6 +745,7 @@ class Optimizer(utils.WithStagedMethods):
       rng: PRNGKey,
       ema_old: Numeric,
       ema_new: Numeric,
+      damping: Numeric,
       sync: Array | bool = True,
   ) -> State:
     """Updates the curvature estimates if it is the right iteration."""
@@ -754,6 +757,7 @@ class Optimizer(utils.WithStagedMethods):
         rng=rng,
         ema_old=ema_old,
         ema_new=ema_new,
+        damping=damping,
         sync=sync,
     )
 
@@ -857,9 +861,9 @@ class Optimizer(utils.WithStagedMethods):
       state: State,
       vectors: Sequence[Params],
       grads: Params,
-      learning_rate: Array | None,
-      momentum: Array | None,
-      damping: Array,
+      learning_rate: Numeric | None,
+      momentum: Numeric | None,
+      damping: Numeric,
       func_args: FuncArgsVariants,
   ) -> tuple[tuple[Numeric, Numeric], Numeric]:
     """The correct update coefficients and corresponding quadratic change."""
@@ -995,6 +999,12 @@ class Optimizer(utils.WithStagedMethods):
       sync: Array | bool,
   ) -> tuple[State, utils.MultiChunkAccumulator]:
     """A single burnin step, updating only the curvature estimate."""
+    if self._damping_schedule is None:
+      assert state.damping is not None
+      damping = state.damping
+    else:
+      damping = utils.call_func_with_conditional_kwargs(
+          self._damping_schedule, 0, data_seen=0)
 
     # Copy this first since we mutate it later in this function.
     accumulator = accumulator.copy()
@@ -1004,7 +1014,14 @@ class Optimizer(utils.WithStagedMethods):
 
     # Update curvature estimate
     state.estimator_state = self._update_estimator_curvature(
-        state.estimator_state, func_args, rng, 1.0, 1.0, sync=sync)
+        state.estimator_state,
+        func_args,
+        rng,
+        ema_old=1.0,
+        ema_new=1.0,
+        damping=damping,
+        sync=sync,
+    )
 
     # Optionally update func_state
     if func_state is not None:
@@ -1077,8 +1094,9 @@ class Optimizer(utils.WithStagedMethods):
         state,
         func_args,
         rng,
-        self._curvature_ema,
-        1.0,
+        ema_old=self._curvature_ema,
+        ema_new=1.0,
+        damping=damping,
         sync=self.should_sync_estimator(state),
     )
 

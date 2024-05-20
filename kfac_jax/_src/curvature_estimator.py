@@ -800,6 +800,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       state: StateType,
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
@@ -813,6 +814,8 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         estimate in the moving average.
       ema_new: Specifies the weight of the new value when computing the updated
         estimate in the moving average.
+      identity_weight: The weight of the identity added to the block's curvature
+        matrix before computing the cached matrix power.
       batch_size: The batch size.
       rng: A PRNGKey to be used for any potential sampling in the estimation
         process.
@@ -1324,8 +1327,16 @@ class BlockDiagonalCurvature(
     return jnp.concatenate(blocks_eigenvalues, axis=0)
 
   # Helper function that updates the blocks given a vjp vector
-  def _update_blocks(self, vjp_vec, losses_vjp, state, ema_old, ema_new,
-                     batch_size):
+  def _update_blocks(
+      self,
+      vjp_vec,
+      losses_vjp,
+      state,
+      ema_old: Numeric,
+      ema_new: Numeric,
+      identity_weight: Numeric,
+      batch_size: int,
+  ):
 
     blocks_info = losses_vjp(vjp_vec)
     assert len(blocks_info) == self.num_blocks
@@ -1334,9 +1345,16 @@ class BlockDiagonalCurvature(
     for block, block_state, block_info in zip(
         self.blocks, state.blocks_states, blocks_info):
 
-      new_state.append(block.update_curvature_matrix_estimate(
-          block_state, block_info, ema_old, ema_new,
-          batch_size))
+      new_state.append(
+          block.update_curvature_matrix_estimate(
+              block_state,
+              block_info,
+              ema_old=ema_old,
+              ema_new=ema_new,
+              identity_weight=identity_weight,
+              batch_size=batch_size,
+          )
+      )
 
     return BlockDiagonalCurvature.State(
         synced=jnp.asarray(False),
@@ -1390,6 +1408,7 @@ class BlockDiagonalCurvature(
       state: State,
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
@@ -1424,7 +1443,14 @@ class BlockDiagonalCurvature(
             for loss, key in zip(losses, keys))
 
         return self._update_blocks(
-            vjp_vec, losses_vjp, state_i, ema_old_i, ema_new, batch_size)
+            vjp_vec=vjp_vec,
+            losses_vjp=losses_vjp,
+            state=state_i,
+            ema_old=ema_old_i,
+            ema_new=ema_new,
+            identity_weight=identity_weight,
+            batch_size=batch_size,
+        )
 
       return self._maybe_do_multiple_updates(update_func, state, rng, ema_old)
 
@@ -1434,8 +1460,15 @@ class BlockDiagonalCurvature(
           loss.grad_of_evaluate(None, coefficient_mode="regular")
           for loss in losses)
 
-      return self._update_blocks(vjp_vec, losses_vjp, state, ema_old, ema_new,
-                                 batch_size)
+      return self._update_blocks(
+          vjp_vec=vjp_vec,
+          losses_vjp=losses_vjp,
+          state=state,
+          ema_old=ema_old,
+          ema_new=ema_new,
+          identity_weight=identity_weight,
+          batch_size=batch_size,
+      )
 
     elif estimation_mode in ("fisher_curvature_prop", "ggn_curvature_prop"):
 
@@ -1459,7 +1492,14 @@ class BlockDiagonalCurvature(
             vjp_vec.append(loss.multiply_ggn_factor(random_b * 2.0 - 1.0))
 
         return self._update_blocks(
-            tuple(vjp_vec), losses_vjp, state_i, ema_old_i, ema_new, batch_size)
+            vjp_vec=tuple(vjp_vec),
+            losses_vjp=losses_vjp,
+            state=state_i,
+            ema_old=ema_old_i,
+            ema_new=ema_new,
+            identity_weight=identity_weight,
+            batch_size=batch_size,
+        )
 
       return self._maybe_do_multiple_updates(update_func, state, rng, ema_old)
 
@@ -1509,7 +1549,14 @@ class BlockDiagonalCurvature(
               lambda x: x * jnp.sqrt(total_num_indices), vjp_vec[i])
 
           state = self._update_blocks(
-              tuple(vjp_vec), losses_vjp, state, ema_old, ema_new, batch_size)
+              vjp_vec=tuple(vjp_vec),
+              losses_vjp=losses_vjp,
+              state=state,
+              ema_old=ema_old,
+              ema_new=ema_new,
+              identity_weight=identity_weight,
+              batch_size=batch_size,
+          )
 
           ema_old = 1.0
 
@@ -1696,6 +1743,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       state: BlockDiagonalCurvature.State,
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
       rng: PRNGKey,
       func_args: utils.FuncArgs,
@@ -1722,6 +1770,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
           state=state_,
           ema_old=is_first * ema_old + (1 - is_first) * 1.0,
           ema_new=ema_new / batch_size,
+          identity_weight=identity_weight,
           batch_size=1,
           rng=rng[index],
           func_args=args,

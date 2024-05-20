@@ -477,6 +477,7 @@ class CurvatureBlock(utils.Finalizable):
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> State:
     """Updates the block's curvature estimates using the ``info`` provided.
@@ -496,6 +497,8 @@ class CurvatureBlock(utils.Finalizable):
           estimate in the moving average.
       ema_new: Specifies the weight of the new value when computing the updated
           estimate in the moving average.
+      identity_weight: The weight of the identity added to the block's curvature
+          matrix before computing the cached matrix power.
       batch_size: The batch size used in computing the values in ``info``.
     """
 
@@ -652,6 +655,7 @@ class ScaledIdentity(CurvatureBlock):
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> CurvatureBlock.State:
 
@@ -1446,8 +1450,10 @@ class NaiveDiagonal(Diagonal):
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> Diagonal.State:
+    del identity_weight
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1475,8 +1481,10 @@ class NaiveFull(Full):
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> Full.State:
+    del identity_weight
 
     # This method supports the case where the param tangents have an extra
     # leading dimension that should be summed over (after the outer products).
@@ -1531,8 +1539,10 @@ class DenseDiagonal(Diagonal):
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> Diagonal.State:
+    del identity_weight
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1564,8 +1574,10 @@ class DenseFull(Full):
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> Full.State:
+    del identity_weight
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1598,8 +1610,11 @@ class DenseTwoKroneckerFactored(TwoKroneckerFactored):
       estimation_data: Mapping[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> KroneckerFactored.State:
+    del identity_weight
+
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
@@ -1699,8 +1714,10 @@ class Conv2DDiagonal(Diagonal):
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> Diagonal.State:
+    del identity_weight
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1802,8 +1819,10 @@ class Conv2DFull(Full):
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> Full.State:
+    del identity_weight
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1948,8 +1967,10 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
       estimation_data: Mapping[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> TwoKroneckerFactored.State:
+    del identity_weight
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -2025,8 +2046,10 @@ class ScaleAndShiftDiagonal(Diagonal):
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> Diagonal.State:
+    del identity_weight
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -2087,8 +2110,10 @@ class ScaleAndShiftFull(Full):
       estimation_data: dict[str, Sequence[Array]],
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       batch_size: Numeric,
   ) -> Full.State:
+    del identity_weight
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()

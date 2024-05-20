@@ -789,7 +789,7 @@ def kronecker_product_axis_mul_v(
 
   Args:
     factors: The sequence of factors forming the Kronecker product. Must be
-      square 2D arrays.
+      square 2D arrays or `None`, which is interpreted as identity.
     v: A tensor whose vectorization will be multiplied by the Kronecker product.
     axis_groups: A list whose i-th element is a sequence of consecutive integers
       specifying the axes of the input tensor ``v`` that correspond to the i-th
@@ -829,6 +829,9 @@ def kronecker_product_axis_mul_v(
 
   result = v
   for group, factor, f_str in zip(axis_groups, factors, factor_strs):
+
+    if factor is None:
+      continue
 
     # This flattens all axis in `group` of `result` into a single one.
     shape = v.shape[:min(group)] + (-1,) + v.shape[max(group) + 1:]

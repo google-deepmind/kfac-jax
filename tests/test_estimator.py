@@ -71,6 +71,7 @@ def compute_exact_approx_curvature(
       state=state,
       ema_old=0.0,
       ema_new=1.0,
+      identity_weight=0.0,  # This doesn't matter here.
       batch_size=batch_size,
       rng=rng,
       func_args=func_args,
