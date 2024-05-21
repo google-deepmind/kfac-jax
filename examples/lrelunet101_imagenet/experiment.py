@@ -346,7 +346,7 @@ def lrelunet_loss(
     batch: Mapping[str, Array],
     is_training: bool,
     l2_reg: Numeric,
-    label_smoothing: float = 0.1,
+    label_smoothing: float = 0.0,
     average_loss: bool = True,
     num_classes: int = 1000,
     depth: int = 101,

@@ -245,6 +245,7 @@ def imagenet_dataset(
                       seed=shuffle_seed)
 
   if is_training:
+
     rng = jax.random.PRNGKey(preprocess_seed)
     tf_seed = tf.convert_to_tensor(rng, dtype=tf.int32)
 

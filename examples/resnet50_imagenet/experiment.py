@@ -30,6 +30,7 @@ def resnet50(
     **kwargs: Any,
 ) -> hk.TransformedWithState:
   """Constructs a Haiku transformed object of the ResNet50 v2 network."""
+
   bn_config = dict(decay_rate=bn_decay_rate)
   if batch_norm_synced:
     bn_config["cross_replica_axis"] = "kfac_axis"
@@ -58,7 +59,7 @@ def resnet50_loss(
     batch: Mapping[str, chex.Array],
     is_training: bool,
     l2_reg: chex.Numeric,
-    label_smoothing: float = 0.1,
+    label_smoothing: float = 0.0,
     average_loss: bool = True,
     num_classes: int = 1000,
     bn_decay_rate: float = 0.9,
