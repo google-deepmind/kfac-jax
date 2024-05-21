@@ -1118,7 +1118,7 @@ class Optimizer(utils.WithStagedMethods):
     )
 
     # constrain the norms
-    preconditioned_gradient, sq_norm_scaled_grads = (
+    preconditioned_gradient, scaled_grad_norm_sq = (
         self._maybe_apply_norm_constraint(
             grads, preconditioned_gradient, learning_rate,
         )
@@ -1184,7 +1184,7 @@ class Optimizer(utils.WithStagedMethods):
         damping=damping,
         rho=rho,
         quad_model_change=quad_model_change,
-        scaled_grad_norm_sq=sq_norm_scaled_grads,
+        scaled_grad_norm_sq=scaled_grad_norm_sq,
     )
 
     if aux is not None:

@@ -13,7 +13,7 @@
 # limitations under the License.
 """"K-FAC loss functions objects, tags and registration functions."""
 import abc
-from typing import Sequence
+from typing import Sequence, Any
 
 import distrax
 import jax
@@ -83,7 +83,7 @@ class LossFunction(utils.Finalizable):
 
   @property
   @abc.abstractmethod
-  def parameter_independants(self) -> tuple[Numeric, ...]:
+  def parameter_independants(self) -> tuple[Numeric | None, ...]:
     """All the parameter independent arrays of the loss."""
 
   @property
@@ -95,25 +95,27 @@ class LossFunction(utils.Finalizable):
       self,
       parameter_dependants: Sequence[Array],
   ) -> Self:
-    """Creates a copy of the loss function object, but with different inputs."""
+    """Creates a copy of the loss function object, but with different def copyinputs."""
     array_args, aux = self.tree_flatten()
+    assert len(array_args) == (
+        self.num_parameter_dependants + self.num_parameter_independants
+    )
     array_args = (tuple(parameter_dependants) +
                   tuple(array_args[self.num_parameter_dependants:]))
     return self.tree_unflatten(aux, array_args)
 
-  @abc.abstractmethod
   def tree_flatten(
       self,
-  ) -> tuple[tuple[Array | None, ...], dict[str, utils.Numeric]]:
-    pass
+  ) -> tuple[tuple[Numeric | None, ...], dict[str, Any] | None]:
+    return self.parameter_dependants + self.parameter_independants, None
 
   @classmethod
   def tree_unflatten(
       cls,
-      aux_data: dict[str, utils.Numeric],
-      children: tuple[Array | None, ...],
+      aux: dict[str, Any] | None,
+      children: tuple[Numeric | None, ...],
   ) -> Self:
-    return cls(*children, **aux_data)  # pytype: disable=not-instantiable
+    return cls(*children, **(aux or {}))  # pytype: disable=not-instantiable
 
   def evaluate(
       self,
@@ -613,14 +615,8 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._normalize_log_prob
 
   @property
-  def parameter_independants(self) -> tuple[Numeric, ...]:
-
-    arrays = (self.variance, self.weight)
-
-    if self._targets is not None:
-      arrays = (self._targets,) + arrays
-
-    return arrays
+  def parameter_independants(self) -> tuple[Numeric | None, ...]:
+    return self._targets, self._variance, self._weight
 
   @property
   def dist(self) -> distrax.MultivariateNormalDiag:
@@ -667,12 +663,6 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     ones_slice = jnp.ones([self.mean.shape[0]])[..., None]
     output_slice = ones_slice / jnp.sqrt(self.variance)
     return (insert_slice_in_zeros(output_slice, 1, self.mean.shape[1], index),)
-
-  def tree_flatten(
-      self,
-  ) -> tuple[tuple[Array, Array | None], dict[str, utils.Numeric]]:
-    aux = dict(variance=self.variance, weight=self.weight)
-    return (self.mean, self.targets), aux
 
 
 @jax.tree_util.register_pytree_node_class
@@ -723,11 +713,8 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
     return self._targets
 
   @property
-  def parameter_independants(self) -> tuple[Numeric, ...]:
-    arrays = (self.weight,)
-    if self._targets is not None:
-      arrays = (self._targets,) + arrays
-    return arrays
+  def parameter_independants(self) -> tuple[Numeric | None, ...]:
+    return self._targets, self._weight
 
   @property
   def dist(self) -> distrax.MultivariateNormalDiag:
@@ -836,12 +823,6 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
   def ggn_factor_inner_shape(self) -> Shape:
     raise NotImplementedError()
 
-  def tree_flatten(
-      self,
-  ) -> tuple[tuple[Array, Array, Array | None], dict[str, utils.Numeric]]:
-    aux = dict(weight=self._weight)
-    return (self._mean, self._variance, self._targets), aux
-
 
 @jax.tree_util.register_pytree_node_class
 class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
@@ -878,11 +859,8 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     return self._targets
 
   @property
-  def parameter_independants(self) -> tuple[Numeric, ...]:
-    arrays = (self.weight,)
-    if self._targets is not None:
-      arrays = (self._targets,) + arrays
-    return arrays
+  def parameter_independants(self) -> tuple[Numeric | None, ...]:
+    return self._targets, self._weight
 
   @property
   def dist(self) -> distrax.Bernoulli:
@@ -925,12 +903,6 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     output_slice = utils.stable_sqrt(probs_slice * (1 - probs_slice))
     return (insert_slice_in_zeros(
         output_slice, 1, self._logits.shape[1], index),)
-
-  def tree_flatten(
-      self,
-  ) -> tuple[tuple[Array, Array | None], dict[str, utils.Numeric]]:
-    aux = dict(weight=self._weight)
-    return (self._logits, self._targets), aux
 
 
 @jax.tree_util.register_pytree_node_class
@@ -989,15 +961,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   @property
   def parameter_independants(self) -> tuple[Numeric | None, ...]:
-    arrays = (self.weight,)
-
-    if self.mask is not None:
-      arrays = (self.mask,) + arrays
-
-    if self.targets is not None:
-      arrays = (self.targets,) + arrays
-
-    return arrays
+    return self._targets, self._mask, self._weight
 
   @property
   def dist(self) -> distrax.Categorical:
@@ -1092,15 +1056,6 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     padded_slice = insert_slice_in_zeros(sqrt_probs_slice, 1, probs.shape[1],
                                          index)
     return (padded_slice - probs * sqrt_probs_slice,)
-
-  def tree_flatten(
-      self,
-  ) -> tuple[
-      tuple[Array, Array | None, Array | None],
-      dict[str, utils.Numeric]
-  ]:
-    aux = dict(weight=self._weight)
-    return (self._logits, self._targets, self._mask), aux
 
 
 @jax.tree_util.register_pytree_node_class
