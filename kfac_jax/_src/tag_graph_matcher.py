@@ -108,6 +108,7 @@ def conv_general_dilated_equivalent(
             "lhs_dilation", "rhs_dilation"):
     if len(params1[k]) != len(params2[k]):
       return False
+  # pytype: disable=attribute-error
   if (len(params1["dimension_numbers"].lhs_spec) !=
       len(params2["dimension_numbers"].lhs_spec)):
     return False
@@ -123,6 +124,7 @@ def conv_general_dilated_equivalent(
   if ((params1["batch_group_count"] > 1) !=
       (params2["batch_group_count"] > 1)):
     return False
+  # pytype: enable=attribute-error
   return True
 
 
@@ -1165,13 +1167,16 @@ class TagLocation:
   def __init__(
       self,
       tag_eqn: JaxprEqn,
-      base_name: str,
       parent_equations: Sequence[tuple[JaxprEqn, int]] = (),
   ):
     # assert isinstance(tag_eqn.primitive, tags.LayerTag)
     self.tag_eqn = tag_eqn
-    self.base_name = base_name
     self.parent_equations = list(parent_equations)
+
+  @property
+  def base_name(self) -> str:
+    assert "name" in self.tag_eqn.params
+    return self.tag_eqn.params["name"]
 
   @property
   def full_name(self) -> str:
@@ -1441,15 +1446,19 @@ def _auto_register_tags(
     for param in mid_graph.params_vars:
       if param not in tagged_params:
         orphan_p = make_var_func(param.aval)
-        eqns.append(jax.core.new_jaxpr_eqn(
-            invars=[param],
-            outvars=[orphan_p],
-            primitive=tags.generic,
-            params={},
-            effects=set(),
-        ))
+        n = pattern_counters.get("generic", 0)
+        pattern_counters["generic"] = n + 1
+        eqns.append(
+            jax.core.new_jaxpr_eqn(
+                invars=[param],
+                outvars=[orphan_p],
+                primitive=tags.generic,
+                params=dict(name=f"Auto[generic_tag|{n}]"),
+                effects=set(),
+            )
+        )
         env[param] = orphan_p
-        tag_locations.append(TagLocation(eqns[-1], "Orphan"))
+        tag_locations.append(TagLocation(eqns[-1]))
 
   for eqn in mid_graph.jaxpr.eqns:
     invars = [env.get(v, v) if isinstance(v, Var) else v
@@ -1461,7 +1470,9 @@ def _auto_register_tags(
       tag_name = eqn.primitive.name
       n = pattern_counters.get(tag_name, 0)
       pattern_counters[tag_name] = n + 1
-      tag_locations.append(TagLocation(eqn, f"Manual[{tag_name}_{n}]"))
+      if "name" not in eqn.params:
+        eqn.params["name"] = f"Manual[{tag_name}|{n}]"
+      tag_locations.append(TagLocation(eqn))
 
     for var in eqn.outvars:
       # Check if this is a match of a graph pattern
@@ -1474,7 +1485,9 @@ def _auto_register_tags(
         tag_name = eqns[-1].primitive.name
         n = pattern_counters.get(tag_name, 0)
         pattern_counters[tag_name] = n + 1
-        tag_locations.append(TagLocation(eqns[-1], f"Auto[{tag_name}_{n}]"))
+        assert eqns[-1].params.get("name") is None
+        eqns[-1].params["name"] = f"Auto[{tag_name}|{n}]"
+        tag_locations.append(TagLocation(eqns[-1]))
 
   final_outvars = [env.get(v, v) if isinstance(v, Var) else v
                    for v in mid_graph.jaxpr.outvars]

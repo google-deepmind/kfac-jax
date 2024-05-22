@@ -87,6 +87,16 @@ def extract_tags(
   )
 
 
+def name_layer_tags(layer_tags: tuple[tags.LayerTagEqn, ...]) -> None:
+  # This adds names to all registrations when `auto_register_tags=False`
+  tag_counter = {}
+  for layer_tag in layer_tags:
+    if "name" not in layer_tag.params:
+      n = tag_counter.get(layer_tag.primitive.name, 0)
+      tag_counter[layer_tag.primitive.name] = n + 1
+      layer_tag.params["name"] = f"Manual[{layer_tag.primitive.name}|{n}]"
+
+
 def order_layer_tags(
     params_vars_flat: Sequence[Var],
     layer_tags: Sequence[tags.LayerTagEqn],
@@ -183,6 +193,7 @@ class ProcessedJaxpr(utils.Finalizable):
     self.in_tree = in_tree
     self.params_index = params_index
     self.layer_tags, self.loss_tags = extract_tags(jaxpr)
+    name_layer_tags(self.layer_tags)
     self.layer_tags, self.layer_indices = order_layer_tags(
         params_vars_flat=self.params_vars_flat,
         layer_tags=self.layer_tags,
@@ -388,12 +399,12 @@ def cached_transformation(
   ) -> ProcessedJaxpr | T:
     # Construct a key and check cache for hits
     key = make_cache_key(func_args)
-    jaxpr, f = cache.get(key, (None, None))
+    processed_jaxpr, f = cache.get(key, (None, None))
 
-    if jaxpr is None:
+    if processed_jaxpr is None:
       assert f is None
       # Process the function
-      jaxpr = ProcessedJaxpr.make_from_func(
+      processed_jaxpr = ProcessedJaxpr.make_from_func(
           func=func,
           func_args=func_args,
           params_index=params_index,
@@ -402,7 +413,7 @@ def cached_transformation(
           **auto_registration_kwargs,
       )
 
-      if not allow_no_losses and not jaxpr.loss_tags:
+      if not allow_no_losses and not processed_jaxpr.loss_tags:
         raise ValueError("No registered losses have been found during tracing.")
 
       if cache and raise_error_on_diff_jaxpr:
@@ -410,17 +421,17 @@ def cached_transformation(
         # If any previous `ProcessedJaxpr` exists verify that it is equivalent
         ref_jaxpr, _ = cache[next(iter(cache))]
 
-        if ref_jaxpr != jaxpr:
+        if ref_jaxpr != processed_jaxpr:
           raise ValueError(
               "The consecutive tracing of the provided function "
               "yielded a non-equivalent `ProcessedJaxpr`."
           )
 
-      f = functools.partial(transformation, jaxpr)
-      cache[key] = (jaxpr, f)
+      f = functools.partial(transformation, processed_jaxpr)
+      cache[key] = (processed_jaxpr, f)
 
     if return_only_jaxpr:
-      return jaxpr
+      return processed_jaxpr
     else:
       return f(func_args, *args)
 

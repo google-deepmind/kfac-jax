@@ -50,6 +50,7 @@ and GGN matrices and how to compute matrix-vector products.
 import abc
 import functools
 from typing import Any, Callable, Sequence, Mapping, Generic, TypeVar
+from absl import logging
 import jax
 from jax import scipy
 import jax.numpy as jnp
@@ -73,7 +74,7 @@ LossFunctionInputs = loss_functions.LossFunctionInputs
 LossFunctionInputsSequence = Sequence[loss_functions.LossFunctionInputs]
 LossFunctionInputsTuple = tuple[loss_functions.LossFunctionInputs, ...]
 CurvatureBlockCtor = Callable[
-    [tags.LayerTagEqn, str],
+    [tags.LayerTagEqn],
     curvature_blocks.CurvatureBlock
 ]
 StateType = TypeVar("StateType")
@@ -1008,7 +1009,6 @@ class BlockDiagonalCurvature(
     assert self._jaxpr is not None
 
     blocks_list = []
-    counters = dict()
 
     for tag_eqn, idx in zip(self._jaxpr.layer_tags, self._jaxpr.layer_indices):  # pytype: disable=attribute-error  # always-use-return-annotations
 
@@ -1026,23 +1026,7 @@ class BlockDiagonalCurvature(
         raise ValueError(f"Did not find anywhere a block class for tag "
                          f"{tag_eqn.primitive.name}.")
 
-      if "name" in tag_eqn.params:
-
-        block_name = tag_eqn.params["name"]
-        assert block_name not in counters
-        counters[block_name] = 1
-
-      else:
-        if isinstance(cls, functools.partial):
-          block_name = cls.func.__name__
-        else:
-          block_name = cls.__name__
-
-        c = counters.get(block_name, 0)
-        counters[block_name] = c + 1
-        block_name += "__" + str(c)
-
-      blocks_list.append(cls(tag_eqn, block_name))
+      blocks_list.append(cls(tag_eqn))
 
     self._blocks = tuple(blocks_list)
 
@@ -1124,6 +1108,17 @@ class BlockDiagonalCurvature(
     params_vars = self.params_vector_to_blocks_vectors(self.jaxpr.params_vars)
     return np.argsort([p.count for p in jax.tree_util.tree_leaves(params_vars)])
 
+  def log_registrations(self):
+    if self._blocks is None:
+      raise ValueError(
+          "You must initialize the estimator before calling this method."
+      )
+
+    logging.info("BlockDiagonalCurvature blocks:")
+    for block in self._blocks:
+      logging.info(str(block))
+    logging.info("=" * 50)
+
   def params_vector_to_blocks_vectors(
       self,
       parameter_structured_vector: utils.Params,
@@ -1168,6 +1163,7 @@ class BlockDiagonalCurvature(
   def _finalize(self, func_args: utils.FuncArgs):
     self._jaxpr = self._vjp(func_args, return_only_jaxpr=True)  # pytype: disable=annotation-type-mismatch  # always-use-return-annotations
     self._create_blocks()
+    self.log_registrations()
 
   @utils.auto_scope_method
   def init(

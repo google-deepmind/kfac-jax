@@ -16,12 +16,11 @@ import abc
 import collections
 import functools
 import string
-from typing import Sequence, Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import jax
 import jax.numpy as jnp
 import jax.scipy
-
 from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import patches_second_moment as psm
 from kfac_jax._src import tag_graph_matcher as tgm
@@ -149,20 +148,24 @@ class CurvatureBlock(utils.Finalizable):
     """
     cache: dict[str, Array | dict[str, Array]] | None
 
-  def __init__(self, layer_tag_eq: tags.LayerTagEqn, name: str):
+  def __init__(self, layer_tag_eq: tags.LayerTagEqn):
     """Initializes the block.
 
     Args:
       layer_tag_eq: The Jax equation corresponding to the layer tag that this
         block will approximate the curvature to.
-      name: The name of this block.
     """
     super().__init__()
 
     self._layer_tag_eq = layer_tag_eq
-    self._name = name
 
     self.finalize()
+
+  @property
+  def name(self) -> str:
+    if "name" not in self._layer_tag_eq.params:
+      raise ValueError(self._layer_tag_eq)
+    return self._layer_tag_eq.params["name"]
 
   @property
   def layer_tag_primitive(self) -> tags.LayerTag:
@@ -278,7 +281,7 @@ class CurvatureBlock(utils.Finalizable):
     return 1.0
 
   def __str__(self):
-    return f"{self._name!r}[{self.parameters_shapes!r}]"
+    return f"{self.__class__.__name__}[{self.name}]({self.parameters_shapes!r})"
 
   @utils.auto_scope_method
   def init(
@@ -575,7 +578,6 @@ class ScaledIdentity(CurvatureBlock):
   def __init__(
       self,
       layer_tag_eq: tags.LayerTagEqn,
-      name: str,
       scale: Numeric = 1.0,
   ):
     """Initializes the block.
@@ -583,11 +585,10 @@ class ScaledIdentity(CurvatureBlock):
     Args:
       layer_tag_eq: The Jax equation corresponding to the layer tag, that this
         block will approximate the curvature to.
-      name: The name of this block.
       scale: The scale of the identity matrix.
     """
     self._scale = scale
-    super().__init__(layer_tag_eq, name)
+    super().__init__(layer_tag_eq)
 
   def fixed_scale(self) -> Numeric:
     return self._scale
@@ -812,7 +813,6 @@ class Full(CurvatureBlock, abc.ABC):
   def __init__(
       self,
       layer_tag_eq: tags.LayerTagEqn,
-      name: str,
       eigen_decomposition_threshold: int | None = None,
   ):
     """Initializes the block.
@@ -820,7 +820,6 @@ class Full(CurvatureBlock, abc.ABC):
     Args:
       layer_tag_eq: The Jax equation corresponding to the layer tag that this
         block will approximate the curvature to.
-      name: The name of this block.
       eigen_decomposition_threshold: During calls to ``init`` and
        ``update_cache`` if higher number of matrix powers than this threshold
        are requested,  instead of computing individual approximate powers, will
@@ -836,7 +835,7 @@ class Full(CurvatureBlock, abc.ABC):
     else:
       self._eigen_decomposition_threshold = eigen_decomposition_threshold
 
-    super().__init__(layer_tag_eq, name)
+    super().__init__(layer_tag_eq)
 
   def parameters_list_to_single_vector(
       self,
@@ -1076,7 +1075,6 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
   def __init__(
       self,
       layer_tag_eq: tags.LayerTagEqn,
-      name: str,
       axis_groups: Sequence[Sequence[int]] | None = None,
   ):
 
@@ -1096,7 +1094,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       # We currently don't support out of order axis groups
       raise NotImplementedError()
 
-    super().__init__(layer_tag_eq, name)
+    super().__init__(layer_tag_eq)
 
   @abc.abstractmethod
   def parameters_shaped_list_to_array(
@@ -1383,9 +1381,8 @@ class TwoKroneckerFactored(KroneckerFactored):
   def __init__(
       self,
       layer_tag_eq: tags.LayerTagEqn,
-      name: str,
   ):
-    super().__init__(layer_tag_eq, name, ((0,), (1,)))
+    super().__init__(layer_tag_eq, ((0,), (1,)))
 
   @property
   def has_bias(self) -> bool:
@@ -1651,7 +1648,6 @@ class Conv2DDiagonal(Diagonal):
   def __init__(
       self,
       layer_tag_eq: tags.LayerTagEqn,
-      name: str,
       max_elements_for_vmap: int | None = None,
   ):
     """Initializes the block.
@@ -1671,7 +1667,6 @@ class Conv2DDiagonal(Diagonal):
     Args:
       layer_tag_eq: The Jax equation corresponding to the layer tag, that this
         block will approximate the curvature to.
-      name: The name of this block.
       max_elements_for_vmap: The threshold used for determining how much
         computation to the in parallel and how much in serial manner. If
         ``None`` will use the value returned by
@@ -1681,7 +1676,7 @@ class Conv2DDiagonal(Diagonal):
         func=self.conv2d_tangent_squared,
         max_parallel_size=max_elements_for_vmap or get_max_parallel_elements(),
     )
-    super().__init__(layer_tag_eq, name)
+    super().__init__(layer_tag_eq)
 
   @property
   def has_bias(self) -> bool:
@@ -1695,7 +1690,7 @@ class Conv2DDiagonal(Diagonal):
     """Computes the elementwise square of a tangent for a single feature map."""
 
     extra_params = {k: v for k, v in self.layer_tag_extra_params.items()
-                    if k not in ("lhs_shape", "rhs_shape")}
+                    if k not in ("lhs_shape", "rhs_shape", "name")}
 
     _, vjp = jax.vjp(
         functools.partial(
@@ -1748,7 +1743,6 @@ class Conv2DFull(Full):
   def __init__(
       self,
       layer_tag_eq: tags.LayerTagEqn,
-      name: str,
       max_elements_for_vmap: int | None = None,
   ):
     """Initializes the block.
@@ -1769,7 +1763,6 @@ class Conv2DFull(Full):
     Args:
       layer_tag_eq: The Jax equation corresponding to the layer tag, that this
         block will approximate the curvature to.
-      name: The name of this block.
       max_elements_for_vmap: The threshold used for determining how much
         computation to the in parallel and how much in serial manner. If
         ``None`` will use the value returned by
@@ -1781,7 +1774,7 @@ class Conv2DFull(Full):
         max_parallel_size=max_elements_for_vmap or get_max_parallel_elements(),
     )
 
-    super().__init__(layer_tag_eq, name)
+    super().__init__(layer_tag_eq)
 
   def conv2d_tangent_outer_product(
       self,
@@ -1791,7 +1784,7 @@ class Conv2DFull(Full):
     """Computes the outer product of a tangent for a single feature map."""
 
     extra_params = {k: v for k, v in self.layer_tag_extra_params.items()
-                    if k not in ("lhs_shape", "rhs_shape")}
+                    if k not in ("lhs_shape", "rhs_shape", "name")}
 
     _, vjp = jax.vjp(
         functools.partial(

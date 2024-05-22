@@ -41,9 +41,9 @@ class TestGraphMatcher(parameterized.TestCase):
     self.assertEqual(eqn1.primitive, eqn2.primitive)
     if eqn1.primitive.name == "conv2d_tag":
       # params removed in https://github.com/google/jax/pull/14211
-      skip_params = ["lhs_shape", "rhs_shape"]
+      skip_params = ["lhs_shape", "rhs_shape", "name"]
     else:
-      skip_params = []
+      skip_params = ["name"]
     if eqn1.primitive.name == "cond":
       raise NotImplementedError()
     elif eqn1.primitive.name == "while":
