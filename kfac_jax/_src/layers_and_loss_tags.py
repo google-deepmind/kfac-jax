@@ -75,6 +75,10 @@ class LossTag(core.Primitive, Generic[T]):
     jax.interpreters.batching.primitive_batchers[self] = self._batching
 
   @property
+  def loss_class_name(self) -> str:
+    return self._cls.__name__
+
+  @property
   def parameter_dependants_names(self) -> tuple[str, ...]:
     """The number of parameter dependent inputs to the tag primitive."""
     return self._parameter_dependants

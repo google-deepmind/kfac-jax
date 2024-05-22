@@ -15,6 +15,7 @@
 import functools
 from typing import Any, Callable, Sequence, TypeVar
 
+from absl import logging
 import jax
 import jax.numpy as jnp
 from kfac_jax._src import layers_and_loss_tags as tags
@@ -43,8 +44,7 @@ FunctionTransformation = Callable[..., ProcJaxpr | T]
 TransformedFunction = Callable[..., ProcJaxpr | T]
 
 LossTagsVjp = tuple[
-    tuple[LossFunction, ...],
-    Callable[[Sequence[LossFunctionInputs]], Params]
+    tuple[LossFunction, ...], Callable[[Sequence[LossFunctionInputs]], Params]
 ]
 LossTagsJvp = tuple[
     tuple[LossFunction, ...],
@@ -52,7 +52,7 @@ LossTagsJvp = tuple[
 ]
 LayerTagVjp = tuple[
     tuple[LossFunction, ...],
-    Callable[[tuple[LossFunctionInputs, ...]], tuple[dict[str, Array], ...]]
+    Callable[[tuple[LossFunctionInputs, ...]], tuple[dict[str, Array], ...]],
 ]
 JaxprOrClosedJaxpr = jax.core.Jaxpr | jax.core.ClosedJaxpr
 
@@ -63,8 +63,7 @@ def shape_and_type(x: Array) -> tuple[Shape, jnp.dtype]:
 
 
 def make_cache_key(
-    func_args: FuncArgs,
-    *args: Any
+    func_args: FuncArgs, *args: Any
 ) -> tuple[utils.PyTreeDef, tuple[tuple[Shape, jnp.dtype], ...]]:
   """Creates a key for caching Jax function arguments."""
 
@@ -74,14 +73,18 @@ def make_cache_key(
 
 
 def extract_tags(
-    jaxpr: jax.core.Jaxpr
+    jaxpr: jax.core.Jaxpr,
 ) -> tuple[tuple[tags.LayerTagEqn, ...], tuple[tags.LossTagEqn, ...]]:
   """Extracts the layer and the loss tags from the given Jaxpr."""
 
-  return (tuple(eqn for eqn in jaxpr.eqns
-                if isinstance(eqn.primitive, tags.LayerTag)),
-          tuple(eqn for eqn in jaxpr.eqns
-                if isinstance(eqn.primitive, tags.LossTag)))
+  return (
+      tuple(
+          eqn for eqn in jaxpr.eqns if isinstance(eqn.primitive, tags.LayerTag)
+      ),
+      tuple(
+          eqn for eqn in jaxpr.eqns if isinstance(eqn.primitive, tags.LossTag)
+      ),
+  )
 
 
 def order_layer_tags(
@@ -121,15 +124,18 @@ def order_layer_tags(
   left_out_indices = set(range(len(params_vars_flat))) - used_indices
 
   if left_out_indices and not allow_left_out_params:
-    raise ValueError("The following parameter indices were not assigned a "
-                     f"block: {left_out_indices}.")
+    raise ValueError(
+        "The following parameter indices were not assigned a "
+        f"block: {left_out_indices}."
+    )
 
   if not layer_tags:
     return (), ()
   else:
     # Sort by the vars minimum index
-    sorted_index_and_blocks = sorted(zip(layer_tags, tags_param_indices),
-                                     key=lambda x: min(x[1]))
+    sorted_index_and_blocks = sorted(
+        zip(layer_tags, tags_param_indices), key=lambda x: min(x[1])
+    )
     return tuple(zip(*sorted_index_and_blocks))
 
 
@@ -141,8 +147,8 @@ class ProcessedJaxpr(utils.Finalizable):
     consts: The constants returned from the tracing of the original Jaxpr.
     in_tree: The PyTree structure of the inputs to the function that the
       original Jaxpr has been created from.
-    params_index: Specifies, which inputs to the function are to be considered
-      a parameter variable. Specifically - ``inputs[params_index]``.
+    params_index: Specifies, which inputs to the function are to be considered a
+      parameter variable. Specifically - ``inputs[params_index]``.
     loss_tags: A tuple of all of the loss tags in the original Jaxpr.
     layer_tags: A sorted tuple of all of the layer tags in the original Jaxpr.
       The sorting order is based on the indices of the parameters associated
@@ -158,7 +164,7 @@ class ProcessedJaxpr(utils.Finalizable):
       in_tree: utils.PyTreeDef,
       params_index: int,
       allow_left_out_params: bool = False,
-    ):
+  ):
     """Initializes the instance.
 
     Args:
@@ -209,6 +215,22 @@ class ProcessedJaxpr(utils.Finalizable):
     """The PyTree structure of the parameter variables."""
     return jax.tree_util.tree_structure(self.params_vars)
 
+  def log_registered_losses(self):
+    logging.info("Graph registered losses:")
+
+    for loss_tag in self.loss_tags:
+      assert len(loss_tag.invars) == len(loss_tag.params["args_names"])
+
+      args = []
+      for name, var in zip(loss_tag.params["args_names"], loss_tag.invars):
+        args.append(f"{name}={var}")
+
+      args_str = ", ".join(args)
+
+      logging.info("%s(%s)", loss_tag.primitive.loss_class_name, args_str)
+
+    logging.info("=" * 50)
+
   def reconstruct_losses(
       self,
       losses_inputs: tuple[LossFunctionInputs, ...],
@@ -229,7 +251,7 @@ class ProcessedJaxpr(utils.Finalizable):
       params_index: int = 0,
       auto_register_tags: bool = True,
       allow_left_out_params: bool = False,
-      ** auto_registration_kwargs: Any,
+      **auto_registration_kwargs: Any,
   ) -> ProcJaxpr:
     """Constructs a :class:`~ProcessedJaxpr` from a the given function.
 
@@ -257,20 +279,24 @@ class ProcessedJaxpr(utils.Finalizable):
           func=func,
           func_args=func_args,
           params_index=params_index,
-          **auto_registration_kwargs)
+          **auto_registration_kwargs,
+      )
 
     typed_jaxpr = jax.make_jaxpr(func)(*func_args)
     jaxpr, consts = typed_jaxpr.jaxpr, typed_jaxpr.literals
 
     in_tree = jax.tree_util.tree_structure(func_args)
 
-    return ProcessedJaxpr(
+    processed_jaxpr = ProcessedJaxpr(
         jaxpr=jaxpr,
         consts=consts,
         in_tree=in_tree,
         params_index=params_index,
         allow_left_out_params=allow_left_out_params,
     )
+    processed_jaxpr.log_registered_losses()
+
+    return processed_jaxpr
 
   def __eq__(self, other: ProcJaxpr) -> bool:
     """Compares two ProcessedJaxpr instances by tree structure."""
@@ -295,13 +321,17 @@ class ProcessedJaxpr(utils.Finalizable):
     if len(self.layer_tags) != len(other.layer_tags):
       return False
 
-    if any(ref_tag.primitive != tag.primitive
-           for ref_tag, tag in zip(self.layer_tags, other.layer_tags)):
+    if any(
+        ref_tag.primitive != tag.primitive
+        for ref_tag, tag in zip(self.layer_tags, other.layer_tags)
+    ):
       return False
 
     # Verify whether parameter shapes are equivalent
-    if any(p_i.aval.shape != p_j.aval.shape  # pytype: disable=attribute-error  # always-use-property-annotation
-           for p_i, p_j in zip(self.params_vars_flat, other.params_vars_flat)):
+    if any(
+        p_i.aval.shape != p_j.aval.shape  # pytype: disable=attribute-error  # always-use-property-annotation
+        for p_i, p_j in zip(self.params_vars_flat, other.params_vars_flat)
+    ):
       return False
 
     return True
@@ -369,7 +399,7 @@ def cached_transformation(
           params_index=params_index,
           auto_register_tags=auto_register_tags,
           allow_left_out_params=allow_left_out_params,
-          **auto_registration_kwargs
+          **auto_registration_kwargs,
       )
 
       if not allow_no_losses and not jaxpr.loss_tags:
@@ -381,8 +411,10 @@ def cached_transformation(
         ref_jaxpr, _ = cache[next(iter(cache))]
 
         if ref_jaxpr != jaxpr:
-          raise ValueError("The consecutive tracing of the provided function "
-                           "yielded a non-equivalent `ProcessedJaxpr`.")
+          raise ValueError(
+              "The consecutive tracing of the provided function "
+              "yielded a non-equivalent `ProcessedJaxpr`."
+          )
 
       f = functools.partial(transformation, jaxpr)
       cache[key] = (jaxpr, f)
@@ -424,7 +456,7 @@ def construct_compute_losses_inputs(
   """
 
   def forward_compute_losses(
-      primal_params: Params
+      primal_params: Params,
   ) -> tuple[tuple[LossFunctionInputs, ...], tuple[LossFunctionInputs, ...]]:
     """Computes and returns the inputs to the first ``num_losses`` loss tags."""
 
@@ -433,9 +465,11 @@ def construct_compute_losses_inputs(
     original_params = local_func_args[params_index]
 
     if not utils.abstract_objects_equal(original_params, primal_params):
-      raise ValueError("The `primal_params` should have the same abstract "
-                       "structure as the original parameters passed in to the "
-                       "function.")
+      raise ValueError(
+          "The `primal_params` should have the same abstract "
+          "structure as the original parameters passed in to the "
+          "function."
+      )
 
     local_func_args[params_index] = primal_params
     flat_args = jax.tree_util.tree_leaves(local_func_args)
@@ -461,8 +495,11 @@ def construct_compute_losses_inputs(
 
         loss_tag: tags.LossTag = eqn.primitive
         losses_inputs.append(read(eqn.invars))
-        losses_p_deps.append(loss_tag.extract_parameter_dependants(
-            *losses_inputs[-1], **eqn.params))
+        losses_p_deps.append(
+            loss_tag.extract_parameter_dependants(
+                *losses_inputs[-1], **eqn.params
+            )
+        )
         losses_so_far += 1
 
       if losses_so_far == len(processed_jaxpr.loss_tags):
@@ -519,7 +556,8 @@ def _loss_tags_vjp(
   losses_func = construct_compute_losses_inputs(
       processed_jaxpr=p_jaxpr,
       primal_func_args=primal_func_args,
-      params_index=p_jaxpr.params_index)
+      params_index=p_jaxpr.params_index,
+  )
 
   primal_params = primal_func_args[p_jaxpr.params_index]
   _, full_vjp_func, losses_inputs = jax.vjp(
@@ -537,17 +575,21 @@ def _loss_tags_vjp(
     """
 
     if len(losses_tangents) != len(p_jaxpr.loss_tags):
-      raise ValueError("The argument `tangents` must be a sequence of the "
-                       "tangents to each loss tag in the same order as the "
-                       "loss objects that have been returned. The number of "
-                       f"loss_tags is {len(p_jaxpr.loss_tags)}, but the length "
-                       f"of `tangents` is {len(losses_tangents)}.")
+      raise ValueError(
+          "The argument `tangents` must be a sequence of the "
+          "tangents to each loss tag in the same order as the "
+          "loss objects that have been returned. The number of "
+          f"loss_tags is {len(p_jaxpr.loss_tags)}, but the length "
+          f"of `tangents` is {len(losses_tangents)}."
+      )
 
     for i, loss_tangents in enumerate(losses_tangents):
       if not isinstance(loss_tangents, Sequence):
-        raise ValueError("Each element of the argument `tangents` must be "
-                         f"a sequence, but tangents[{i}] has type "
-                         f"{type(loss_tangents)}.")
+        raise ValueError(
+            "Each element of the argument `tangents` must be "
+            f"a sequence, but tangents[{i}] has type "
+            f"{type(loss_tangents)}."
+        )
 
     [params_tangents] = full_vjp_func(losses_tangents)
 
@@ -596,7 +638,8 @@ def _loss_tags_jvp(
   tangents = (params_tangents,)
 
   (_, losses_tangents, losses_inputs) = jax.jvp(
-      losses_func, primal_params, tangents, has_aux=True)
+      losses_func, primal_params, tangents, has_aux=True
+  )
 
   return p_jaxpr.reconstruct_losses(losses_inputs), losses_tangents
 
@@ -632,7 +675,8 @@ def _loss_tags_hvp(
   losses_func = construct_compute_losses_inputs(
       processed_jaxpr=processed_jaxpr,
       primal_func_args=primal_func_args,
-      params_index=processed_jaxpr.params_index)
+      params_index=processed_jaxpr.params_index,
+  )
 
   def losses_sum(param_primals: Params) -> Array:
     # This computes the sum of losses evaluated. Makes it easier because we can
@@ -674,7 +718,8 @@ def _layer_tag_vjp(
     The computed ``losses`` and ``vjp_func`` pair.
   """
   layer_vars_flat = jax.tree_util.tree_leaves(
-      [tag.invars for tag in processed_jaxpr.layer_tags])
+      [tag.invars for tag in processed_jaxpr.layer_tags]
+  )
   layer_input_vars = tuple(set(layer_vars_flat))
 
   def forward() -> tuple[Array, ...]:
@@ -688,8 +733,9 @@ def _layer_tag_vjp(
     write = functools.partial(tgm.write_env, env)
 
     # Bind args and consts to environment
-    write(processed_jaxpr.jaxpr.invars,
-          jax.tree_util.tree_leaves(own_func_args))
+    write(
+        processed_jaxpr.jaxpr.invars, jax.tree_util.tree_leaves(own_func_args)
+    )
     write(processed_jaxpr.jaxpr.constvars, processed_jaxpr.consts)
 
     # Loop through equations and evaluate them
@@ -710,7 +756,7 @@ def _layer_tag_vjp(
     return read(layer_input_vars)  # pytype: disable=bad-return-type
 
   def forward_aux(
-      aux: dict[Var, Array]
+      aux: dict[Var, Array],
   ) -> tuple[tuple[LossFunctionInputs, ...], tuple[LossFunctionInputs, ...]]:
     """Computes the inputs and kwargs of all **loss** tags.
 
@@ -718,8 +764,8 @@ def _layer_tag_vjp(
       aux: A mapping from an Jaxpr variable to an additional auxiliary value.
         For each variable in this mapping, we add to the value computed during
         standard evaluation the auxiliary value. This is done in order to be
-        able to compute gradients wrt all intermediate expressions
-        corresponding to the Jaxpr variables in this mapping
+        able to compute gradients wrt all intermediate expressions corresponding
+        to the Jaxpr variables in this mapping
 
     Returns:
       The pair of ``(losses_inputs, losses_kwargs)`` where ``losses_inputs``
@@ -747,8 +793,9 @@ def _layer_tag_vjp(
           env[v] = env[v] + aux[v]
 
     # Bind args and consts to environment
-    write(processed_jaxpr.jaxpr.invars,
-          jax.tree_util.tree_leaves(own_func_args))
+    write(
+        processed_jaxpr.jaxpr.invars, jax.tree_util.tree_leaves(own_func_args)
+    )
 
     write(processed_jaxpr.jaxpr.constvars, processed_jaxpr.consts)
 
@@ -783,8 +830,12 @@ def _layer_tag_vjp(
   primals_dict = dict(zip(layer_input_vars, layer_input_values))
 
   # Update with the values of all parameters, which are inputs to the function
-  primals_dict.update(zip(processed_jaxpr.jaxpr.invars,
-                          jax.tree_util.tree_leaves(primal_func_args)))
+  primals_dict.update(
+      zip(
+          processed_jaxpr.jaxpr.invars,
+          jax.tree_util.tree_leaves(primal_func_args),
+      )
+  )
 
   # Create auxiliary values all equal to zero.
   aux_values = jax.tree_util.tree_map(jnp.zeros_like, layer_input_values)
@@ -794,15 +845,16 @@ def _layer_tag_vjp(
 
   # These values would now allow us to compute gradients wrt the layer tags
   # inputs, which are intermediate expressions in the Jaxpr.
-  _, aux_vjp, losses_inputs = jax.vjp(
-      forward_aux, aux_dict, has_aux=True)
+  _, aux_vjp, losses_inputs = jax.vjp(forward_aux, aux_dict, has_aux=True)
 
   # Compute the actual loss objects.
-  losses = tuple(tag.primitive.loss(*inputs, **tag.params) for tag, inputs in
-                 zip(processed_jaxpr.loss_tags, losses_inputs))
+  losses = tuple(
+      tag.primitive.loss(*inputs, **tag.params)
+      for tag, inputs in zip(processed_jaxpr.loss_tags, losses_inputs)
+  )
 
   def vjp_func(
-      tangents: tuple[LossFunctionInputs, ...]
+      tangents: tuple[LossFunctionInputs, ...],
   ) -> tuple[dict[str, Array], ...]:
     """Computes a (reverse-mode) vector-Jacobian product w.r.t. all layer tags.
 
@@ -830,18 +882,20 @@ def _layer_tag_vjp(
 
       primals = jax.util.safe_map(read_primals, tuple(tag.invars))
 
-      (info["outputs"],
-       info["inputs"],
-       info["params"]) = tag.primitive.split_all_inputs(primals)
+      (info["outputs"], info["inputs"], info["params"]) = (
+          tag.primitive.split_all_inputs(primals)
+      )
 
       # Due to the ability to preprocess inputs for tags the input gradients
       # could be potentially wrong (e.g. zero) so we don't include them.
       tangents = jax.util.safe_map(read_tangents, tuple(tag.invars))
 
       # inputs_tangent won't be correct for BN layers, but that won't matter
-      (info["outputs_tangent"],
-       info["inputs_tangent"],
-       info["params_tangent"]) = tag.primitive.split_all_inputs(tangents)
+      (
+          info["outputs_tangent"],
+          info["inputs_tangent"],
+          info["params_tangent"],
+      ) = tag.primitive.split_all_inputs(tangents)
 
       layers_info.append(info)
 
@@ -1032,5 +1086,5 @@ def layer_tags_vjp(
       auto_register_tags=auto_register_tags,
       allow_left_out_params=False,
       raise_error_on_diff_jaxpr=raise_error_on_diff_jaxpr,
-      **auto_registration_kwargs
+      **auto_registration_kwargs,
   )
