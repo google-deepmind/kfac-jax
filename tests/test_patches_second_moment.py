@@ -81,7 +81,7 @@ class TestPatchesMoments(parameterized.TestCase):
         spatial_padding=padding)
     self.assertEqual(num_locations, num_location_fast)
 
-  @parameterized.parameters(list(itertools.product(
+  @parameterized.parameters(list(itertools.product(  # pytype: disable=wrong-arg-types
       (3,),  # c
       (8, 16),  # h
       ((1, 2), (3, 3), (4, 5)),  # kernel_shape
