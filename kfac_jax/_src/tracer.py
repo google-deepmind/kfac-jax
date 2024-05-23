@@ -442,6 +442,7 @@ def construct_compute_losses_inputs(
     processed_jaxpr: ProcessedJaxpr,
     primal_func_args: FuncArgs,
     params_index: int,
+    drop_loss_tags: bool = True,
 ) -> Callable[
     [Params],
     tuple[tuple[LossFunctionInputs, ...], tuple[LossFunctionInputs, ...]],
@@ -461,6 +462,8 @@ def construct_compute_losses_inputs(
     params_index: The variables from the function arguments which are at this
       index (e.g. ``func_args[params_index]``) are to be considered model
       parameters.
+    drop_loss_tags: Whether to remove the loss tags primitive when computing the
+      loss functions inputs.
 
   Returns:
     A function which computes the inputs to the first ``num_losses`` loss tags.
@@ -499,10 +502,12 @@ def construct_compute_losses_inputs(
     losses_p_deps = []
     losses_inputs = []
     for eqn in processed_jaxpr.jaxpr.eqns:
-      write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
 
       if isinstance(eqn.primitive, tags.LossTag):
         assert eqn == processed_jaxpr.loss_tags[losses_so_far]
+
+        if not drop_loss_tags:
+          write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
 
         loss_tag: tags.LossTag = eqn.primitive
         losses_inputs.append(read(eqn.invars))
@@ -512,6 +517,9 @@ def construct_compute_losses_inputs(
             )
         )
         losses_so_far += 1
+
+      else:
+        write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
 
       if losses_so_far == len(processed_jaxpr.loss_tags):
         break
