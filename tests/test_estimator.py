@@ -84,7 +84,7 @@ def compute_exact_approx_curvature(
 class TestEstimator(parameterized.TestCase):
   """Testing of different curvature estimators."""
 
-  def assertAllClose(
+  def assert_trees_all_close(
       self,
       x: kfac_jax.utils.PyTree,
       y: kfac_jax.utils.PyTree,
@@ -163,7 +163,7 @@ class TestEstimator(parameterized.TestCase):
     _, matrix = jax.lax.scan(mul_e_i, 0, None, length=explicit_estimator.dim)
 
     # Compare
-    self.assertAllClose(matrix, explicit_exact_matrix)
+    self.assert_trees_all_close(matrix, explicit_exact_matrix)
 
   @parameterized.parameters(NON_LINEAR_MODELS_AND_CURVATURE_TYPE)
   def test_block_diagonal_full(
@@ -194,9 +194,9 @@ class TestEstimator(parameterized.TestCase):
     block_estimator = kfac_jax.BlockDiagonalCurvature(
         model_func,
         layer_tag_to_block_ctor=dict(
-            dense_tag=kfac_jax.DenseFull,
-            conv2d_tag=kfac_jax.Conv2DFull,
-            scale_and_shift_tag=kfac_jax.ScaleAndShiftFull,
+            dense=kfac_jax.DenseFull,
+            conv2d=kfac_jax.Conv2DFull,
+            scale_and_shift=kfac_jax.ScaleAndShiftFull,
         )
     )
     block_state = compute_exact_approx_curvature(
@@ -226,7 +226,7 @@ class TestEstimator(parameterized.TestCase):
     d = 0
     for block in blocks:
       s = slice(d, d + block.shape[0])
-      self.assertAllClose(block, full_matrix[s, s])
+      self.assert_trees_all_close(block, full_matrix[s, s])
       d = d + block.shape[0]
     self.assertEqual(d, full_matrix.shape[0])
 
@@ -258,9 +258,9 @@ class TestEstimator(parameterized.TestCase):
     block_estimator = kfac_jax.BlockDiagonalCurvature(
         model_func,
         layer_tag_to_block_ctor=dict(
-            dense_tag=kfac_jax.DenseFull,
-            conv2d_tag=kfac_jax.Conv2DFull,
-            scale_and_shift_tag=kfac_jax.ScaleAndShiftFull,
+            dense=kfac_jax.DenseFull,
+            conv2d=kfac_jax.Conv2DFull,
+            scale_and_shift=kfac_jax.ScaleAndShiftFull,
         )
     )
     block_state = compute_exact_approx_curvature(
@@ -297,7 +297,7 @@ class TestEstimator(parameterized.TestCase):
     d = 0
     for block in blocks:
       s = slice(d, d + block.shape[0])
-      self.assertAllClose(block, hessian[s, s])
+      self.assert_trees_all_close(block, hessian[s, s])
       d = d + block.shape[0]
     self.assertEqual(d, hessian.shape[0])
 
@@ -330,9 +330,9 @@ class TestEstimator(parameterized.TestCase):
     diagonal_estimator = kfac_jax.BlockDiagonalCurvature(
         model_func,
         layer_tag_to_block_ctor=dict(
-            dense_tag=kfac_jax.DenseDiagonal,
-            conv2d_tag=kfac_jax.Conv2DDiagonal,
-            scale_and_shift_tag=kfac_jax.ScaleAndShiftDiagonal,
+            dense=kfac_jax.DenseDiagonal,
+            conv2d=kfac_jax.Conv2DDiagonal,
+            scale_and_shift=kfac_jax.ScaleAndShiftDiagonal,
         )
     )
     diag_state = compute_exact_approx_curvature(
@@ -348,9 +348,9 @@ class TestEstimator(parameterized.TestCase):
     block_estimator = kfac_jax.BlockDiagonalCurvature(
         model_func,
         layer_tag_to_block_ctor=dict(
-            dense_tag=kfac_jax.DenseFull,
-            conv2d_tag=kfac_jax.Conv2DFull,
-            scale_and_shift_tag=kfac_jax.ScaleAndShiftFull,
+            dense=kfac_jax.DenseFull,
+            conv2d=kfac_jax.Conv2DFull,
+            scale_and_shift=kfac_jax.ScaleAndShiftFull,
         )
     )
     block_state = compute_exact_approx_curvature(
@@ -365,7 +365,7 @@ class TestEstimator(parameterized.TestCase):
     # Compare diagonals
     self.assertEqual(len(diagonals), len(blocks))
     for diagonal, block in zip(diagonals, blocks):
-      self.assertAllClose(diagonal, jnp.diag(jnp.diag(block)))
+      self.assert_trees_all_close(diagonal, jnp.diag(jnp.diag(block)))
 
   @parameterized.parameters(LINEAR_MODELS_AND_CURVATURE_TYPE)
   def test_kronecker_factored(
@@ -398,9 +398,9 @@ class TestEstimator(parameterized.TestCase):
     kf_estimator = kfac_jax.BlockDiagonalCurvature(
         model_func,
         layer_tag_to_block_ctor=dict(
-            dense_tag=kfac_jax.DenseTwoKroneckerFactored,
-            conv2d_tag=None,
-            scale_and_shift_tag=kfac_jax.ScaleAndShiftFull,
+            dense=kfac_jax.DenseTwoKroneckerFactored,
+            conv2d=None,
+            scale_and_shift=kfac_jax.ScaleAndShiftFull,
         )
     )
 
@@ -417,9 +417,9 @@ class TestEstimator(parameterized.TestCase):
     full_estimator = kfac_jax.BlockDiagonalCurvature(
         model_func,
         layer_tag_to_block_ctor=dict(
-            dense_tag=kfac_jax.DenseFull,
-            conv2d_tag=kfac_jax.Conv2DFull,
-            scale_and_shift_tag=kfac_jax.ScaleAndShiftFull,
+            dense=kfac_jax.DenseFull,
+            conv2d=kfac_jax.Conv2DFull,
+            scale_and_shift=kfac_jax.ScaleAndShiftFull,
         )
     )
     full_state = compute_exact_approx_curvature(
@@ -434,7 +434,7 @@ class TestEstimator(parameterized.TestCase):
     # Compare diagonals
     self.assertEqual(len(kf_blocks), len(blocks))
     for kf, block in zip(kf_blocks, blocks):
-      self.assertAllClose(kf, block)
+      self.assert_trees_all_close(kf, block)
 
   @parameterized.parameters([
       (
@@ -517,17 +517,17 @@ class TestEstimator(parameterized.TestCase):
             block_state.factors[1].value)
         out_eigs, _ = kfac_jax.utils.safe_psd_eigh(
             block_state.factors[0].value)
-        self.assertAllClose(scale * jnp.outer(out_eigs, in_eigs), eigs)
+        self.assert_trees_all_close(scale * jnp.outer(out_eigs, in_eigs), eigs)
       elif isinstance(block_state, kfac_jax.Diagonal.State):
         diag_eigs = jnp.concatenate([factor.value.flatten() for factor in
                                      block_state.diagonal_factors])
-        self.assertAllClose(diag_eigs, eigs)
+        self.assert_trees_all_close(diag_eigs, eigs)
       elif isinstance(block_state, kfac_jax.Full.State):
         matrix_eigs, _ = kfac_jax.utils.safe_psd_eigh(block_state.matrix.value)
-        self.assertAllClose(matrix_eigs, eigs)
+        self.assert_trees_all_close(matrix_eigs, eigs)
       elif isinstance(block_state, kfac_jax.CurvatureBlock.State):
         # ScaledIdentity
-        self.assertAllClose(jnp.ones_like(eigs), eigs)
+        self.assert_trees_all_close(jnp.ones_like(eigs), eigs)
       else:
         raise NotImplementedError()
 
@@ -608,7 +608,7 @@ class TestEstimator(parameterized.TestCase):
 
     # Check cached and non-cached are the same
     m_inv_v2 = estimator.multiply_inverse(state, v, e, True, False, None)
-    self.assertAllClose(m_inv_v, m_inv_v2, atol=1e-5, rtol=1e-4)
+    self.assert_trees_all_close(m_inv_v, m_inv_v2, atol=1e-5, rtol=1e-4)
 
     block_vectors = estimator.params_vector_to_blocks_vectors(v)
     results = estimator.params_vector_to_blocks_vectors(m_v)
@@ -623,12 +623,12 @@ class TestEstimator(parameterized.TestCase):
 
       # Matrix multiplication
       computed = block_matrices[i] @ v_i_flat + e * v_i_flat
-      self.assertAllClose(computed, r_i_flat)
+      self.assert_trees_all_close(computed, r_i_flat)
 
       # Matrix inverse multiplication
       m_i_plus_eye = block_matrices[i] + e * jnp.eye(block_matrices[i].shape[0])
       computed2 = jnp.linalg.solve(m_i_plus_eye, v_i_flat)
-      self.assertAllClose(computed2, r2_i_flat, atol=1e-5, rtol=1e-4)
+      self.assert_trees_all_close(computed2, r2_i_flat, atol=1e-5, rtol=1e-4)
 
   @parameterized.parameters([
       (
@@ -685,7 +685,7 @@ class TestEstimator(parameterized.TestCase):
     else:
       raise NotImplementedError()
 
-    self.assertAllClose(c_v_1, c_v_2, atol=1e-6, rtol=1e-6)
+    self.assert_trees_all_close(c_v_1, c_v_2, atol=1e-6, rtol=1e-6)
 
 
 if __name__ == "__main__":

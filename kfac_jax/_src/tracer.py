@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC tracing functionality for functions needed for curvature estimation."""
+import dataclasses
 import functools
-from typing import Any, Callable, Sequence, TypeVar
+from typing import Any, Callable, Sequence, TypeVar, Generic
 
 from absl import logging
 import jax
@@ -25,6 +26,7 @@ from kfac_jax._src import utils
 from typing_extensions import TypeAlias
 
 # Types for annotations
+T = TypeVar("T")
 Array = utils.Array
 Shape = utils.Shape
 Params = utils.Params
@@ -34,14 +36,35 @@ Var = jax.core.Var
 LossFunction = loss_functions.LossFunction
 LossFunctionInputs = loss_functions.LossFunctionInputs
 
-T = TypeVar("T")
-# J = TypeVar("J", jax.core.Jaxpr, jax.core.ClosedJaxpr)
+
 ProcJaxpr: TypeAlias = "ProcessedJaxpr"
 TaggedFunction = Callable[..., tuple[LossFunction, ...]]
-FuncWithTags = Callable[..., Any]
+Func = Callable[..., T]
 
-FunctionTransformation = Callable[..., ProcJaxpr | T]
-TransformedFunction = Callable[..., ProcJaxpr | T]
+FunctionTransformation = Callable[..., T]
+TransformedFunction = Callable[..., T]
+JaxprExtractor = Callable[..., "ProcessedJaxpr"]
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True, unsafe_hash=True)
+@jax.tree_util.register_pytree_node_class
+class LayerVjpData(Generic[T]):
+  """A compact class for all data related to layer tag information during VJP."""
+  primals: tags.LayerData[T]
+  tangents: tags.LayerData[T]
+
+  def tree_flatten(self) -> tuple[
+      tuple[tags.LayerData[T], tags.LayerData[T]],
+      None,
+  ]:
+    return (self.primals, self.tangents), None
+
+  @classmethod
+  def tree_unflatten(cls, aux_data, children):
+    assert aux_data is None
+    primals, tangents = children
+    return cls(primals=primals, tangents=tangents)
+
 
 LossTagsVjp = tuple[
     tuple[LossFunction, ...], Callable[[Sequence[LossFunctionInputs]], Params]
@@ -52,7 +75,10 @@ LossTagsJvp = tuple[
 ]
 LayerTagVjp = tuple[
     tuple[LossFunction, ...],
-    Callable[[tuple[LossFunctionInputs, ...]], tuple[dict[str, Array], ...]],
+    Callable[
+        [tuple[LossFunctionInputs, ...]],
+        tuple[LayerVjpData[Array], ...],  # pytype: disable=invalid-annotation
+    ],
 ]
 JaxprOrClosedJaxpr = jax.core.Jaxpr | jax.core.ClosedJaxpr
 
@@ -91,10 +117,14 @@ def name_layer_tags(layer_tags: tuple[tags.LayerTagEqn, ...]) -> None:
   # This adds names to all registrations when `auto_register_tags=False`
   tag_counter = {}
   for layer_tag in layer_tags:
-    if "name" not in layer_tag.params:
+    meta = layer_tag.params.get("meta")
+    if meta is None:
+      raise ValueError("Layer tag %s has no meta parameter" % layer_tag)
+    assert isinstance(meta, tags.LayerMetaData)
+    if meta.name is None:
       n = tag_counter.get(layer_tag.primitive.name, 0)
       tag_counter[layer_tag.primitive.name] = n + 1
-      layer_tag.params["name"] = f"Manual[{layer_tag.primitive.name}|{n}]"
+      meta.name = f"Manual[{layer_tag.primitive.name}|{n}]"
 
 
 def order_layer_tags(
@@ -122,7 +152,7 @@ def order_layer_tags(
   for eqn in layer_tags:
 
     # Collect the equation parameter indices
-    _, _, tag_vars = eqn.primitive.split_all_inputs(eqn.invars)
+    tag_vars = tags.layer_eqn_data(eqn, raise_an_error=True).params
     vars_indices = tuple(params_vars_flat.index(v) for v in tag_vars)
 
     if any(i in used_indices for i in vars_indices):
@@ -170,7 +200,7 @@ class ProcessedJaxpr(utils.Finalizable):
   def __init__(
       self,
       jaxpr: jax.core.Jaxpr,
-      consts: Sequence[Any],
+      consts: list[Any],
       in_tree: utils.PyTreeDef,
       params_index: int,
       allow_left_out_params: bool = False,
@@ -257,7 +287,7 @@ class ProcessedJaxpr(utils.Finalizable):
   @classmethod
   def make_from_func(
       cls,
-      func: utils.Func,
+      func: Func[Any],
       func_args: FuncArgs,
       params_index: int = 0,
       auto_register_tags: bool = True,
@@ -340,7 +370,7 @@ class ProcessedJaxpr(utils.Finalizable):
 
     # Verify whether parameter shapes are equivalent
     if any(
-        p_i.aval.shape != p_j.aval.shape  # pytype: disable=attribute-error  # always-use-property-annotation
+        p_i.aval.shape != p_j.aval.shape  # pytype: disable=attribute-error
         for p_i, p_j in zip(self.params_vars_flat, other.params_vars_flat)
     ):
       return False
@@ -349,7 +379,7 @@ class ProcessedJaxpr(utils.Finalizable):
 
 
 def cached_transformation(
-    func: utils.Func,
+    func: Func[T],
     transformation: FunctionTransformation[T],
     params_index: int = 0,
     auto_register_tags: bool = True,
@@ -357,7 +387,7 @@ def cached_transformation(
     allow_no_losses: bool = False,
     raise_error_on_diff_jaxpr: bool = True,
     **auto_registration_kwargs: Any,
-) -> TransformedFunction[T]:
+) -> tuple[TransformedFunction[T], JaxprExtractor]:
   """Caches ``transformation(preprocessed_jaxpr, func_args, *args)``.
 
   The caching mechanism uses the ``func_args`` PyTree, dtypes and shapes for
@@ -391,18 +421,11 @@ def cached_transformation(
   """
   cache = {}
 
-  @functools.wraps(transformation)
-  def wrapped_transformation(
-      func_args: FuncArgs,
-      *args: Any,
-      return_only_jaxpr: bool = False,
-  ) -> ProcessedJaxpr | T:
+  def retrieve(func_args):
     # Construct a key and check cache for hits
     key = make_cache_key(func_args)
-    processed_jaxpr, f = cache.get(key, (None, None))
 
-    if processed_jaxpr is None:
-      assert f is None
+    if key not in cache:
       # Process the function
       processed_jaxpr = ProcessedJaxpr.make_from_func(
           func=func,
@@ -430,12 +453,18 @@ def cached_transformation(
       f = functools.partial(transformation, processed_jaxpr)
       cache[key] = (processed_jaxpr, f)
 
-    if return_only_jaxpr:
-      return processed_jaxpr
-    else:
-      return f(func_args, *args)
+    return cache[key]
 
-  return wrapped_transformation
+  @functools.wraps(transformation)
+  def wrapped_transformation(func_args: FuncArgs, *args: Any) -> T:
+    _, f = retrieve(func_args)
+    return f(func_args, *args)
+
+  def get_processed_jaxpr(func_args: FuncArgs, *_: Any) -> ProcessedJaxpr:
+    closed_jaxpr, _ = retrieve(func_args)
+    return closed_jaxpr
+
+  return wrapped_transformation, get_processed_jaxpr
 
 
 def construct_compute_losses_inputs(
@@ -739,7 +768,7 @@ def _layer_tag_vjp(
   layer_vars_flat = jax.tree_util.tree_leaves(
       [tag.invars for tag in processed_jaxpr.layer_tags]
   )
-  layer_input_vars = tuple(set(layer_vars_flat))
+  layer_input_vars = list(set(layer_vars_flat))
 
   def forward() -> tuple[Array, ...]:
     """Computes the values of all inputs to all **layer** tags."""
@@ -772,7 +801,7 @@ def _layer_tag_vjp(
 
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 
-    return read(layer_input_vars)  # pytype: disable=bad-return-type
+    return tuple(read(layer_input_vars))
 
   def forward_aux(
       aux: dict[Var, Array],
@@ -795,19 +824,15 @@ def _layer_tag_vjp(
     own_func_args = primal_func_args
 
     # Mapping from variable -> value
-    env = {}
+    env: dict[jax.core.Var, Array] = {}
     read = functools.partial(tgm.read_env, env)
 
-    def write(var, val):
+    def write(variables: list[jax.core.Var], values: list[Array]) -> None:
+      # if not isinstance(variables, list):
+      #   variables = [variables]
+      tgm.write_env(env, variables, values)
 
-      tgm.write_env(env, var, val)  # pytype: disable=wrong-arg-types  # numpy-scalars
-
-      if not isinstance(var, list):
-        var = [var]
-
-      assert isinstance(var, list)
-
-      for v in var:
+      for v in variables:
         if not isinstance(v, jax.core.Literal) and v in aux:
           env[v] = env[v] + aux[v]
 
@@ -825,14 +850,14 @@ def _layer_tag_vjp(
 
     for eqn in processed_jaxpr.jaxpr.eqns:
 
-      input_values = tuple(read(eqn.invars))
-      write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
+      input_values = read(eqn.invars)
+      write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, input_values))
 
       if isinstance(eqn.primitive, tags.LossTag):
         loss = eqn.primitive.loss(*input_values, **eqn.params)
 
         losses_p_dependants.append(loss.parameter_dependants)
-        losses_inputs_values.append(input_values)
+        losses_inputs_values.append(tuple(input_values))
 
         num_losses_passed += 1
 
@@ -873,8 +898,8 @@ def _layer_tag_vjp(
   )
 
   def vjp_func(
-      tangents: tuple[LossFunctionInputs, ...],
-  ) -> tuple[dict[str, Array], ...]:
+      tangents: tuple[LossFunctionInputs, ...],  # pytype: disable=invalid-annotation
+  ) -> tuple[LayerVjpData[Array], ...]:  # pytype: disable=invalid-annotation
     """Computes a (reverse-mode) vector-Jacobian product w.r.t. all layer tags.
 
     Args:
@@ -897,36 +922,25 @@ def _layer_tag_vjp(
 
     for tag in processed_jaxpr.layer_tags:
 
-      info = {}
-
-      primals = jax.util.safe_map(read_primals, tuple(tag.invars))
-
-      (info["outputs"], info["inputs"], info["params"]) = (
-          tag.primitive.split_all_inputs(primals)
-      )
-
+      primals = read_primals(tag.invars)
       # Due to the ability to preprocess inputs for tags the input gradients
       # could be potentially wrong (e.g. zero) so we don't include them.
-      tangents = jax.util.safe_map(read_tangents, tuple(tag.invars))
+      tangents = read_tangents(tag.invars)
 
-      # inputs_tangent won't be correct for BN layers, but that won't matter
-      (
-          info["outputs_tangent"],
-          info["inputs_tangent"],
-          info["params_tangent"],
-      ) = tag.primitive.split_all_inputs(tangents)
+      layers_info.append(LayerVjpData(
+          primals=tag.primitive.layer_data(primals, tag.params),
+          tangents=tag.primitive.layer_data(tangents, tag.params),
+      ))
 
-      layers_info.append(info)
-
-    return tuple(layers_info)  # pytype: disable=bad-return-type  # numpy-scalars
+    return tuple(layers_info)
 
   return losses, vjp_func
 
 
 def compute_all_losses(
-    func: utils.Func,
+    func: Func[Any],
     params_index: int = 0,
-) -> TransformedFunction[tuple[LossFunction, ...]]:
+) -> tuple[TransformedFunction[tuple[LossFunction, ...]], JaxprExtractor]:
   """Creates a function that when called, returns all loss objects.
 
   The returned function takes as inputs the concrete values of the primals for
@@ -955,9 +969,9 @@ def compute_all_losses(
 
 
 def loss_tags_vjp(
-    func: utils.Func,
+    func: Func[Any],
     params_index: int = 0,
-) -> TransformedFunction[LossTagsVjp]:
+) -> tuple[TransformedFunction[LossTagsVjp], JaxprExtractor]:
   """Creates a function for the vector-Jacobian product w.r.t. all loss tags.
 
   The returned function has a similar interface to :func:`jax.vjp`. It takes as
@@ -991,9 +1005,9 @@ def loss_tags_vjp(
 
 
 def loss_tags_jvp(
-    func: utils.Func,
+    func: Func[Any],
     params_index: int = 0,
-) -> ...:
+) -> tuple[TransformedFunction[LossTagsJvp], JaxprExtractor]:
   """Creates a function for the Jacobian-vector product w.r.t. all loss tags.
 
   The returned function has a similar interface to :func:`jax.jvp`. It takes as
@@ -1028,9 +1042,11 @@ def loss_tags_jvp(
 
 
 def loss_tags_hvp(
-    func: utils.Func,
+    func: Func[Any],
     params_index: int = 0,
-) -> ...:
+) -> tuple[
+    TransformedFunction[tuple[Params, tuple[LossFunction, ...]]], JaxprExtractor
+]:
   """Creates a function for the Hessian-vector product w.r.t. all loss tags.
 
   The returned function takes as inputs the concrete values of the primals for
@@ -1063,12 +1079,12 @@ def loss_tags_hvp(
 
 
 def layer_tags_vjp(
-    func: utils.Func,
+    func: Func[Any],
     params_index: int = 0,
     auto_register_tags: bool = True,
     raise_error_on_diff_jaxpr: bool = True,
     **auto_registration_kwargs,
-) -> ...:
+) -> tuple[TransformedFunction[LayerTagVjp], JaxprExtractor]:
   """Creates a function for primal values and tangents w.r.t. all layer tags.
 
   The returned function has a similar interface to :func:`jax.vjp`. It takes as

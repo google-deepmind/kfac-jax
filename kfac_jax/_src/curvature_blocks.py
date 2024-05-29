@@ -16,7 +16,7 @@ import abc
 import collections
 import functools
 import string
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -24,6 +24,7 @@ import jax.scipy
 from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import patches_second_moment as psm
 from kfac_jax._src import tag_graph_matcher as tgm
+from kfac_jax._src import tracer
 from kfac_jax._src import utils
 import numpy as np
 from typing_extensions import Self
@@ -163,9 +164,7 @@ class CurvatureBlock(utils.Finalizable):
 
   @property
   def name(self) -> str:
-    if "name" not in self._layer_tag_eq.params:
-      raise ValueError(self._layer_tag_eq)
-    return self._layer_tag_eq.params["name"]
+    return tags.layer_eqn_name(self._layer_tag_eq)
 
   @property
   def layer_tag_primitive(self) -> tags.LayerTag:
@@ -182,8 +181,7 @@ class CurvatureBlock(utils.Finalizable):
 
     param_vars = []
 
-    for p in self.layer_tag_primitive.split_all_inputs(
-        self._layer_tag_eq.invars)[2]:
+    for p in tags.layer_eqn_data(self._layer_tag_eq).params:
 
       assert isinstance(p, jax.core.Var)
       param_vars.append(p)
@@ -194,8 +192,7 @@ class CurvatureBlock(utils.Finalizable):
   def outputs_shapes(self) -> tuple[Shape, ...]:
     """The shapes of the output variables of the block's tag equation."""
 
-    output_vars = self.layer_tag_primitive.split_all_inputs(
-        self._layer_tag_eq.invars)[0]
+    output_vars = tags.layer_eqn_data(self._layer_tag_eq).outputs
 
     return jax.tree_util.tree_map(lambda x: x.aval.shape, output_vars)
 
@@ -203,8 +200,7 @@ class CurvatureBlock(utils.Finalizable):
   def inputs_shapes(self) -> tuple[Shape, ...]:
     """The shapes of the input variables of the block's tag equation."""
 
-    input_vars = self.layer_tag_primitive.split_all_inputs(
-        self._layer_tag_eq.invars)[1]
+    input_vars = tags.layer_eqn_data(self._layer_tag_eq).inputs
 
     return jax.tree_util.tree_map(lambda x: x.aval.shape, input_vars)
 
@@ -477,7 +473,7 @@ class CurvatureBlock(utils.Finalizable):
   def update_curvature_matrix_estimate(
       self,
       state: State,
-      estimation_data: dict[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -653,7 +649,7 @@ class ScaledIdentity(CurvatureBlock):
   def update_curvature_matrix_estimate(
       self,
       state: CurvatureBlock.State,
-      estimation_data: dict[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -1444,7 +1440,7 @@ class NaiveDiagonal(Diagonal):
   def update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
-      estimation_data: dict[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -1455,9 +1451,9 @@ class NaiveDiagonal(Diagonal):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    for factor, dw in zip(state.diagonal_factors,
-                          estimation_data["params_tangent"]):
-
+    for factor, dw in zip(
+        state.diagonal_factors, estimation_data.tangents.params
+    ):
       factor.update(dw * dw / batch_size, ema_old, ema_new)
 
     return state
@@ -1475,7 +1471,7 @@ class NaiveFull(Full):
   def update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: dict[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -1491,7 +1487,7 @@ class NaiveFull(Full):
     state = state.copy()
 
     params_tangents = jax.tree_util.tree_leaves(
-        estimation_data["params_tangent"])
+        estimation_data.tangents.params)
 
     params_tangents_flattened = []
 
@@ -1533,7 +1529,7 @@ class DenseDiagonal(Diagonal):
   def update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
-      estimation_data: dict[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -1544,8 +1540,8 @@ class DenseDiagonal(Diagonal):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    x, = estimation_data["inputs"]
-    dy, = estimation_data["outputs_tangent"]
+    [x] = estimation_data.primals.inputs
+    [dy] = estimation_data.tangents.outputs
 
     assert utils.first_dim_is_size(batch_size, x, dy)
 
@@ -1568,7 +1564,7 @@ class DenseFull(Full):
   def update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: dict[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -1579,8 +1575,8 @@ class DenseFull(Full):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    x, = estimation_data["inputs"]
-    dy, = estimation_data["outputs_tangent"]
+    [x] = estimation_data.primals.inputs
+    [dy] = estimation_data.tangents.outputs
 
     assert utils.first_dim_is_size(batch_size, x, dy)
 
@@ -1604,7 +1600,7 @@ class DenseTwoKroneckerFactored(TwoKroneckerFactored):
   def update_curvature_matrix_estimate(
       self,
       state: KroneckerFactored.State,
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -1615,8 +1611,8 @@ class DenseTwoKroneckerFactored(TwoKroneckerFactored):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    [x] = estimation_data["inputs"]
-    [dy] = estimation_data["outputs_tangent"]
+    [x] = estimation_data.primals.inputs
+    [dy] = estimation_data.tangents.outputs
 
     assert utils.first_dim_is_size(batch_size, x, dy)
 
@@ -1690,7 +1686,7 @@ class Conv2DDiagonal(Diagonal):
     """Computes the elementwise square of a tangent for a single feature map."""
 
     extra_params = {k: v for k, v in self.layer_tag_extra_params.items()
-                    if k not in ("lhs_shape", "rhs_shape", "name")}
+                    if k not in ("lhs_shape", "rhs_shape", "meta")}
 
     _, vjp = jax.vjp(
         functools.partial(
@@ -1706,7 +1702,7 @@ class Conv2DDiagonal(Diagonal):
   def update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
-      estimation_data: dict[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -1717,8 +1713,8 @@ class Conv2DDiagonal(Diagonal):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    x, = estimation_data["inputs"]
-    dy, = estimation_data["outputs_tangent"]
+    [x] = estimation_data.primals.inputs
+    [dy] = estimation_data.tangents.outputs
 
     assert utils.first_dim_is_size(batch_size, x, dy)
 
@@ -1784,7 +1780,7 @@ class Conv2DFull(Full):
     """Computes the outer product of a tangent for a single feature map."""
 
     extra_params = {k: v for k, v in self.layer_tag_extra_params.items()
-                    if k not in ("lhs_shape", "rhs_shape", "name")}
+                    if k not in ("lhs_shape", "rhs_shape", "meta")}
 
     _, vjp = jax.vjp(
         functools.partial(
@@ -1809,7 +1805,7 @@ class Conv2DFull(Full):
   def update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: dict[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -1820,8 +1816,8 @@ class Conv2DFull(Full):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    x, = estimation_data["inputs"]
-    dy, = estimation_data["outputs_tangent"]
+    [x] = estimation_data.primals.inputs
+    [dy] = estimation_data.tangents.outputs
     assert utils.first_dim_is_size(batch_size, x, dy)
 
     matrix_update = self._averaged_tangents_outer_product(x, dy)
@@ -1957,7 +1953,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   def update_curvature_matrix_estimate(
       self,
       state: TwoKroneckerFactored.State,
-      estimation_data: Mapping[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -1968,8 +1964,8 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    [x] = estimation_data["inputs"]
-    [dy] = estimation_data["outputs_tangent"]
+    [x] = estimation_data.primals.inputs
+    [dy] = estimation_data.tangents.outputs
 
     assert utils.first_dim_is_size(batch_size, x, dy)
 
@@ -2036,7 +2032,7 @@ class ScaleAndShiftDiagonal(Diagonal):
   def update_curvature_matrix_estimate(
       self,
       state: Diagonal.State,
-      estimation_data: dict[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -2047,8 +2043,8 @@ class ScaleAndShiftDiagonal(Diagonal):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    x, = estimation_data["inputs"]
-    dy, = estimation_data["outputs_tangent"]
+    [x] = estimation_data.primals.inputs
+    [dy] = estimation_data.tangents.outputs
 
     assert utils.first_dim_is_size(batch_size, x, dy)
 
@@ -2057,7 +2053,7 @@ class ScaleAndShiftDiagonal(Diagonal):
       assert (state.diagonal_factors[0].raw_value.shape ==
               self.parameters_shapes[0])
 
-      scale_shape = estimation_data["params"][0].shape
+      scale_shape = estimation_data.primals.params[0].shape
 
       d_scale = compatible_sum(x * dy, scale_shape, skip_axes=[0])
 
@@ -2070,7 +2066,7 @@ class ScaleAndShiftDiagonal(Diagonal):
 
     if self.has_shift:
 
-      shift_shape = estimation_data["params"][-1].shape
+      shift_shape = estimation_data.primals.params[-1].shape
       d_shift = compatible_sum(dy, shift_shape, skip_axes=[0])
 
       shift_diag_update = jnp.sum(
@@ -2100,7 +2096,7 @@ class ScaleAndShiftFull(Full):
   def update_curvature_matrix_estimate(
       self,
       state: Full.State,
-      estimation_data: dict[str, Sequence[Array]],
+      estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
@@ -2111,15 +2107,15 @@ class ScaleAndShiftFull(Full):
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
-    x, = estimation_data["inputs"]
-    dy, = estimation_data["outputs_tangent"]
+    [x] = estimation_data.primals.inputs
+    [dy] = estimation_data.tangents.outputs
     assert utils.first_dim_is_size(batch_size, x, dy)
 
     tangents = []
 
     if self._has_scale:
       # Scale tangent
-      scale_shape = estimation_data["params"][0].shape
+      scale_shape = estimation_data.primals.params[0].shape
 
       d_scale = compatible_sum(x * dy, scale_shape, skip_axes=[0])
       d_scale = d_scale.reshape([batch_size, -1])
@@ -2129,7 +2125,7 @@ class ScaleAndShiftFull(Full):
     if self._has_shift:
       # Shift tangent
 
-      shift_shape = estimation_data["params"][-1].shape
+      shift_shape = estimation_data.primals.params[-1].shape
 
       d_shift = compatible_sum(dy, shift_shape, skip_axes=[0])
       d_shift = d_shift.reshape([batch_size, -1])

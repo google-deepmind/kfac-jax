@@ -37,17 +37,17 @@ Extending KFAC-JAX
 Below we provide a short guide on how to extend the library to new types of
 layers, and to implement new curvature blocks.
 
-Creating new layer tags
+Registering your own layer variants
 -----------------------
 
-1. Create a new instance :class:`kfac_jax.LayerTag`, specifying the number
-of inputs and outputs the corresponding computation has.
+1. Write a function that takes as inputs the parameters, inputs, and outputs of
+the computation of your new layer, and binds them to `kfac_jax.layer_tag`. To do
+this you will need to provide a special keyword argument `meta` to `bind` which
+is of type `kfac_jax.LayerDataMetadata`. There you can provide your own name for
+the variant of the layer that you would like to register, as well as the correct
+indices of the inputs, outputs and parameters of the arguments to the layer.
 
-2. Write a function that takes as inputs the parameters, inputs, and outputs of
-the computation of your new layer, and binds it with the layer tag you have
-defined in the previous step.
-
-3. If you want your tag to be automatically detectable by the library, you will
+2. If you want your tag to be automatically detectable by the library, you will
 need to create a new "graph pattern", which tells the library what a computation
 for this layer looks like and how to interpret it.
 This process can be broken down to the following smaller steps:
@@ -66,7 +66,7 @@ This process can be broken down to the following smaller steps:
     c. Using the functions created in the above steps, create an instance of
     :class:`kfac_jax.GraphPattern`.
 
-4. Provide your graph pattern to the optimizer as part of the
+3. Provide your graph pattern to the optimizer as part of the
 ``auto_register_kwargs`` argument.
 
 Below is an example of how one might add support for dense/fully-connected
@@ -82,9 +82,6 @@ steps:
     import kfac_jax
 
     # Step 1
-    dense = LayerTag(name="dense_tag", num_inputs=1, num_outputs=1)
-
-    # Step 2
     def register_dense(
         y: chex.Array,
         x: chex.Array,
@@ -93,31 +90,49 @@ steps:
         **kwargs,
     ) -> chex.Array:
       """Registers a dense layer: ``y = matmul(x, w) + b``."""
-      if b is None:
-        return dense.bind(y, x, w, **kwargs)
-      return dense.bind(y, x, w, b, **kwargs)
+      args = (y, x, w) if b is None else (y, x, w, b)
+      return layer_tag.bind(
+          *args,
+          meta=LayerMetaData(
+              variant=variant,
+              outputs_index=(0,),
+              inputs_index=(1,),
+              params_index=tuple(i + 2 for i in range(len(args) - 2)),
+          ),
+          **kwargs,
+      )
 
-    # Step 3.a
+    # Step 2.a
     def _dense(x: chex.Array, params: Sequence[chex.Array]) -> chex.Array:
       """Example of a dense layer function."""
       w, *opt_b = params
       y = jnp.matmul(x, w)
       return y if not opt_b else y + opt_b[0]
 
-    # Step 3.b
+    # Step 2.b
     def _dense_parameter_extractor(
         eqns: Sequence[core.JaxprEqn],
     ) -> Mapping[str, Any]:
       """Extracts all parameters from the conv_general_dilated operator."""
-      for eqn in eqns:
+      n = num_unique_inputs(reversed_eqns[::-1])
+
+      for eqn in reversed_eqns:
         if eqn.primitive.name == "dot_general":
-          return dict(**eqn.params)
+          return dict(
+              meta=tags.LayerMetaData(
+                  variant=variant,
+                  outputs_index=(0,),
+                  inputs_index=(1,),
+                  params_index=tuple(i + 2 for i in range(n - 1)),
+              ),
+              **eqn.params,
+          )
       assert False
 
     # Step 3.c
     dense_with_bias_pattern = GraphPattern(
         name="dense_with_bias",
-        tag_primitive=tags.dense,
+        tag_primitive=tags.layer_tag,
         precedence=0,
         compute_func=_dense,
         parameters_extractor_func=_dense_parameter_extractor,

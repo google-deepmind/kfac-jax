@@ -56,7 +56,7 @@ ParameterExtractorFunc = Callable[[JaxprEqns], Mapping[str, Any]]
 TagCtor = Callable[[Vars, Vars, JaxprEqns, MakeVarFunc], JaxprEqn]
 
 
-def eval_jaxpr_eqn(eqn: JaxprEqn, in_values: Vars) -> Var:
+def eval_jaxpr_eqn(eqn: JaxprEqn, in_values: list[T]) -> list[T]:
   """Computes the outputs of the given Jaxpr equation."""
 
   subfuns, bind_params = eqn.primitive.get_bind_params(eqn.params)
@@ -67,7 +67,12 @@ def eval_jaxpr_eqn(eqn: JaxprEqn, in_values: Vars) -> Var:
     user_context = jax.core.source_info_util.user_context  # pytype: disable=module-attr
 
   with user_context(eqn.source_info.traceback):
-    return eqn.primitive.bind(*subfuns, *in_values, **bind_params)
+    output = eqn.primitive.bind(*subfuns, *in_values, **bind_params)
+
+  if not isinstance(output, list):
+    return [output]
+  else:
+    return output
 
 
 def reshape_equivalent(
@@ -258,11 +263,20 @@ class JaxprGraph:
   def outvars(self) -> Vars:
     return self.jaxpr.outvars  # pytype:disable=bad-return-type
 
-  def sub_graph_eqns(self, root_vars: Vars, leaf_vars: Vars) -> JaxprEqns:
+  def sub_graph_eqns(
+      self,
+      root_vars: Sequence[Var],
+      leaf_vars: Sequence[Var],
+  ) -> JaxprEqns:
     """Returns the sub-graph equations between root vars and leaf vars."""
     eqns = []
     # Extract the subgraph equations such that they both depend on root_vars and
     # leaf_vars depends on them
+
+    if any(v in self.params_vars for v in leaf_vars):
+      # The special case of a generic tag, where the output is a parameter
+      assert all(v in self.params_vars for v in leaf_vars)
+      return ()
 
     to_process_eqns = [self.var_to_creation_op[v] for v in leaf_vars]
     processed_vars = set()
@@ -295,7 +309,7 @@ class JaxprGraph:
     registered_tags = []
     for eqn in self.jaxpr.eqns:
       if isinstance(eqn.primitive, tags.LayerTag):
-        for param in eqn.primitive.split_all_inputs(eqn.invars)[2]:
+        for param in tags.layer_eqn_data(eqn).params:
           if param not in self.params_vars:
             raise ValueError("One of the parameters of the manual layer "
                              f"registration equation: {eqn} is not part of "
@@ -368,7 +382,7 @@ def make_jax_graph(
                   for v in closed_jaxpr.jaxpr.outvars]  # pytype:disable=attribute-error
 
   if clean_broadcasts:
-    closed_jaxpr: ClosedJaxpr = merge_broadcasts_jaxpr(closed_jaxpr)  # pytype:disable=annotation-type-mismatch
+    closed_jaxpr = merge_broadcasts_jaxpr(closed_jaxpr)
   in_vars = jax.tree_util.tree_unflatten(in_tree, closed_jaxpr.jaxpr.invars)
   if isinstance(params_index, int):
     params_vars = in_vars[params_index]
@@ -468,7 +482,7 @@ class GraphPattern:
     tag_eqn = jax.core.new_jaxpr_eqn(
         invars=[*out_vars, *in_vars],
         outvars=new_out_vars,
-        primitive=self.tag_primitive,
+        primitive=tags.layer_tag,
         params=self.parameters_extractor_func(graph_eqns),
         effects=set(),
     )
@@ -743,9 +757,10 @@ def find_layer_tags_and_patterns(
 
   # First add any manual registrations to this.
   for eqn in graph.manual_registrations:
-    assert isinstance(eqn.primitive, tags.LayerTag)
-    outputs, inputs, params = eqn.primitive.split_all_inputs(eqn.invars)
-    for manual_eqn in graph.sub_graph_eqns(inputs + params, outputs):
+    layer_data = tags.layer_eqn_data(eqn, raise_an_error=True)
+    for manual_eqn in graph.sub_graph_eqns(
+        layer_data.inputs + layer_data.params, layer_data.outputs
+    ):
       registered_equations.append(manual_eqn)
 
   matches = {}
@@ -772,37 +787,30 @@ def find_layer_tags_and_patterns(
 
 
 def read_env(
-    env: Mapping[Var, Array],
-    var: jax.core.Literal | Vars,
-) -> float | Array | Sequence[Array]:
+    env: dict[jax.core.Var, T],
+    variables: list[jax.core.Literal | jax.core.Var],
+) -> list[T]:
   """Reads from the variable-to-array environment during tracing."""
-  if isinstance(var, (list, tuple)):
-    return jax.tree_util.tree_map(lambda x: read_env(env, x), var)
-  elif isinstance(var, jax.core.Literal):
-    # Literals are values baked into the Jaxpr
-    return var.val
-  elif isinstance(var, Var):
-    return env[var]
-  else:
-    raise NotImplementedError()
+  result = []
+  assert isinstance(variables, list)
+  for v in variables:
+    if isinstance(v, jax.core.Literal):
+      # Literals are values baked into the Jaxpr
+      result.append(v.val)
+    else:
+      result.append(env[v])
+  return result
 
 
 def write_env(
-    env: dict[Var, Array],
-    var: Var | Vars,
-    val: Array | Sequence[Array],
-):
+    env: dict[jax.core.Var, T],
+    variables: list[jax.core.Var],
+    values: list[T],
+) -> None:
   """Writes to the variable-to-array environment during tracing."""
-  if isinstance(var, tuple):
-    raise NotImplementedError()
-  if isinstance(var, list):
-    if not isinstance(val, list):
-      val = [val]
-    return jax.tree_util.tree_map(lambda x, y: write_env(env, x, y), var, val)
-  elif isinstance(var, (jax.core.Literal, Var)):
-    env[var] = val  # pytype: disable=container-type-mismatch  # numpy-scalars
-  else:
-    raise NotImplementedError()
+  assert len(variables) == len(values)
+  for variables, val in zip(variables, values):
+    env[variables] = val
 
 
 def to_closed_jaxpr(jaxpr: JaxprOrClosedJaxpr) -> ClosedJaxpr:
@@ -921,6 +929,18 @@ def merge_broadcasts_jaxpr(jaxpr: J) -> J:
   return to_jaxpr_or_closed_jaxpr(closed_jaxpr, jaxpr)
 
 
+def num_unique_inputs(eqns: Sequence[JaxprEqn]) -> int:
+  n = 0
+  vars_so_far = set()
+  for eqn in eqns:
+    for v in eqn.invars:
+      if v not in vars_so_far:
+        vars_so_far.add(v)
+        n += 1
+    for v in eqn.outvars:
+      vars_so_far.add(v)
+  return n
+
 #  _____            _     _             _   _
 # |  __ \          (_)   | |           | | (_)
 # | |__) |___  __ _ _ ___| |_ _ __ __ _| |_ _  ___  _ __  ___
@@ -945,12 +965,23 @@ def _dense_with_reshape(x: Array, params: Sequence[Array],) -> Array:
 
 
 def _dense_parameter_extractor(
-    eqns: Sequence[JaxprEqn],
+    reversed_eqns: Sequence[JaxprEqn],
+    variant: str = "dense",
 ) -> Mapping[str, Any]:
   """Extracts all parameters from the `dot_general` operator."""
-  for eqn in eqns:
+  n = num_unique_inputs(reversed_eqns[::-1])
+
+  for eqn in reversed_eqns:
     if eqn.primitive.name == "dot_general":
-      return dict(**eqn.params)
+      return dict(
+          meta=tags.LayerMetaData(
+              variant=variant,
+              outputs_index=(0,),
+              inputs_index=(1,),
+              params_index=tuple(i + 2 for i in range(n - 1)),
+          ),
+          **eqn.params,
+      )
   assert False
 
 
@@ -965,7 +996,7 @@ def _make_dense_pattern(
               [[in_dim, out_dim]])
   return GraphPattern(
       name="dense_with_bias" if with_bias else "dense_no_bias",
-      tag_primitive=tags.dense,
+      tag_primitive=tags.layer_tag,
       compute_func=_dense_with_reshape if reshape else _dense,
       parameters_extractor_func=_dense_parameter_extractor,
       example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
@@ -989,12 +1020,23 @@ def _conv2d(x: Array, params: Sequence[Array]) -> Array:
 
 
 def _conv2d_parameter_extractor(
-    eqns: Sequence[JaxprEqn],
+    reversed_eqns: Sequence[JaxprEqn],
+    variant: str = "conv2d",
 ) -> Mapping[str, Any]:
   """Extracts all parameters from the `conv_general_dilated` operator."""
-  for eqn in eqns:
+  n = num_unique_inputs(reversed_eqns[::-1])
+
+  for eqn in reversed_eqns:
     if eqn.primitive.name == "conv_general_dilated":
-      return dict(**eqn.params)
+      return dict(
+          meta=tags.LayerMetaData(
+              variant=variant,
+              outputs_index=(0,),
+              inputs_index=(1,),
+              params_index=tuple(i + 2 for i in range(n - 1)),
+          ),
+          **eqn.params,
+      )
   assert False
 
 
@@ -1006,7 +1048,7 @@ def _make_conv2d_pattern(
               [[3, 3, 5, 4]])
   return GraphPattern(
       name="conv2d_with_bias" if with_bias else "conv2d_no_bias",
-      tag_primitive=tags.conv2d,
+      tag_primitive=tags.layer_tag,
       compute_func=_conv2d,
       parameters_extractor_func=_conv2d_parameter_extractor,
       example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
@@ -1034,6 +1076,31 @@ def _scale_and_shift(
                      "to True.")
 
 
+def _scale_and_shift_parameter_extractor(
+    reversed_eqns: Sequence[JaxprEqn],
+    variant: str = "scale_and_shift",
+) -> Mapping[str, Any]:
+  """Extracts all parameters from the `conv_general_dilated` operator."""
+  has_scale = False
+  has_shift = False
+  for eqn in reversed_eqns:
+    if eqn.primitive.name == "mul":
+      has_scale = True
+    elif eqn.primitive.name == "add":
+      has_shift = True
+
+  return dict(
+      meta=tags.LayerMetaData(
+          variant=variant,
+          outputs_index=(0,),
+          inputs_index=(1,),
+          params_index=tuple(i + 2 for i in range(has_scale + has_shift)),
+      ),
+      has_scale=has_scale,
+      has_shift=has_shift,
+  )
+
+
 def _make_scale_and_shift_pattern(
     broadcast_ndim: int,
     has_scale: bool,
@@ -1055,11 +1122,10 @@ def _make_scale_and_shift_pattern(
     raise ValueError("Unreachable.")
   return GraphPattern(
       name=name,
-      tag_primitive=tags.scale_and_shift,
+      tag_primitive=tags.layer_tag,
       compute_func=functools.partial(
           _scale_and_shift, has_scale=has_scale, has_shift=has_shift),
-      parameters_extractor_func=
-      lambda jaxpr: dict(has_scale=has_scale, has_shift=has_shift),
+      parameters_extractor_func=_scale_and_shift_parameter_extractor,
       example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
   )
 
@@ -1083,7 +1149,7 @@ def _normalization_haiku(
 def _normalization_haiku_preprocessor(
     in_vars: Vars,
     make_var_func: MakeVarFunc,
-) -> tuple[Vars, JaxprEqns]:
+) -> tuple[tuple[Var, ...], JaxprEqns]:
   """Preprocesses the inputs to a Haiku normalization layer.
 
   The standard ``scale_and_shift`` represents the following canonical
@@ -1133,11 +1199,10 @@ def _make_normalization_haiku_pattern(
   x_shape = [i + 2 for i in range(broadcast_ndim)] + [p_dim]
   return GraphPattern(
       name=f"normalization_haiku_broadcast_{broadcast_ndim}",
-      tag_primitive=tags.scale_and_shift,
+      tag_primitive=tags.layer_tag,
       compute_func=functools.partial(_normalization_haiku,
                                      has_scale=True, has_shift=True),
-      parameters_extractor_func=
-      lambda jaxpr: dict(has_scale=True, has_shift=True),
+      parameters_extractor_func=_scale_and_shift_parameter_extractor,
       example_args=[[np.zeros(x_shape), np.zeros(x_shape)],
                     [np.zeros([p_dim]), np.zeros([p_dim])]],
       in_values_preprocessor=_normalization_haiku_preprocessor
@@ -1169,14 +1234,15 @@ class TagLocation:
       tag_eqn: JaxprEqn,
       parent_equations: Sequence[tuple[JaxprEqn, int]] = (),
   ):
-    # assert isinstance(tag_eqn.primitive, tags.LayerTag)
     self.tag_eqn = tag_eqn
     self.parent_equations = list(parent_equations)
 
   @property
   def base_name(self) -> str:
-    assert "name" in self.tag_eqn.params
-    return self.tag_eqn.params["name"]
+    meta = self.tag_eqn.params.get("meta")
+    assert meta is not None and isinstance(meta, tags.LayerMetaData)
+    assert meta.name is not None, self.tag_eqn
+    return meta.name
 
   @property
   def full_name(self) -> str:
@@ -1212,12 +1278,12 @@ class TagLocation:
     return prefix + self.base_name
 
   @property
-  def bottom_level_parameters(self) -> Vars:
+  def bottom_level_parameters(self) -> tuple[Var, ...]:
     """The bottom level variables of the tag location."""
-    return self.tag_eqn.primitive.split_all_inputs(self.tag_eqn.invars)[2]  # pytype:disable=attribute-error
+    return tags.layer_eqn_data(self.tag_eqn).params
 
   @property
-  def top_level_parameters(self) -> Vars:
+  def top_level_parameters(self) -> tuple[Var, ...]:
     """The top level parameter variables of the tag location."""
     param_vars = self.bottom_level_parameters
     for eqn, _ in reversed(self.parent_equations):
@@ -1233,7 +1299,7 @@ class TagLocation:
       else:
         raise NotImplementedError()
       p_indexes = [invars.index(p) for p in param_vars]
-      param_vars = [eqn.invars[pi] for pi in p_indexes]
+      param_vars = tuple(eqn.invars[pi] for pi in p_indexes)
     return param_vars
 
   def add_parent_eqn(self, eqn: JaxprEqn, counter: int):
@@ -1427,8 +1493,7 @@ def _auto_register_tags(
 
   # Manual registrations
   for manual_eqn in manual_registrations:
-    assert isinstance(manual_eqn.primitive, tags.LayerTag)
-    for p in manual_eqn.primitive.split_all_inputs(manual_eqn.invars)[2]:
+    for p in tags.layer_eqn_data(manual_eqn, raise_an_error=True).params:
       tagged_params.add(p)
 
   # Automatically detect registrations
@@ -1452,8 +1517,14 @@ def _auto_register_tags(
             jax.core.new_jaxpr_eqn(
                 invars=[param],
                 outvars=[orphan_p],
-                primitive=tags.generic,
-                params=dict(name=f"Auto[generic_tag|{n}]"),
+                primitive=tags.layer_tag,
+                params=dict(meta=tags.LayerMetaData(
+                    variant="generic",
+                    inputs_index=(),
+                    outputs_index=(0,),
+                    params_index=(0,),
+                    name=f"Auto[generic|{n}]",
+                )),
                 effects=set(),
             )
         )
@@ -1467,11 +1538,13 @@ def _auto_register_tags(
 
     if isinstance(eqn.primitive, tags.LayerTag):
       # Mark manual registrations
-      tag_name = eqn.primitive.name
-      n = pattern_counters.get(tag_name, 0)
-      pattern_counters[tag_name] = n + 1
-      if "name" not in eqn.params:
-        eqn.params["name"] = f"Manual[{tag_name}|{n}]"
+      meta = eqns[-1].params.get("meta")
+      assert meta is not None and isinstance(meta, tags.LayerMetaData)
+      if meta.name is None:
+        n = pattern_counters.get(meta.variant, 0)
+        pattern_counters[meta.variant] = n + 1
+        meta.name = f"Manual[{meta.variant}|{n}]"
+
       tag_locations.append(TagLocation(eqn))
 
     for var in eqn.outvars:
@@ -1482,11 +1555,12 @@ def _auto_register_tags(
           eqns.append(additional_eqn)
 
         # Mark automatic registration
-        tag_name = eqns[-1].primitive.name
-        n = pattern_counters.get(tag_name, 0)
-        pattern_counters[tag_name] = n + 1
-        assert eqns[-1].params.get("name") is None
-        eqns[-1].params["name"] = f"Auto[{tag_name}|{n}]"
+        meta = eqns[-1].params.get("meta")
+        assert meta is not None and isinstance(meta, tags.LayerMetaData)
+        assert meta.name is None
+        n = pattern_counters.get(meta.variant, 0)
+        pattern_counters[meta.variant] = n + 1
+        meta.name = f"Auto[{meta.variant}|{n}]"
         tag_locations.append(TagLocation(eqns[-1]))
 
   final_outvars = [env.get(v, v) if isinstance(v, Var) else v
@@ -1560,6 +1634,7 @@ def auto_register_tags(
       register_orphans=True,
       register_only_until_losses=True
   )
+  # TOOO(name manual tags)
 
   func = TaggedFunction(
       func_graph=func_graph,

@@ -31,6 +31,8 @@ patches_moments = patches_second_moment.patches_moments
 patches_moments_explicit = patches_second_moment.patches_moments_explicit
 
 # Layers and loss tags
+LayerData = layers_and_loss_tags.LayerData
+LayerMetaData = layers_and_loss_tags.LayerMetaData
 LossTag = layers_and_loss_tags.LossTag
 LayerTag = layers_and_loss_tags.LayerTag
 register_generic = layers_and_loss_tags.register_generic
@@ -43,6 +45,7 @@ auto_register_tags = tag_graph_matcher.auto_register_tags
 
 # Tracer
 ProcessedJaxpr = tracer.ProcessedJaxpr
+LayerVjpData = tracer.LayerVjpData
 loss_tags_vjp = tracer.loss_tags_vjp
 loss_tags_jvp = tracer.loss_tags_jvp
 loss_tags_hvp = tracer.loss_tags_hvp

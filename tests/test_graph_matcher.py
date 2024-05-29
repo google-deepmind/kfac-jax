@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Testing the functionality of the graph matcher."""
+import dataclasses
 import functools
 from typing import Callable, Mapping
 
@@ -41,14 +42,14 @@ class TestGraphMatcher(parameterized.TestCase):
     self.assertEqual(eqn1.primitive, eqn2.primitive)
     if eqn1.primitive.name == "conv2d_tag":
       # params removed in https://github.com/google/jax/pull/14211
-      skip_params = ["lhs_shape", "rhs_shape", "name"]
+      skip_params = ["lhs_shape", "rhs_shape", "meta"]
     else:
-      skip_params = ["name"]
+      skip_params = ["meta"]
     if eqn1.primitive.name == "cond":
       raise NotImplementedError()
     elif eqn1.primitive.name == "while":
       exclude_param = "body_jaxpr"
-    elif eqn1.primitive.name == "scan":
+    elif eqn1.primitive.name in ("scan", "pjit"):
       exclude_param = "jaxpr"
     elif eqn1.primitive.name in ("xla_call", "xla_pmap"):
       exclude_param = "call_jaxpr"
@@ -57,7 +58,16 @@ class TestGraphMatcher(parameterized.TestCase):
     # Check all eqn parameters
     for k in eqn1.params:
       if k != exclude_param and k not in skip_params:
-        self.assertEqual(eqn1.params[k], eqn2.params[k])
+        self.assertEqual(eqn1.params[k], eqn2.params[k], k)
+
+    if isinstance(eqn1.primitive, kfac_jax.LayerTag):
+      for k in dataclasses.fields(eqn1.params["meta"]):
+        if k.name != "name":
+          self.assertEqual(
+              getattr(eqn1.params["meta"], k.name),
+              getattr(eqn2.params["meta"], k.name),
+              msg=k.name,
+          )
 
     # For higher order primitive check the jaxpr match
     if exclude_param:

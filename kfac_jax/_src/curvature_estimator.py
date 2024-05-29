@@ -84,10 +84,10 @@ _ESTIMATION_MODES = ("fisher_gradients", "fisher_empirical", "fisher_exact",
                      "fisher_curvature_prop", "ggn_exact", "ggn_curvature_prop")
 
 _DEFAULT_TAG_TO_BLOCK_CTOR: dict[str, CurvatureBlockCtor] = dict(
-    dense_tag=curvature_blocks.DenseTwoKroneckerFactored,
-    conv2d_tag=curvature_blocks.Conv2DTwoKroneckerFactored,
-    generic_tag=curvature_blocks.NaiveDiagonal,
-    scale_and_shift_tag=curvature_blocks.ScaleAndShiftDiagonal,
+    dense=curvature_blocks.DenseTwoKroneckerFactored,
+    conv2d=curvature_blocks.Conv2DTwoKroneckerFactored,
+    generic=curvature_blocks.NaiveDiagonal,
+    scale_and_shift=curvature_blocks.ScaleAndShiftDiagonal,
 )
 
 
@@ -95,6 +95,10 @@ def get_default_tag_to_block_ctor(
     tag_name: str
 ) -> CurvatureBlockCtor | None:
   """Returns the default curvature block constructor for the give tag name."""
+  if tag_name.endswith("_tag"):
+    raise ValueError(
+        "You are using the old style of tag names. Remove the '_tag' suffix."
+    )
   return _DEFAULT_TAG_TO_BLOCK_CTOR.get(tag_name)
 
 
@@ -103,6 +107,10 @@ def set_default_tag_to_block_ctor(
     block_ctor: CurvatureBlockCtor
 ) -> None:
   """Sets the default curvature block constructor for the given tag."""
+  if tag_name.endswith("_tag"):
+    raise ValueError(
+        "You are using the old style of tag names. Remove the '_tag' suffix."
+    )
   _DEFAULT_TAG_TO_BLOCK_CTOR[tag_name] = block_ctor
 
 
@@ -136,15 +144,15 @@ class ImplicitExactCurvature:
         func=func,
         params_index=params_index
     )
-    self._loss_tags_vjp = tracer.loss_tags_vjp(
+    self._loss_tags_vjp, _ = tracer.loss_tags_vjp(
         func=func,
         params_index=params_index
     )
-    self._loss_tags_jvp = tracer.loss_tags_jvp(
+    self._loss_tags_jvp, _ = tracer.loss_tags_jvp(
         func=func,
         params_index=params_index,
     )
-    self._loss_tags_hvp = tracer.loss_tags_hvp(
+    self._loss_tags_hvp, _ = tracer.loss_tags_hvp(
         func=func,
         params_index=params_index,
     )
@@ -553,20 +561,25 @@ class ImplicitExactCurvature:
     Returns:
       Shapes of loss inner vectors in a tuple, and the batch size as an int.
     """
-    losses, _ = self._loss_tags_vjp(func_args)  # pytype: disable=attribute-error  # always-use-return-annotations
-    batch_size = self.batch_size(func_args)
+    losses, _ = self._loss_tags_vjp(func_args)
+    shapes = []
 
-    if mode == "fisher":
-      return (tuple(loss.fisher_factor_inner_shape for loss in losses),
-              batch_size)
-    elif mode == "ggn":
-      return tuple(loss.ggn_factor_inner_shape for loss in losses), batch_size
-    else:
-      raise ValueError(f"Unrecognized mode: {mode}")
+    for loss in losses:
+      if mode == "fisher":
+        if not isinstance(loss, loss_functions.NegativeLogProbLoss):
+          raise ValueError(f"To use {mode=}, each loss must be a subclass of "
+                           "`NegativeLogProbLoss`.")
+      elif mode == "ggn":
+        shapes.append(loss.ggn_factor_inner_shape)
+
+      else:
+        raise ValueError(f"Unrecognized mode: {mode}")
+
+    return tuple(shapes), self.batch_size(func_args)
 
   def get_loss_input_shapes_and_batch_size(
       self,
-      func_args: utils.FuncArgs
+      func_args: utils.FuncArgs,
   ) -> tuple[tuple[tuple[Shape, ...], ...], int]:
     """Get shapes of loss input vectors, and the batch size.
 
@@ -632,7 +645,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
     self.func = func
     self.params_index = params_index
     self.default_estimation_mode = default_estimation_mode
-    self.compute_losses = tracer.compute_all_losses(
+    self.compute_losses, _ = tracer.compute_all_losses(
         func=func, params_index=params_index
     )
 
@@ -981,7 +994,7 @@ class BlockDiagonalCurvature(
     self._layer_tag_to_block_ctor = layer_tag_to_block_ctor or dict()
     self._auto_register_tags = auto_register_tags
     self._auto_register_kwargs = auto_register_kwargs
-    self._vjp = tracer.layer_tags_vjp(
+    self._vjp, self._jaxpr_extractor = tracer.layer_tags_vjp(
         func=func,
         params_index=params_index,
         auto_register_tags=auto_register_tags,
@@ -1010,21 +1023,26 @@ class BlockDiagonalCurvature(
 
     blocks_list = []
 
-    for tag_eqn, idx in zip(self._jaxpr.layer_tags, self._jaxpr.layer_indices):  # pytype: disable=attribute-error  # always-use-return-annotations
+    for tag_eqn, idx in zip(self._jaxpr.layer_tags, self._jaxpr.layer_indices):
+      meta = tag_eqn.params.get("meta")
+      assert meta is not None and isinstance(meta, tags.LayerMetaData)
+      assert not meta.nesting
 
       # Correctly get the block class
       if idx in self._index_to_block_ctor:
         cls = self._index_to_block_ctor[idx]
 
-      elif tag_eqn.primitive.name in self._layer_tag_to_block_ctor:
-        cls = self._layer_tag_to_block_ctor[tag_eqn.primitive.name]
+      elif meta.variant in self._layer_tag_to_block_ctor:
+        cls = self._layer_tag_to_block_ctor[meta.variant]
 
-      elif tag_eqn.primitive.name in _DEFAULT_TAG_TO_BLOCK_CTOR:
-        cls = _DEFAULT_TAG_TO_BLOCK_CTOR[tag_eqn.primitive.name]
+      elif meta.variant in _DEFAULT_TAG_TO_BLOCK_CTOR:
+        cls = _DEFAULT_TAG_TO_BLOCK_CTOR[meta.variant]
 
       else:
-        raise ValueError(f"Did not find anywhere a block class for tag "
-                         f"{tag_eqn.primitive.name}.")
+        raise ValueError(
+            "Did not find anywhere a block class for layer tag "
+            f"variant {meta.variant}."
+        )
 
       blocks_list.append(cls(tag_eqn))
 
@@ -1161,7 +1179,7 @@ class BlockDiagonalCurvature(
     return jax.tree_util.tree_unflatten(self.jaxpr.params_tree, values_flat)
 
   def _finalize(self, func_args: utils.FuncArgs):
-    self._jaxpr = self._vjp(func_args, return_only_jaxpr=True)  # pytype: disable=annotation-type-mismatch  # always-use-return-annotations
+    self._jaxpr = self._jaxpr_extractor(func_args)
     self._create_blocks()
     self.log_registrations()
 
@@ -1707,7 +1725,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
     self._batch_index = batch_index
 
     if layer_tag_to_block_ctor is None:
-      layer_tag_to_block_ctor = dict(generic_tag=curvature_blocks.NaiveFull)
+      layer_tag_to_block_ctor = dict(generic=curvature_blocks.NaiveFull)
 
     def retagged_func(params, *args):
 

@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC losses and layers tagging Jax primitives."""
-import types
+import dataclasses
 from typing import Any, Generic, Sequence, TypeVar
 
 import jax
@@ -22,6 +22,38 @@ from jax import core
 T = TypeVar("T")
 Array = jax.Array
 Arrays = tuple[Array, ...]
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True, unsafe_hash=True)
+@jax.tree_util.register_pytree_node_class
+class LayerData(Generic[T]):
+  """A compact class for all data related to a single layer."""
+  inputs: tuple[T, ...]
+  outputs: tuple[T, ...]
+  params: tuple[T, ...]
+
+  def tree_flatten(self) -> tuple[
+      tuple[tuple[T, ...], tuple[T, ...], tuple[T, ...]],
+      None,
+  ]:
+    return (self.inputs, self.outputs, self.params), None
+
+  @classmethod
+  def tree_unflatten(cls, aux_data, children):
+    assert aux_data is None
+    inputs, outputs, params = children
+    return cls(inputs=inputs, outputs=outputs, params=params)
+
+
+@dataclasses.dataclass(kw_only=True, unsafe_hash=True)
+class LayerMetaData:
+  """A compact class for all metadata related to a single layer."""
+  variant: str
+  outputs_index: tuple[int, ...]
+  inputs_index: tuple[int, ...]
+  params_index: tuple[int, ...]
+  name: str | None = None
+  nesting: tuple[str, ...] = ()
 
 
 class LossTag(core.Primitive, Generic[T]):
@@ -184,7 +216,7 @@ class LayerTag(core.Primitive):
   This is the only way for K-FAC to know how to compute the curvature matrix.
   """
 
-  def __init__(self, name: str, num_inputs: int, num_outputs: int):
+  def __init__(self):
     """Initializes a layer tag primitive with the given name.
 
     Any layer tag primitive must have the following interface `layer_tag(
@@ -199,18 +231,8 @@ class LayerTag(core.Primitive):
     documentation on `primitives
     <https://jax.readthedocs.io/en/latest/notebooks/How_JAX_primitives_work.html>`__.
 
-    Args:
-      name: The name of the layer primitive.
-      num_inputs: The number of inputs to the layer.
-      num_outputs: The number of outputs to the layer.
     """
-    super().__init__(name)
-    if num_outputs > 1:
-      raise NotImplementedError(
-          f"Only single outputs are supported, got: num_outputs={num_outputs}.")
-    self._num_outputs = num_outputs
-    self._num_inputs = num_inputs
-
+    super().__init__(name="layer_tag")
     jax.interpreters.mlir.register_lowering(self, self._mlir_lowering)
     jax.interpreters.ad.deflinear(self, self._transpose)
     jax.interpreters.ad.primitive_transposes[self] = self._transpose
@@ -221,109 +243,104 @@ class LayerTag(core.Primitive):
     # single example which is the vmap-ed for a batch.
     jax.interpreters.batching.primitive_batchers[self] = self._batching
 
-  @property
-  def num_outputs(self) -> int:
-    """The number of outputs of the layer tag that this primitive represents."""
-    return self._num_outputs
-
-  @property
-  def num_inputs(self) -> int:
-    """The number of inputs of the layer tag that this primitive represents."""
-    return self._num_inputs
-
-  def split_all_inputs(
+  def layer_data(  # pytype: disable=invalid-annotation
       self,
       all_inputs: Sequence[T],
-  ) -> tuple[
-      tuple[T, ...],
-      tuple[T, ...],
-      tuple[T, ...]
-  ]:
+      params: dict[str, Any],
+  ) -> LayerData[T]:
     """Splits the operands of the primitive into ``(outputs, inputs, params)``."""
+    if "meta" not in params:
+      raise ValueError(
+          "When creating a LayerTag you must specify the layer meta data."
+      )
 
-    outputs = tuple(all_inputs[:self.num_outputs])
-    inputs = tuple(all_inputs[self.num_outputs:self.num_outputs +
-                              self.num_inputs])
-    params = tuple(all_inputs[self.num_outputs + self.num_inputs:])
-
-    return outputs, inputs, params
-
-  def get_outputs(self, *operands: Array, **_: Any) -> Array:
-    """Extracts the ``outputs`` of a layer from the operands of the primitive."""
-    outputs = self.split_all_inputs(operands)[0]
-    assert self.num_outputs == len(outputs) == 1
-    return outputs[0]
+    meta = params.get("meta")
+    assert meta is not None and isinstance(meta, LayerMetaData)
+    return LayerData(
+        inputs=tuple(all_inputs[i] for i in meta.inputs_index),
+        outputs=tuple(all_inputs[i] for i in meta.outputs_index),
+        params=tuple(all_inputs[i] for i in meta.params_index),
+    )
 
   def _mlir_lowering(
       self,
-      context: jax.interpreters.mlir.LoweringRuleContext,
-      *args,
-      **_: Any,
-  ) -> tuple[Any, ...]:
+      _: jax.interpreters.mlir.LoweringRuleContext,
+      *args: T,
+      **params: dict[str, str | int],
+  ) -> tuple[T, ...]:
     """The XLA translation rule for this primitive - returns the ``outputs`` ."""
     # Need to return a sequence
-    return (self.get_outputs(*args),)
+    return self.layer_data(args, params).outputs
 
   @classmethod
   def _transpose(
       cls,
       cotangent: Array,
-      *operands: Array,
-      **_: Any,
+      *args: Array,
+      **_: dict[str, str | int],
   ) -> tuple[Array | None, ...]:
     """Computes the cotangents of the operands from those of the primitive."""
     del cls  # not used
-    return (cotangent,) + (None,) * (len(operands) - 1)
+    return (cotangent,) + (None,) * (len(args) - 1)
 
-  def impl(self, *operands: Array, **_: Any) -> Array:
-    return self.get_outputs(*operands)
+  def impl(self, *args: Array, **params: dict[str, str | int]) -> Array:
+    # For now we support only single output
+    [output] = self.layer_data(args, params).outputs
+    return output
 
   def abstract_eval(
       self,
-      *operands: Array,
-      **_: Any
-  ) -> Array | tuple[Array, jax.core.Effects]:
-    jax_version = (
-        jax.__version_info__ if hasattr(jax, "__version_info__")
-        else tuple(map(int, jax.__version__.split("."))))
-    if jax_version > (0, 3, 4):
-      return self.get_outputs(*operands), jax.core.no_effects
-    return self.get_outputs(*operands)
+      *args: Array,
+      **params: dict[str, str | int],
+  ) -> tuple[Array, jax.core.Effects]:
+    # For now we support only single output
+    [output] = self.layer_data(args, params).outputs
+    return output, jax.core.no_effects
 
   def _batching(
       self,
       batched_operands: Sequence[Array],
       batched_dims: int | tuple[int, ...],
-      **kwargs: Any
+      **params: dict[str, str | int],
   ) -> tuple[Array, int]:
     """Defines how the primitive behaves under :func:`jax.vmap`."""
-    return self.bind(*batched_operands, **kwargs), batched_dims[0]
+    return self.bind(*batched_operands, **params), batched_dims[0]
 
 
-def generic_get_outputs(
-    self: LayerTag,
-    *operands: Array,
-) -> Array:
-  """Special logic for generic tag's ``get_outputs``."""
-  assert self.num_inputs == self.num_outputs == 0
-  params = self.split_all_inputs(operands)[2]
+def layer_eqn_data(  # pytype: disable=invalid-annotation
+    eqn: jax.core.JaxprEqn,
+    raise_an_error: bool = False,
+) -> LayerData[jax.core.Var]:
+  if isinstance(eqn.primitive, LayerTag):
+    return eqn.primitive.layer_data(eqn.invars, eqn.params)
 
-  # The generic tags have no `inputs` and `outputs` so instead they return just
-  # the first parameter array.
-  return params[0]
+  if raise_an_error:
+    raise ValueError("Primitive must be a LayerTag.")
+  else:
+    return LayerData(inputs=(), outputs=(), params=())
 
 
-generic = LayerTag(name="generic_tag", num_inputs=0, num_outputs=0)
-setattr(generic, "get_outputs",
-        types.MethodType(generic_get_outputs, generic))
+def layer_eqn_name(eqn: jax.core.JaxprEqn) -> str:
+  meta = eqn.params.get("meta")
+  assert meta is not None and isinstance(meta, LayerMetaData)
+  assert meta.name is not None
+  return meta.name
+
+
+layer_tag = LayerTag()
 
 
 def register_generic(*parameters: Array) -> Array:
   """Registers a generic tag around the provided parameter array."""
-  return generic.bind(*parameters)
-
-
-dense = LayerTag(name="dense_tag", num_inputs=1, num_outputs=1)
+  return layer_tag.bind(
+      *parameters,
+      meta=LayerMetaData(
+          variant="generic",
+          inputs_index=(),
+          outputs_index=(0,),
+          params_index=tuple(range(len(parameters))),
+      ),
+  )
 
 
 def register_dense(
@@ -331,15 +348,21 @@ def register_dense(
     x: Array,
     w: Array,
     b: Array | None = None,
+    variant: str = "dense",
     **kwargs,
 ) -> Array:
   """Registers a dense layer: ``y = matmul(x, w) + b``."""
-  if b is None:
-    return dense.bind(y, x, w, **kwargs)
-  return dense.bind(y, x, w, b, **kwargs)
-
-
-conv2d = LayerTag(name="conv2d_tag", num_inputs=1, num_outputs=1)
+  args = (y, x, w) if b is None else (y, x, w, b)
+  return layer_tag.bind(
+      *args,
+      meta=LayerMetaData(
+          variant=variant,
+          outputs_index=(0,),
+          inputs_index=(1,),
+          params_index=tuple(i + 2 for i in range(len(args) - 2)),
+      ),
+      **kwargs,
+  )
 
 
 def register_conv2d(
@@ -347,16 +370,21 @@ def register_conv2d(
     x: Array,
     w: Array,
     b: Array | None = None,
+    variant: str = "conv2d",
     **kwargs: Any
 ) -> Array:
   """Registers a 2d convolution layer: ``y = conv2d(x, w) + b``."""
-  if b is None:
-    return conv2d.bind(y, x, w, **kwargs)
-  return conv2d.bind(y, x, w, b, **kwargs)
-
-
-scale_and_shift = LayerTag(
-    name="scale_and_shift_tag", num_inputs=1, num_outputs=1)
+  args = (y, x, w) if b is None else (y, x, w, b)
+  return layer_tag.bind(
+      *args,
+      meta=LayerMetaData(
+          variant=variant,
+          outputs_index=(0,),
+          inputs_index=(1,),
+          params_index=tuple(i + 2 for i in range(len(args) - 2)),
+      ),
+      **kwargs,
+  )
 
 
 def register_scale_and_shift(
@@ -364,18 +392,25 @@ def register_scale_and_shift(
     x: Array,
     scale: Array | None = None,
     shift: Array | None = None,
+    variant: str = "scale_and_shift",
+    **kwargs: Any,
 ) -> Array:
   """Registers a scale and shift layer: ``y = x * scale + shift``."""
-  if scale is not None and shift is not None:
-    args = (scale, shift)
-  elif scale is not None:
-    args = (scale,)
-  elif shift is not None:
-    args = (shift,)
-  else:
+  args = tuple(a for a in (y, x, scale, shift) if a is not None)
+  if len(args) < 3:
     raise ValueError("At least one of `scale` and `shift` must be provided.")
-  return scale_and_shift.bind(
-      y, x, *args, has_scale=scale is not None, has_shift=shift is not None)
+  return layer_tag.bind(
+      *args,
+      meta=LayerMetaData(
+          variant=variant,
+          outputs_index=(0,),
+          inputs_index=(1,),
+          params_index=tuple(i + 2 for i in range(len(args) - 2)),
+      ),
+      has_scale=scale is not None,
+      has_shift=shift is not None,
+      **kwargs,
+  )
 
 
 class LossTagEqn(core.JaxprEqn):
