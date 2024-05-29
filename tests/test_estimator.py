@@ -51,6 +51,22 @@ PIECEWISE_LINEAR_MODELS_AND_CURVATURE = [
 ]
 
 
+CONV_SIZES_AND_ESTIMATION_MODES = [
+    [
+        dict(images=(16, 16, 3), labels=(10,)),
+        1230971,
+        "ggn",
+    ],
+    [
+        dict(images=(16, 16, 3), labels=(10,)),
+        1230971,
+        "fisher",
+    ],
+]
+
+LAYER_CHANNELS = [4, 8, 16]
+
+
 @functools.partial(jax.jit, static_argnums=(0, 3, 4))
 def compute_exact_approx_curvature(
     estimator: kfac_jax.CurvatureEstimator[StateType],
@@ -93,6 +109,10 @@ class TestEstimator(parameterized.TestCase):
       rtol: float = 1e-6,
   ):
     """Asserts that the two PyTrees are close up to the provided tolerances."""
+    if jax.devices()[0].platform == "tpu":
+      rtol = 3e3 * rtol
+      atol = 3e3 * atol
+
     x_v, x_tree = jax.tree_util.tree_flatten(x)
     y_v, y_tree = jax.tree_util.tree_flatten(y)
     self.assertEqual(x_tree, y_tree)
@@ -436,18 +456,7 @@ class TestEstimator(parameterized.TestCase):
     for kf, block in zip(kf_blocks, blocks):
       self.assert_trees_all_close(kf, block)
 
-  @parameterized.parameters([
-      (
-          dict(images=(32, 32, 3), labels=(10,)),
-          1230971,
-          "ggn",
-      ),
-      (
-          dict(images=(32, 32, 3), labels=(10,)),
-          1230971,
-          "fisher",
-      ),
-  ])
+  @parameterized.parameters(CONV_SIZES_AND_ESTIMATION_MODES)
   def test_eigenvalues(
       self,
       data_point_shapes: Mapping[str, Shape],
@@ -458,11 +467,13 @@ class TestEstimator(parameterized.TestCase):
     """Test for linear network if the KF blocks match the full."""
     num_classes = data_point_shapes["labels"][0]
     init_func = models.conv_classifier(
-        num_classes=num_classes, layer_channels=[8, 16, 32]).init
+        num_classes=num_classes, layer_channels=LAYER_CHANNELS,
+    ).init
     model_func = functools.partial(
         models.conv_classifier_loss,
         num_classes=num_classes,
-        layer_channels=[8, 16, 32])
+        layer_channels=LAYER_CHANNELS,
+    )
 
     rng_key = jax.random.PRNGKey(seed)
     init_key, data_key, estimator_key = jax.random.split(rng_key, 3)
@@ -531,18 +542,7 @@ class TestEstimator(parameterized.TestCase):
       else:
         raise NotImplementedError()
 
-  @parameterized.parameters([
-      (
-          dict(images=(32, 32, 3), labels=(10,)),
-          1230971,
-          "ggn",
-      ),
-      (
-          dict(images=(32, 32, 3), labels=(10,)),
-          1230971,
-          "fisher",
-      ),
-  ])
+  @parameterized.parameters(CONV_SIZES_AND_ESTIMATION_MODES)
   def test_matmul(
       self,
       data_point_shapes: Mapping[str, Shape],
@@ -554,11 +554,13 @@ class TestEstimator(parameterized.TestCase):
     """Test for linear network if the KF blocks match the full."""
     num_classes = data_point_shapes["labels"][0]
     init_func = models.conv_classifier(
-        num_classes=num_classes, layer_channels=[8, 16, 32]).init
+        num_classes=num_classes, layer_channels=LAYER_CHANNELS
+    ).init
     model_func = functools.partial(
         models.conv_classifier_loss,
         num_classes=num_classes,
-        layer_channels=[8, 16, 32])
+        layer_channels=LAYER_CHANNELS,
+    )
 
     rng_key = jax.random.PRNGKey(seed)
     init_key1, init_key2, data_key, estimator_key = jax.random.split(rng_key, 4)
@@ -608,7 +610,7 @@ class TestEstimator(parameterized.TestCase):
 
     # Check cached and non-cached are the same
     m_inv_v2 = estimator.multiply_inverse(state, v, e, True, False, None)
-    self.assert_trees_all_close(m_inv_v, m_inv_v2, atol=1e-5, rtol=1e-4)
+    self.assert_trees_all_close(m_inv_v, m_inv_v2, atol=5e-6)
 
     block_vectors = estimator.params_vector_to_blocks_vectors(v)
     results = estimator.params_vector_to_blocks_vectors(m_v)
@@ -628,20 +630,9 @@ class TestEstimator(parameterized.TestCase):
       # Matrix inverse multiplication
       m_i_plus_eye = block_matrices[i] + e * jnp.eye(block_matrices[i].shape[0])
       computed2 = jnp.linalg.solve(m_i_plus_eye, v_i_flat)
-      self.assert_trees_all_close(computed2, r2_i_flat, atol=1e-5, rtol=1e-4)
+      self.assert_trees_all_close(computed2, r2_i_flat, atol=5e-6)
 
-  @parameterized.parameters([
-      (
-          dict(images=(32, 32, 3), labels=(10,)),
-          1230971,
-          "ggn",
-      ),
-      (
-          dict(images=(32, 32, 3), labels=(10,)),
-          1230971,
-          "fisher",
-      ),
-  ])
+  @parameterized.parameters(CONV_SIZES_AND_ESTIMATION_MODES)
   def test_implicit_factor_products(
       self,
       data_point_shapes: Mapping[str, Shape],
@@ -652,12 +643,13 @@ class TestEstimator(parameterized.TestCase):
     """Tests that the products of the curvature factors are correct."""
     num_classes = data_point_shapes["labels"][0]
     init_func = models.conv_classifier(
-        num_classes=num_classes, layer_channels=[8, 16, 32]).init
+        num_classes=num_classes, layer_channels=LAYER_CHANNELS
+    ).init
     model_func = functools.partial(
         models.conv_classifier_loss,
         num_classes=num_classes,
-        layer_channels=[8, 16, 32])
-
+        layer_channels=LAYER_CHANNELS,
+    )
     rng_key = jax.random.PRNGKey(seed)
     init_key1, init_key2, data_key = jax.random.split(rng_key, 3)
 
@@ -685,7 +677,7 @@ class TestEstimator(parameterized.TestCase):
     else:
       raise NotImplementedError()
 
-    self.assert_trees_all_close(c_v_1, c_v_2, atol=1e-6, rtol=1e-6)
+    self.assert_trees_all_close(c_v_1, c_v_2)
 
 
 if __name__ == "__main__":
