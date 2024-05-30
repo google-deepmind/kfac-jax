@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Jaxline experiment classes and utilities."""
+
 import abc
 import collections
+from collections.abc import Mapping
 import copy
 import functools
 import os
@@ -29,6 +31,7 @@ import kfac_jax
 from examples import datasets
 from examples import optimizers
 import ml_collections
+import more_itertools
 
 
 # Types for annotation
@@ -136,7 +139,7 @@ class SupervisedExperiment(abc.ABC):
     seed_rng: An RNG used fo seeding the dataset iterators.
     config: The experiment config.
     has_aux: Whether the model function returns any auxiliary data.
-    has_rng: Whether the model function needs an PRNG key.
+    has_rng: Whether the model function needs a PRNG key.
     has_func_state: Whether the model function has a state.
     eval_splits: Evaluation splits of the evaluation dataset loader.
     batch_size: An instance of `ExperimentBatchSizes`.
@@ -225,6 +228,19 @@ class SupervisedExperiment(abc.ABC):
     self._use_polyak_avg_with_decay_factor = config.get(
         "use_polyak_avg_with_decay_factor", None)
 
+    self._log_train_stats_with_polyak_avg_every_n_steps = config.get(
+        "log_train_stats_with_polyak_avg_every_n_steps", 0)
+
+    if (self._use_polyak_avg_with_decay_factor is None
+        and self._log_train_stats_with_polyak_avg_every_n_steps != 0):
+      raise ValueError(
+          "Polyak averaging must be enabled if setting"
+          "log_train_stats_with_polyak_avg_every_n_steps != 0.")
+
+    if self._log_train_stats_with_polyak_avg_every_n_steps != 0:
+      self._train_model_func_pmap = jax.pmap(self.train_model_func)
+      self._get_value_pmap = jax.pmap(lambda x: x.value)
+
     if self._use_polyak_avg_with_decay_factor:
       self._update_polyak_average_pmap = jax.pmap(self._update_polyak_average,
                                                   donate_argnums=0)
@@ -247,6 +263,9 @@ class SupervisedExperiment(abc.ABC):
 
       logging.info("Initializing training data iterator.")
 
+      # By folding in the step here we ensure that the training data iterator
+      # is rerandomized after a preemption. This is not a perfect solution, but
+      # it's better than restarting the old iterator from scratch.
       seed_rng = jax.random.fold_in(self.seed_rng, self._python_step)
 
       self._train_input = pipe_utils.py_prefetch(
@@ -257,6 +276,8 @@ class SupervisedExperiment(abc.ABC):
               device_batch_size=self.batch_size.train.per_device,
           )
       )
+
+      self._train_input = more_itertools.peekable(self._train_input)
 
     return self._train_input
 
@@ -293,19 +314,25 @@ class SupervisedExperiment(abc.ABC):
     if self._init_batch is None:
 
       if self.mode == "train":
-        self._init_batch, iterator = kfac_jax.utils.fake_element_from_iterator(
-            self.train_input
-        )
-        self._train_input = iterator
+        self._init_batch = self.train_input.peek()  # pytype: disable=attribute-error
       else:
         self._init_batch = next(self.eval_input["train"]())
 
     return self._init_batch
 
+  def _polyak_weight(
+      self,
+      global_step: int,
+      stats: Mapping[str, Array]
+  ) -> Numeric:
+    del global_step, stats
+    return 1.0
+
   def _update_polyak_average(
       self,
       params_polyak: WeightedMovingAverage[Params] | None,
-      params: Params
+      params: Params,
+      weight: Numeric = 1.0,
   ) -> WeightedMovingAverage[Params]:
     """Updates the polyak-averaged version of the parameters."""
 
@@ -317,7 +344,8 @@ class SupervisedExperiment(abc.ABC):
       # Copy the object to make this a pure function
       params_polyak = params_polyak.copy()
 
-    params_polyak.update(params, self._use_polyak_avg_with_decay_factor, 1.0)
+    params_polyak.update(
+        params, self._use_polyak_avg_with_decay_factor, weight)
 
     return params_polyak
 
@@ -453,6 +481,54 @@ class SupervisedExperiment(abc.ABC):
   ) -> Iterator[Batch]:
     """Constructs the training dataset."""
 
+  def _maybe_update_polyak_average_and_get_stats(
+      self,
+      rng: PRNGKey
+  ) -> dict[str, Numeric]:
+    """Updates the polyak-averaged version of the parameters and gets stats."""
+
+    stats = {}
+
+    if self._use_polyak_avg_with_decay_factor is not None:
+
+      if (self._log_train_stats_with_polyak_avg_every_n_steps and (
+          self._python_step-1 %
+          self._log_train_stats_with_polyak_avg_every_n_steps == 0)):
+
+        assert self._params_polyak is not None
+
+        if isinstance(self.train_inputs, tuple):
+          batch = self.train_inputs[0].peek()  # pytype: disable=attribute-error
+        else:
+          batch = self.train_inputs.peek()  # pytype: disable=attribute-error
+
+        func_args = kfac_jax.optimizer.make_func_args(
+            params=self._get_value_pmap(self._params_polyak),
+            func_state=self._state,
+            rng=rng,
+            batch=batch,
+            has_state=self.has_func_state,
+            has_rng=self.has_rng,
+        )
+
+        loss_polyak, _, aux_polyak = kfac_jax.optimizer.extract_func_outputs(
+            self._train_model_func_pmap(*func_args),
+            has_aux=self.has_aux, has_state=self.has_func_state)
+
+        assert aux_polyak is not None
+        stats["loss_polyak"] = loss_polyak
+        stats.update({k + "_polyak": v for k, v in aux_polyak.items()})
+
+      self._params_polyak = self._update_polyak_average_pmap(
+          self._params_polyak, self._params,
+          kfac_jax.utils.replicate_all_local_devices(
+              self._polyak_weight(self._python_step,
+                                  kfac_jax.utils.get_first(stats))
+              )
+          )
+
+    return stats
+
   def train_step(self, global_step: Array, rng: PRNGKey) -> dict[str, Numeric]:
     """Performs a single training step."""
 
@@ -474,12 +550,9 @@ class SupervisedExperiment(abc.ABC):
     else:
       self._params, self._opt_state, stats = result
 
-    if self._use_polyak_avg_with_decay_factor is not None:
-      self._params_polyak = self._update_polyak_average_pmap(
-          self._params_polyak, self._params)
+    stats.update(self._maybe_update_polyak_average_and_get_stats(rng))
 
     if "aux" in stats:
-      # Average everything in aux and then put it in stats
       stats.update(stats.pop("aux", {}))
 
     stats["progress"] = self.progress(self._python_step)
