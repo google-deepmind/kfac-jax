@@ -569,6 +569,7 @@ class ImplicitExactCurvature:
         if not isinstance(loss, loss_functions.NegativeLogProbLoss):
           raise ValueError(f"To use {mode=}, each loss must be a subclass of "
                            "`NegativeLogProbLoss`.")
+        shapes.append(loss.fisher_factor_inner_shape)
       elif mode == "ggn":
         shapes.append(loss.ggn_factor_inner_shape)
 

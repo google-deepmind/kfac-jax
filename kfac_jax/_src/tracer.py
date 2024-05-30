@@ -152,7 +152,7 @@ def order_layer_tags(
   for eqn in layer_tags:
 
     # Collect the equation parameter indices
-    tag_vars = tags.layer_eqn_data(eqn, raise_an_error=True).params
+    tag_vars = tags.layer_eqn_data(eqn).params
     vars_indices = tuple(params_vars_flat.index(v) for v in tag_vars)
 
     if any(i in used_indices for i in vars_indices):
@@ -260,15 +260,17 @@ class ProcessedJaxpr(utils.Finalizable):
     logging.info("Graph registered losses:")
 
     for loss_tag in self.loss_tags:
-      assert len(loss_tag.invars) == len(loss_tag.params["args_names"])
+      meta = loss_tag.params.get("meta")
+      assert meta is not None and isinstance(meta, tags.LossMetaData)
+      assert len(loss_tag.invars) == len(meta.argument_names)
 
       args = []
-      for name, var in zip(loss_tag.params["args_names"], loss_tag.invars):
+      for name, var in zip(meta.argument_names, loss_tag.invars):
         args.append(f"{name}={var}")
 
       args_str = ", ".join(args)
 
-      logging.info("%s(%s)", loss_tag.primitive.loss_class_name, args_str)
+      logging.info("%s(%s)", tags.loss_eqn_class_name(loss_tag), args_str)
 
     logging.info("=" * 50)
 
@@ -279,8 +281,8 @@ class ProcessedJaxpr(utils.Finalizable):
     losses = []
 
     for eqn, loss_args in zip(self.loss_tags, losses_inputs):
-      tag: tags.LossTag = eqn.primitive
-      losses.append(tag.loss(*loss_args, **eqn.params))
+      loss: LossFunction = tags.loss_eqn_construct_loss(eqn, *loss_args)
+      losses.append(loss)
 
     return tuple(losses)
 
@@ -538,13 +540,8 @@ def construct_compute_losses_inputs(
         if not drop_loss_tags:
           write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
 
-        loss_tag: tags.LossTag = eqn.primitive
         losses_inputs.append(read(eqn.invars))
-        losses_p_deps.append(
-            loss_tag.extract_parameter_dependants(
-                *losses_inputs[-1], **eqn.params
-            )
-        )
+        losses_p_deps.append(read(tags.loss_eqn_parameter_dependants(eqn)))
         losses_so_far += 1
 
       else:
@@ -553,7 +550,7 @@ def construct_compute_losses_inputs(
       if losses_so_far == len(processed_jaxpr.loss_tags):
         break
 
-    return tuple(losses_p_deps), tuple(losses_inputs)
+    return tuple(tuple(p) for p in losses_p_deps), tuple(losses_inputs)
 
   return forward_compute_losses
 
@@ -854,7 +851,7 @@ def _layer_tag_vjp(
       write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, input_values))
 
       if isinstance(eqn.primitive, tags.LossTag):
-        loss = eqn.primitive.loss(*input_values, **eqn.params)
+        loss: LossFunction = tags.loss_eqn_construct_loss(eqn, *input_values)
 
         losses_p_dependants.append(loss.parameter_dependants)
         losses_inputs_values.append(tuple(input_values))
@@ -892,10 +889,10 @@ def _layer_tag_vjp(
   _, aux_vjp, losses_inputs = jax.vjp(forward_aux, aux_dict, has_aux=True)
 
   # Compute the actual loss objects.
-  losses = tuple(
-      tag.primitive.loss(*inputs, **tag.params)
+  losses: list[LossFunction] = [
+      tags.loss_eqn_construct_loss(tag, *inputs)
       for tag, inputs in zip(processed_jaxpr.loss_tags, losses_inputs)
-  )
+  ]
 
   def vjp_func(
       tangents: tuple[LossFunctionInputs, ...],  # pytype: disable=invalid-annotation
@@ -934,7 +931,7 @@ def _layer_tag_vjp(
 
     return tuple(layers_info)
 
-  return losses, vjp_func
+  return tuple(losses), vjp_func
 
 
 def compute_all_losses(

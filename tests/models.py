@@ -271,12 +271,6 @@ class _DeterministicBernoulliNegativeLogProbLoss(
   def dist(self):
     return _DeterministicBernoulli(logits=self._logits, dtype=jnp.int32)
 
-_DeterministicBernoulliNegativeLogProbLoss_tag = loss_functions.tags.LossTag(
-    _DeterministicBernoulliNegativeLogProbLoss,
-    parameter_dependants=["logits"],
-    parameter_independants=["targets", "weight"],
-)
-
 
 def _register_deterministic_bernoulli(
     logits: Array,
@@ -284,14 +278,20 @@ def _register_deterministic_bernoulli(
     weight=1.0
 ):
   """Registers a deterministic bernoulli loss."""
-  if targets is None:
-    args = [logits, weight]
-    args_names = ["logits", "weight"]
-  else:
-    args = [logits, targets, weight]
-    args_names = ["logits", "targets", "weight"]
-  _DeterministicBernoulliNegativeLogProbLoss_tag.bind(*args,
-                                                      args_names=args_names)
+  args, args_names = loss_functions.filter_none(
+      logits=logits,
+      targets=targets,
+      weight=weight,
+  )
+  tags.loss_tag.bind(
+      *args,
+      meta=tags.LossMetaData(
+          loss_class=_DeterministicBernoulliNegativeLogProbLoss,
+          parameter_dependants=args_names[:1],
+          parameter_independants=args_names[1:],
+          argument_names=args_names,
+      ),
+  )
 
 
 class _DeterministicCategorical(distrax.Categorical):
@@ -310,27 +310,27 @@ class _DeterministicCategoricalNegativeLogProbLoss(
   def dist(self) -> _DeterministicCategorical:
     return _DeterministicCategorical(logits=self._logits, dtype=jnp.int32)
 
-_DeterministicCategoricalNegativeLogProbLoss_tag = loss_functions.tags.LossTag(
-    _DeterministicCategoricalNegativeLogProbLoss,
-    parameter_dependants=["logits"],
-    parameter_independants=["targets", "weight"],
-)
-
 
 def _register_deterministic_categorical(
     logits: Array,
     targets: Array,
     weight=1.0
-) -> Array:
+) -> None:
   """Registers a deterministic categorical loss."""
-  if targets is None:
-    args = [logits, weight]
-    args_names = ["logits", "weight"]
-  else:
-    args = [logits, targets, weight]
-    args_names = ["logits", "targets", "weight"]
-  return _DeterministicCategoricalNegativeLogProbLoss_tag.bind(
-      *args, args_names=args_names)[0]
+  args, args_names = loss_functions.filter_none(
+      logits=logits,
+      targets=targets,
+      weight=weight,
+  )
+  tags.loss_tag.bind(
+      *args,
+      meta=tags.LossMetaData(
+          loss_class=_DeterministicCategoricalNegativeLogProbLoss,
+          parameter_dependants=args_names[:1],
+          parameter_independants=args_names[1:],
+          argument_names=args_names,
+      )
+  )
 
 
 def squared_error_loss(

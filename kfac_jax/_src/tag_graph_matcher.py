@@ -757,7 +757,7 @@ def find_layer_tags_and_patterns(
 
   # First add any manual registrations to this.
   for eqn in graph.manual_registrations:
-    layer_data = tags.layer_eqn_data(eqn, raise_an_error=True)
+    layer_data = tags.layer_eqn_data(eqn)
     for manual_eqn in graph.sub_graph_eqns(
         layer_data.inputs + layer_data.params, layer_data.outputs
     ):
@@ -1493,7 +1493,7 @@ def _auto_register_tags(
 
   # Manual registrations
   for manual_eqn in manual_registrations:
-    for p in tags.layer_eqn_data(manual_eqn, raise_an_error=True).params:
+    for p in tags.layer_eqn_data(manual_eqn).params:
       tagged_params.add(p)
 
   # Automatically detect registrations

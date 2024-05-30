@@ -32,6 +32,15 @@ DType = utils.DType
 LossFunctionInputs = tuple[Array, ...]
 
 
+def filter_none(
+    **kwargs: Numeric | None,
+) -> tuple[tuple[Numeric, ...], tuple[str, ...]]:
+  args, args_names = zip(
+      *[(value, name) for name, value in kwargs.items() if value is not None]
+  )
+  return args, args_names
+
+
 # pylint: disable=g-one-element-tuple
 
 
@@ -1111,54 +1120,13 @@ def insert_slice_in_zeros(
   return jnp.pad(slice_to_insert, list(zip(before, after)))
 
 
-#  _______            _____            _     _             _   _
-# |__   __|          |  __ \          (_)   | |           | | (_)
-#    | | __ _  __ _  | |__) |___  __ _ _ ___| |_ _ __ __ _| |_ _  ___  _ __
-#    | |/ _` |/ _` | |  _  // _ \/ _` | / __| __| '__/ _` | __| |/ _ \| '_ \
-#    | | (_| | (_| | | | \ \  __/ (_| | \__ \ |_| | | (_| | |_| | (_) | | | |
-#    |_|\__,_|\__, | |_|  \_\___|\__, |_|___/\__|_|  \__,_|\__|_|\___/|_| |_|
-#              __/ |              __/ |
-#             |___/              |___/
-
-NormalMeanNegativeLogProbLoss_tag = tags.LossTag(
-    NormalMeanNegativeLogProbLoss,
-    parameter_dependants=["mean"],
-    parameter_independants=["targets", "variance", "weight",
-                            "normalize_log_prob"],
-)
-
-NormalMeanVarianceNegativeLogProbLoss_tag = tags.LossTag(
-    NormalMeanVarianceNegativeLogProbLoss,
-    parameter_dependants=["mean", "variance"],
-    parameter_independants=["targets", "weight"],
-)
-
-MultiBernoulliNegativeLogProbLoss_tag = tags.LossTag(
-    MultiBernoulliNegativeLogProbLoss,
-    parameter_dependants=["logits"],
-    parameter_independants=["targets", "weight"],
-)
-
-CategoricalLogitsNegativeLogProbLoss_tag = tags.LossTag(
-    CategoricalLogitsNegativeLogProbLoss,
-    parameter_dependants=["logits"],
-    parameter_independants=["targets", "weight"],
-)
-
-OneHotCategoricalLogitsNegativeLogProbLoss_tag = tags.LossTag(
-    OneHotCategoricalLogitsNegativeLogProbLoss,
-    parameter_dependants=["logits"],
-    parameter_independants=["targets", "weight"],
-)
-
-
 def register_normal_predictive_distribution(
     mean: Array,
     targets: Array | None = None,
     variance: float = 0.5,
     weight: Numeric = 1.0,
     normalize_log_prob: bool = True,
-):
+) -> None:
   """Registers a normal predictive distribution.
 
   This corresponds to a squared error loss of the form
@@ -1202,21 +1170,30 @@ def register_normal_predictive_distribution(
       the loss value is computed from the registrations. e.g., when
       ``include_registered_loss_in_stats=True`` is used. (Default: True)
   """
-  if targets is None:
-    args = [mean, variance, weight, normalize_log_prob]
-    args_names = ["mean", "variance", "weight", "normalize_log_prob"]
-  else:
-    args = [mean, targets, variance, weight, normalize_log_prob]
-    args_names = ["mean", "targets", "variance", "weight", "normalize_log_prob"]
+  args, args_names = filter_none(
+      mean=mean,
+      targets=targets,
+      variance=variance,
+      weight=weight,
+      normalize_log_prob=normalize_log_prob,
+  )
 
-  NormalMeanNegativeLogProbLoss_tag.bind(*args, args_names=tuple(args_names))
+  tags.loss_tag.bind(
+      *args,
+      meta=tags.LossMetaData(
+          loss_class=NormalMeanNegativeLogProbLoss,
+          parameter_dependants=args_names[:1],
+          parameter_independants=args_names[1:],
+          argument_names=tuple(args_names),
+      )
+  )
 
 
 def register_squared_error_loss(
     prediction: Array,
     targets: Array | None = None,
     weight: Numeric = 1.0,
-):
+) -> None:
   """Registers a squared error loss function.
 
   This assumes a squared error loss of the form
@@ -1254,15 +1231,19 @@ def register_squared_error_loss(
       parameters. (Default: 1.0)
   """
   register_normal_predictive_distribution(
-      prediction, targets, variance=0.5,
-      weight=weight, normalize_log_prob=False)
+      mean=prediction,
+      targets=targets,
+      variance=0.5,
+      weight=weight,
+      normalize_log_prob=False,
+  )
 
 
 def register_multi_bernoulli_predictive_distribution(
     logits: Array,
     targets: Array | None = None,
     weight: Numeric = 1.0,
-):
+) -> None:
   """Registers a multi-Bernoulli predictive distribution.
 
   This corresponds to a sigmoid cross-entropy loss of the form
@@ -1296,22 +1277,28 @@ def register_multi_bernoulli_predictive_distribution(
       the log prob in the objective function. Note that this must be constant
       and independent of the network's parameters. (Default: 1.0)
   """
-  if targets is None:
-    args = [logits, weight]
-    args_names = ["logits", "weight"]
-  else:
-    args = [logits, targets, weight]
-    args_names = ["logits", "targets", "weight"]
+  args, args_names = filter_none(
+      logits=logits,
+      targets=targets,
+      weight=weight,
+  )
 
-  MultiBernoulliNegativeLogProbLoss_tag.bind(
-      *args, args_names=tuple(args_names))
+  tags.loss_tag.bind(
+      *args,
+      meta=tags.LossMetaData(
+          loss_class=MultiBernoulliNegativeLogProbLoss,
+          parameter_dependants=args_names[:1],
+          parameter_independants=args_names[1:],
+          argument_names=tuple(args_names),
+      )
+  )
 
 
 def register_sigmoid_cross_entropy_loss(
     logits: Array,
     targets: Array | None = None,
     weight: Numeric = 1.0,
-):
+) -> None:
   """Registers a sigmoid cross-entropy loss function.
 
   This assumes a sigmoid cross-entropy loss of the form
@@ -1347,7 +1334,10 @@ def register_sigmoid_cross_entropy_loss(
       parameters. (Default: 1.0)
   """
   register_multi_bernoulli_predictive_distribution(
-      logits, targets, weight=weight)
+      logits=logits,
+      targets=targets,
+      weight=weight,
+  )
 
 
 def register_categorical_predictive_distribution(
@@ -1355,7 +1345,7 @@ def register_categorical_predictive_distribution(
     targets: Array | None = None,
     mask: Array | None = None,
     weight: Numeric = 1.0,
-):
+) -> None:
   """Registers a categorical predictive distribution.
 
   This corresponds to a softmax cross-entropy loss of the form
@@ -1390,10 +1380,10 @@ def register_categorical_predictive_distribution(
   if targets is not None:
 
     if targets.ndim == logits.ndim:
-      tag_cls = OneHotCategoricalLogitsNegativeLogProbLoss_tag
+      loss_class = OneHotCategoricalLogitsNegativeLogProbLoss
 
     elif targets.ndim == logits.ndim - 1:
-      tag_cls = CategoricalLogitsNegativeLogProbLoss_tag
+      loss_class = CategoricalLogitsNegativeLogProbLoss
 
     else:
       raise ValueError(f"The logits ndim is {logits.ndim} and the targets ndim "
@@ -1401,23 +1391,24 @@ def register_categorical_predictive_distribution(
                        f"{targets.ndim}.")
 
   else:
-    tag_cls = CategoricalLogitsNegativeLogProbLoss_tag
+    loss_class = CategoricalLogitsNegativeLogProbLoss
 
-  args = [logits]
-  args_names = ["logits"]
+  args, args_names = filter_none(
+      logits=logits,
+      targets=targets,
+      mask=mask,
+      weight=weight,
+  )
 
-  if targets is not None:
-    args = args + [targets]
-    args_names = args_names + ["targets"]
-
-  if mask is not None:
-    args = args + [mask]
-    args_names = args_names + ["mask"]
-
-  args = args + [weight]
-  args_names = args_names + ["weight"]
-
-  tag_cls.bind(*args, args_names=tuple(args_names))
+  tags.loss_tag.bind(
+      *args,
+      meta=tags.LossMetaData(
+          loss_class=loss_class,
+          parameter_dependants=args_names[:1],
+          parameter_independants=args_names[1:],
+          argument_names=tuple(args_names),
+      ),
+  )
 
 
 def register_softmax_cross_entropy_loss(
@@ -1425,7 +1416,7 @@ def register_softmax_cross_entropy_loss(
     targets: Array | None = None,
     mask: Array | None = None,
     weight: Numeric = 1.0,
-):
+) -> None:
   """Registers a softmax cross-entropy loss function.
 
   This assumes a softmax cross-entropy loss of the form
@@ -1454,7 +1445,9 @@ def register_softmax_cross_entropy_loss(
       Note that this must be constant and independent of the network's
       parameters. (Default: 1.0)
   """
-  register_categorical_predictive_distribution(logits,
-                                               targets=targets,
-                                               mask=mask,
-                                               weight=weight)
+  register_categorical_predictive_distribution(
+      logits=logits,
+      targets=targets,
+      mask=mask,
+      weight=weight,
+  )
