@@ -188,9 +188,7 @@ class LossFunction(utils.Finalizable):
     """
     def evaluate_sum(inputs: Sequence[Array]) -> Array:
       """Evaluates the loss summed over all axis, including batch etc."""
-
       instance = self.copy_with_different_inputs(inputs)
-
       return jnp.sum(instance.evaluate(targets, coefficient_mode))
 
     return jax.grad(evaluate_sum)(self.parameter_dependants)

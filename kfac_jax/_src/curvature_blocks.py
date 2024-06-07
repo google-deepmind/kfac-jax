@@ -1495,7 +1495,11 @@ class NaiveFull(Full):
 
     for p_shape, pt in zip(self.parameters_shapes, params_tangents):
 
-      assert pt.shape[-len(p_shape):] == p_shape
+      if p_shape:
+        assert (
+            pt.shape[-len(p_shape) :] == p_shape
+        ), f"{pt.shape=} and {p_shape=}"
+
       p_size = utils.product(p_shape)
 
       params_tangents_flattened.append(pt.reshape([-1, p_size]))

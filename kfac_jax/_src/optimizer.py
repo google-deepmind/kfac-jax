@@ -446,7 +446,6 @@ class Optimizer(utils.WithStagedMethods):
       )
     self._curvature_update_period = curvature_update_period
     self._inverse_update_period = inverse_update_period
-    self._register_only_generic = register_only_generic
     self._layer_tag_to_block_cls = layer_tag_to_block_ctor
     self._patterns_to_skip = patterns_to_skip
     self._batch_process_func = batch_process_func or (lambda x: x)
@@ -463,6 +462,7 @@ class Optimizer(utils.WithStagedMethods):
     )
 
     self._params_index = 0
+    batch_index = int(value_func_has_state + value_func_has_rng + 1)
 
     if (norm_to_scale_identity_weight_per_block is not None
         and norm_to_scale_identity_weight_per_block != "none"):
@@ -472,20 +472,25 @@ class Optimizer(utils.WithStagedMethods):
 
     estimator_ctor = (custom_estimator_ctor or BlockDiagonalCurvature)
 
+    auto_register_kwargs = auto_register_kwargs or {}
+    auto_register_kwargs.update(dict(
+        register_only_generic=register_only_generic,
+        patterns_to_skip=patterns_to_skip,
+    ))
+
     # Curvature estimator
     self._estimator = estimator_ctor(
         func=self._value_func,
         default_estimation_mode=estimation_mode,
         params_index=self._params_index,
+        batch_index=batch_index,
         layer_tag_to_block_ctor=layer_tag_to_block_ctor,
-        register_only_generic=register_only_generic,
-        patterns_to_skip=patterns_to_skip,
         distributed_multiplies=distributed_precon_apply,
         distributed_cache_updates=distributed_inverses,
         num_samples=num_estimator_samples,
         should_vmap_samples=should_vmap_estimator_samples,
         auto_register_tags=use_automatic_registration,
-        **(auto_register_kwargs or {}),
+        auto_register_kwargs=auto_register_kwargs,
     )
     self._implicit = curvature_estimator.ImplicitExactCurvature(
         self._value_func,

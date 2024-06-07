@@ -617,6 +617,8 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
     func: The model evaluation function.
     params_index: The index of the parameters argument in arguments list of
       ``func``.
+    batch_index: The index of the batch data argument in arguments list of
+      ``func``.
     default_estimation_mode: The estimation mode which to use by default when
       calling :func:`~CurvatureEstimator.update_curvature_matrix_estimate`.
   """
@@ -625,6 +627,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       self,
       func: utils.Func,
       params_index: int = 0,
+      batch_index: int = 1,
       default_estimation_mode: str = "fisher_gradients",
   ):
     """Initializes the CurvatureEstimator instance.
@@ -632,6 +635,8 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
     Args:
       func: The model function, which should have at least one registered loss.
       params_index: The index of the parameters argument in arguments list of
+        ``func``.
+      batch_index: The index of the batch data argument in arguments list of
         ``func``.
       default_estimation_mode: The estimation mode which to use by default when
         calling :func:`~CurvatureEstimator.update_curvature_matrix_estimate`.
@@ -645,6 +650,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
 
     self.func = func
     self.params_index = params_index
+    self.batch_index = batch_index
     self.default_estimation_mode = default_estimation_mode
     self.compute_losses, _ = tracer.compute_all_losses(
         func=func, params_index=params_index
@@ -939,7 +945,6 @@ class BlockDiagonalCurvature(
   def __init__(
       self,
       func: utils.Func,
-      params_index: int = 0,
       default_estimation_mode: str | None = None,
       layer_tag_to_block_ctor:
       Mapping[str, CurvatureBlockCtor] | None = None,
@@ -950,14 +955,13 @@ class BlockDiagonalCurvature(
       distributed_cache_updates: bool = True,
       num_samples: int = 1,
       should_vmap_samples: bool = False,
-      **auto_register_kwargs: Any,
+      auto_register_kwargs: dict[str, Any] | None = None,
+      **kwargs: Any,
   ):
-    """Initializes the curvature instance.
+    """Initializes the BlockDiagonalCurvature instance.
 
     Args:
       func: The model function, which should have at least one registered loss.
-      params_index: The index of the parameters argument in arguments list of
-        ``func``.
       default_estimation_mode: The estimation mode which to use by default when
         calling ``self.update_curvature_matrix_estimate``. If ``None`` this will
         be ``'fisher_gradients'``.
@@ -984,22 +988,27 @@ class BlockDiagonalCurvature(
         '[fisher,ggn]_curvature_prop'``.
       should_vmap_samples: Whether to use ``jax.vmap`` to compute samples
         when ``num_samples > 1``.
-      **auto_register_kwargs: Any keyword arguments to pass to into the auto
-        registration function.
+      auto_register_kwargs: Keyword arguments to pass to into the
+        layer auto-registration function.
+      **kwargs: Addiional keyword arguments passed to the superclass
+        ``CurvatureEstimator``.
     """
 
     super().__init__(
-        func, params_index, default_estimation_mode or "fisher_gradients")
+        func=func,
+        default_estimation_mode=default_estimation_mode or "fisher_gradients",
+        **kwargs,
+    )
 
     self._index_to_block_ctor = index_to_block_ctor or dict()
     self._layer_tag_to_block_ctor = layer_tag_to_block_ctor or dict()
     self._auto_register_tags = auto_register_tags
-    self._auto_register_kwargs = auto_register_kwargs
+    self._auto_register_kwargs = auto_register_kwargs or {}
     self._vjp, self._jaxpr_extractor = tracer.layer_tags_vjp(
         func=func,
-        params_index=params_index,
+        params_index=self.params_index,
         auto_register_tags=auto_register_tags,
-        **auto_register_kwargs
+        **self._auto_register_kwargs
     )
 
     # Initialized during finalization
@@ -1344,8 +1353,7 @@ class BlockDiagonalCurvature(
   # Helper function that updates the blocks given a vjp vector
   def _update_blocks(
       self,
-      vjp_vec,
-      losses_vjp,
+      blocks_info,
       state,
       ema_old: Numeric,
       ema_new: Numeric,
@@ -1353,7 +1361,6 @@ class BlockDiagonalCurvature(
       batch_size: int,
   ):
 
-    blocks_info = losses_vjp(vjp_vec)
     assert len(blocks_info) == self.num_blocks
 
     new_state = []
@@ -1458,8 +1465,7 @@ class BlockDiagonalCurvature(
             for loss, key in zip(losses, keys))
 
         return self._update_blocks(
-            vjp_vec=vjp_vec,
-            losses_vjp=losses_vjp,
+            losses_vjp(vjp_vec),
             state=state_i,
             ema_old=ema_old_i,
             ema_new=ema_new,
@@ -1476,8 +1482,7 @@ class BlockDiagonalCurvature(
           for loss in losses)
 
       return self._update_blocks(
-          vjp_vec=vjp_vec,
-          losses_vjp=losses_vjp,
+          losses_vjp(vjp_vec),
           state=state,
           ema_old=ema_old,
           ema_new=ema_new,
@@ -1507,8 +1512,7 @@ class BlockDiagonalCurvature(
             vjp_vec.append(loss.multiply_ggn_factor(random_b * 2.0 - 1.0))
 
         return self._update_blocks(
-            vjp_vec=tuple(vjp_vec),
-            losses_vjp=losses_vjp,
+            losses_vjp(tuple(vjp_vec)),
             state=state_i,
             ema_old=ema_old_i,
             ema_new=ema_new,
@@ -1564,8 +1568,7 @@ class BlockDiagonalCurvature(
               lambda x: x * jnp.sqrt(total_num_indices), vjp_vec[i])
 
           state = self._update_blocks(
-              vjp_vec=tuple(vjp_vec),
-              losses_vjp=losses_vjp,
+              losses_vjp(tuple(vjp_vec)),
               state=state,
               ema_old=ema_old,
               ema_new=ema_new,
@@ -1692,7 +1695,6 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
   def __init__(
       self,
       func: utils.Func,
-      batch_index: int = 1,
       default_estimation_mode: str | None = None,
       layer_tag_to_block_ctor:
       Mapping[str, CurvatureBlockCtor] | None = None,
@@ -1704,8 +1706,6 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
 
     Args:
       func: The model function, which should have at least one registered loss.
-      batch_index: Specifies at which index of the inputs to ``func`` is the
-        batch, representing data over which we average the curvature.
       default_estimation_mode: The estimation mode which to use by default when
         calling ``self.update_curvature_matrix_estimate``. If ``None`` this will
         be ``'fisher_exact'``.
@@ -1722,8 +1722,6 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       **kwargs: Addiional keyword arguments passed to the superclass
         ``BlockDiagonalCurvature``.
     """
-
-    self._batch_index = batch_index
 
     if layer_tag_to_block_ctor is None:
       layer_tag_to_block_ctor = dict(generic=curvature_blocks.NaiveFull)
@@ -1778,8 +1776,8 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
       args = list(func_args)
 
       # Index the batch for the `index` arguments.
-      args[self._batch_index] = jax.tree_util.tree_map(
-          lambda x: x[index][None], args[self._batch_index])
+      args[self.batch_index] = jax.tree_util.tree_map(
+          lambda x: x[index][None], args[self.batch_index])
 
       return super_.update_curvature_matrix_estimate(
           state=state_,
