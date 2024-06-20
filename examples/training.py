@@ -481,13 +481,12 @@ class SupervisedExperiment(abc.ABC):
   ) -> Iterator[Batch]:
     """Constructs the training dataset."""
 
-  def _maybe_update_polyak_average_and_get_stats(
+  def _maybe_update_polyak_average_and_stats(
       self,
-      rng: PRNGKey
-  ) -> dict[str, Numeric]:
+      rng: PRNGKey,
+      stats: dict[str, Numeric],
+  ):
     """Updates the polyak-averaged version of the parameters and gets stats."""
-
-    stats = {}
 
     if self._use_polyak_avg_with_decay_factor is not None:
 
@@ -527,8 +526,6 @@ class SupervisedExperiment(abc.ABC):
               )
           )
 
-    return stats
-
   def train_step(self, global_step: Array, rng: PRNGKey) -> dict[str, Numeric]:
     """Performs a single training step."""
 
@@ -550,7 +547,7 @@ class SupervisedExperiment(abc.ABC):
     else:
       self._params, self._opt_state, stats = result
 
-    stats.update(self._maybe_update_polyak_average_and_get_stats(rng))
+    self._maybe_update_polyak_average_and_stats(rng, stats)
 
     if "aux" in stats:
       stats.update(stats.pop("aux", {}))
@@ -621,11 +618,13 @@ class SupervisedExperiment(abc.ABC):
           has_rng=self.has_rng,
       )
 
-      loss_no_avg = loss
+      loss_no_polyak = loss
+      stats_no_polyak = stats
 
       loss, stats = self.eval_model_func(*func_args)
 
-      stats["loss_no_avg"] = loss_no_avg
+      stats.update({k + "_no_polyak": v for k, v in stats_no_polyak.items()})
+      stats["loss_no_polyak"] = loss_no_polyak
 
     stats["loss"] = loss
 
