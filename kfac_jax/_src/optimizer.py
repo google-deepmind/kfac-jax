@@ -1159,6 +1159,8 @@ class Optimizer(utils.WithStagedMethods):
                    (params,) + func_args[1:])
       )
     else:
+      # If not adjusting the damping we don't compute these here and just set
+      # them to NaN.
       new_loss, rho = jnp.nan, jnp.nan
 
     # Compute per-device and total batch size
@@ -1334,17 +1336,22 @@ class Optimizer(utils.WithStagedMethods):
       coefficients: Sequence[Numeric | None] | None = None,
   ) -> tuple[Array, Array, Array]:
     """Computes the components of the exact quadratic model."""
+
     # We check the coefficients for zeros to save computing the expensive matrix
     # vector products for vectors that will eventually be multiplied by zero.
+
     if coefficients is None:
-      return self.compute_exact_quad_model(vectors, grads, func_args, state)
+      return self.compute_exact_quad_model(
+          vectors, grads, func_args, state=state)
+
     assert len(vectors) == len(coefficients)
     # only deal with the two vector case
     assert len(vectors) == 2
 
-    def if_momentum_coeff_zero(vectors, *args):
+    def if_momentum_coeff_zero():
       # only pass in the vectors that won't be multiplied by zero
-      quad_model = self.compute_exact_quad_model(vectors[:1], *args)
+      quad_model = self.compute_exact_quad_model(
+          vectors[:1], grads, func_args, state=state)
 
       # repad the quad model with zeroes for the removed entries
       # this will be handled downstream
@@ -1354,13 +1361,13 @@ class Optimizer(utils.WithStagedMethods):
       )
     # add a check here to save compiling both branches in the static case
     if isinstance(coefficients[1], float) and coefficients[1] == 0.0:
-      return if_momentum_coeff_zero(vectors, grads, func_args, state)
+      return if_momentum_coeff_zero()
 
     return jax.lax.cond(
         coefficients[1] == 0.0,
         if_momentum_coeff_zero,
-        self.compute_exact_quad_model,
-        vectors, grads, func_args, state
+        lambda: self.compute_exact_quad_model(
+            vectors, grads, func_args, state=state),
     )
 
   @utils.auto_scope_method

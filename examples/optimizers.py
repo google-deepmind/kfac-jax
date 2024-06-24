@@ -843,7 +843,6 @@ def imagenet_sgd_schedule(
     global_step: Numeric,
     dataset_size: int,
     train_total_batch_size: int | None,
-    **_: Any,
 ) -> Array:
   """Standard linear scaling schedule for ImageNet."""
 
@@ -869,7 +868,6 @@ def imagenet_sgd_schedule(
 def fixed_schedule(
     global_step: Numeric,
     value: Numeric,
-    **_: Any,
 ) -> Array:
   """Fixed/constant schedule."""
   return jnp.ones_like(global_step) * value
@@ -877,7 +875,6 @@ def fixed_schedule(
 
 def kfac_resnet50_schedule(
     global_step: Numeric,
-    **_: Any,
 ) -> Array:
   """Custom schedule for KFAC."""
 
@@ -920,7 +917,6 @@ def cosine_schedule(
     warmup_steps: int | None = None,
     warmup_fraction: float | None = None,
     data_seen: Numeric | None = None,
-    **_: Any,
 ) -> Numeric:
   """A cosine schedule described in the TAT paper."""
 
@@ -1008,7 +1004,6 @@ def stepwise_schedule(
     step_boundaries: Sequence[float] | None = None,
     warmup_steps: int | None = None,
     data_seen: Numeric | None = None,
-    **_: Any,
 ) -> Numeric:
   """A basic stepwise schedule."""
 
@@ -1086,7 +1081,6 @@ def exponential_decay_schedule(
     start_steps: int | None = None,
     start_fraction: float | None = None,
     data_seen: Numeric | None = None,
-    **_: Any,
 ):
   """Exponential decay schedule."""
 
@@ -1172,7 +1166,6 @@ def polynomial_schedule(
     start_steps: int | None = None,
     start_fraction: float | None = None,
     data_seen: Numeric | None = None,
-    **_: Any,
 ):
   """Polynomial schedule (defaults to linear)."""
 
@@ -1247,26 +1240,34 @@ def polynomial_schedule(
 
 def construct_schedule(
     name: str,
+    dataset_size: int,
+    train_total_batch_size: int,
+    total_steps: int | None,
+    total_epochs: float | None,
     **kwargs,
 ) -> Callable[[Numeric], Array]:
   """Constructs the actual schedule from its name and extra kwargs."""
 
-  if name == "fixed":
-    return functools.partial(fixed_schedule, **kwargs)
-  elif name == "imagenet_sgd":
-    return functools.partial(imagenet_sgd_schedule, **kwargs)
-  elif name == "kfac_resnet50":
-    return functools.partial(kfac_resnet50_schedule, **kwargs)
-  elif name == "cosine":
-    return functools.partial(cosine_schedule, **kwargs)
-  elif name == "stepwise":
-    return functools.partial(stepwise_schedule, **kwargs)
-  elif name == "exponential_decay":
-    return functools.partial(exponential_decay_schedule, **kwargs)
-  elif name == "polynomial":
-    return functools.partial(polynomial_schedule, **kwargs)
-  else:
+  name_to_ctor = {
+      "fixed": fixed_schedule,
+      "imagenet_sgd": imagenet_sgd_schedule,
+      "kfac_resnet50": kfac_resnet50_schedule,
+      "cosine": cosine_schedule,
+      "stepwise": stepwise_schedule,
+      "exponential_decay": exponential_decay_schedule,
+      "polynomial": polynomial_schedule,
+  }
+
+  if name not in name_to_ctor:
     raise NotImplementedError(name)
+
+  return lambda *a, **kw: kfac_jax.utils.call_func_with_conditional_kwargs(
+      functools.partial(name_to_ctor[name], *a, **(kw | kwargs)),
+      dataset_size=dataset_size,
+      train_total_batch_size=train_total_batch_size,
+      total_steps=total_steps,
+      total_epochs=total_epochs,
+      )
 
 
 def kfac_bn_registration_kwargs(bn_registration: str) -> Mapping[
