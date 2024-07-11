@@ -491,7 +491,7 @@ class SupervisedExperiment(abc.ABC):
     if self._use_polyak_avg_with_decay_factor is not None:
 
       if (self._log_train_stats_with_polyak_avg_every_n_steps and (
-          self._python_step-1 %
+          (self._python_step + 1) %
           self._log_train_stats_with_polyak_avg_every_n_steps == 0)):
 
         assert self._params_polyak is not None
