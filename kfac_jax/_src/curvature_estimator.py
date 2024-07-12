@@ -1503,13 +1503,13 @@ class BlockDiagonalCurvature(
 
           if estimation_mode == "fisher_curvature_prop":
             shape = loss.fisher_factor_inner_shape
-            random_b = jax.random.bernoulli(key, shape=shape)
-            vjp_vec.append(loss.multiply_fisher_factor(random_b * 2.0 - 1.0))
+            random_sign = jax.random.rademacher(key, shape=shape)
+            vjp_vec.append(loss.multiply_fisher_factor(random_sign))
 
           else:
             shape = loss.ggn_factor_inner_shape
-            random_b = jax.random.bernoulli(key, shape=shape)
-            vjp_vec.append(loss.multiply_ggn_factor(random_b * 2.0 - 1.0))
+            random_sign = jax.random.rademacher(key, shape=shape)
+            vjp_vec.append(loss.multiply_ggn_factor(random_sign))
 
         return self._update_blocks(
             losses_vjp(tuple(vjp_vec)),
