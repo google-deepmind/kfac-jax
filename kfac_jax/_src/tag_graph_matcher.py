@@ -788,7 +788,7 @@ def find_layer_tags_and_patterns(
 
 def read_env(
     env: dict[jax.core.Var, T],
-    variables: list[jax.core.Literal | jax.core.Var],
+    variables: list[jax.core.Atom],
 ) -> list[T]:
   """Reads from the variable-to-array environment during tracing."""
   result = []

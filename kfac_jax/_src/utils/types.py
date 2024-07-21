@@ -24,7 +24,7 @@ PRNGKey = Array
 Scalar = float | int
 Numeric = Array | Scalar
 Shape = tuple[int, ...]
-DType = jnp.dtype
+DType = jax.typing.DTypeLike
 PyTree = T | Sequence["PyTree[T]"] | Mapping[str, "PyTree[T]"]
 ArrayTree = PyTree[Array]
 TArrayTree = TypeVar("TArrayTree", bound=ArrayTree)
