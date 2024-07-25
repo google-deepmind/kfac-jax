@@ -79,10 +79,6 @@ CurvatureBlockCtor = Callable[
 ]
 StateType = TypeVar("StateType")
 
-# Special global variables
-_ESTIMATION_MODES = ("fisher_gradients", "fisher_empirical", "fisher_exact",
-                     "fisher_curvature_prop", "ggn_exact", "ggn_curvature_prop")
-
 _DEFAULT_TAG_TO_BLOCK_CTOR: dict[str, CurvatureBlockCtor] = dict(
     dense=curvature_blocks.DenseTwoKroneckerFactored,
     conv2d=curvature_blocks.Conv2DTwoKroneckerFactored,
@@ -642,9 +638,10 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         calling :func:`~CurvatureEstimator.update_curvature_matrix_estimate`.
     """
 
-    if default_estimation_mode not in _ESTIMATION_MODES:
-      raise ValueError("Unrecognised default_estimation_mode "
-                       f"{default_estimation_mode}.")
+    if default_estimation_mode not in self.valid_estimation_modes:
+      raise ValueError(
+          f"Unsupported estimation mode: {default_estimation_mode}. This class "
+          f"currently only supports ones in {self.valid_estimation_modes}.")
 
     super().__init__()
 
@@ -661,6 +658,11 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
     """The type of matrix that this estimator is approximating."""
     idx = self.default_estimation_mode.index("_")
     return self.default_estimation_mode[:idx]
+
+  @property
+  @abc.abstractmethod
+  def valid_estimation_modes(self) -> tuple[str, ...]:
+    """The valid estimation modes for this estimator."""
 
   @property
   @abc.abstractmethod
@@ -845,33 +847,8 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         used for the estimation process. Should have the same structure as the
         argument ``func_args`` passed in the constructor.
       estimation_mode: The type of curvature estimator to use. By default
-        (e.g. if ``None``) will use ``self.default_estimation_mode``. One of:
-
-        * fisher_gradients - the basic estimation approach from the original
-          K-FAC paper.
-
-        * fisher_curvature_prop - method which estimates the Fisher using
-          self-products of random 1/-1 vectors times "half-factors" of the
-          Fisher, as described `here <https://arxiv.org/abs/1206.6464>`__.
-
-        * fisher_exact - is the obvious generalization of Curvature
-          Propagation to compute the exact Fisher (modulo any additional
-          diagonal or Kronecker approximations) by looping over one-hot vectors
-          for each coordinate of the output instead of using 1/-1 vectors. It is
-          more expensive to compute than the other three options by a factor
-          equal to the output dimension, roughly speaking.
-
-        * fisher_empirical - computes the 'empirical' Fisher information
-          matrix (which uses the data's distribution for the targets, as
-          opposed to the true Fisher which uses the model's distribution) and
-          requires that each registered loss have specified targets.
-
-        * ggn_curvature_prop - Analogous to fisher_curvature_prop, but
-          estimates the Generalized Gauss-Newton matrix (GGN).
-
-        * ggn_exact - Analogous to fisher_exact, but estimates the Generalized
-          Gauss-Newton matrix (GGN).
-
+        (e.g. if ``None``) will use ``self.default_estimation_mode``. Must be
+        one of ``self.valid_estimation_modes``.
     Returns:
       The updated state.
     """
@@ -926,7 +903,34 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
 
 class BlockDiagonalCurvature(
     CurvatureEstimator["BlockDiagonalCurvature.State"]):
-  """Block diagonal curvature estimator class."""
+  """Block diagonal curvature estimator class.
+
+    Supports for the following estimation modes:
+      * fisher_gradients - the basic estimation approach from the original
+        K-FAC paper.
+
+      * fisher_curvature_prop - method which estimates the Fisher using
+        self-products of random 1/-1 vectors times "half-factors" of the
+        Fisher, as described `here <https://arxiv.org/abs/1206.6464>`__.
+
+      * fisher_exact - is the obvious generalization of Curvature
+        Propagation to compute the exact Fisher (modulo any additional
+        diagonal or Kronecker approximations) by looping over one-hot vectors
+        for each coordinate of the output instead of using 1/-1 vectors. It is
+        more expensive to compute than the other three options by a factor
+        equal to the output dimension, roughly speaking.
+
+      * fisher_empirical - computes the 'empirical' Fisher information
+        matrix (which uses the data's distribution for the targets, as
+        opposed to the true Fisher which uses the model's distribution) and
+        requires that each registered loss have specified targets.
+
+      * ggn_curvature_prop - Analogous to fisher_curvature_prop, but
+        estimates the Generalized Gauss-Newton matrix (GGN).
+
+      * ggn_exact - Analogous to fisher_exact, but estimates the Generalized
+        Gauss-Newton matrix (GGN).
+  """
 
   @utils.register_state_class
   class State(utils.State):
@@ -1020,6 +1024,12 @@ class BlockDiagonalCurvature(
 
     self._num_samples = num_samples
     self._should_vmap_samples = should_vmap_samples
+
+  @property
+  def valid_estimation_modes(self) -> tuple[str, ...]:
+    """The valid estimation modes for this estimator."""
+    return ("fisher_gradients", "fisher_empirical", "fisher_exact",
+            "fisher_curvature_prop", "ggn_exact", "ggn_curvature_prop")
 
   def _check_finalized(self):
     if not self.finalized:
@@ -1303,9 +1313,7 @@ class BlockDiagonalCurvature(
           make_thunk(block, block_state, block_vector, block_identity_weight))
 
     if self._distributed_multiplies and pmap_axis_name is not None:
-
       result = utils.distribute_thunks(thunks, pmap_axis_name)
-
     else:
       result = tuple(thunk() for thunk in thunks)
 
@@ -1663,6 +1671,13 @@ class BlockDiagonalCurvature(
         synced=state.synced,
         blocks_states=new_states,
     )
+
+  def undamped_diagonal(self, state: State) -> utils.Params:
+    result = tuple(
+        block.undamped_diagonal(block_state)
+        for block, block_state in zip(self.blocks, state.blocks_states))
+
+    return self.blocks_vectors_to_params_vector(result)
 
   @utils.auto_scope_method
   def to_diagonal_block_dense_matrix(self, state: State) -> tuple[Array, ...]:

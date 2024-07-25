@@ -547,12 +547,21 @@ class CurvatureBlock(utils.Finalizable):
 
   @utils.auto_scope_method
   def to_dense_matrix(self, state: State) -> Array:
-    """Returns a dense representation of the approximate curvature matrix."""
+    """Returns a dense representation of the curvature matrix."""
     return self.scale(state, False) * self._to_dense_unscaled(state)
 
   @abc.abstractmethod
   def _to_dense_unscaled(self, state: State) -> Array:
     """A dense representation of the curvature, ignoring ``self.scale``."""
+
+  def undamped_diagonal(self, state: State) -> tuple[Array, ...]:
+    """Returns the diagonal of the undamped curvature."""
+    return utils.scalar_mul(self._undamped_diagonal_unscaled(state),
+                            self.scale(state, False))
+
+  def _undamped_diagonal_unscaled(self, state: State) -> tuple[Array, ...]:
+    """Returns the diagonal of the undamped curvature, ignoring ``self.scale``."""
+    raise NotImplementedError()
 
   def norm(self, state: State, norm_type: str) -> Numeric:
     """Computes the norm of the curvature block, according to ``norm_type``."""
@@ -1042,6 +1051,10 @@ class Full(CurvatureBlock, abc.ABC):
 
     return utils.psd_matrix_norm(state.matrix.value, norm_type=norm_type)
 
+  def _undamped_diagonal_unscaled(self, state: State) -> tuple[Array, ...]:
+    diag_vec = jnp.diag(state.matrix.value)
+    return self.single_vector_to_parameters_list(diag_vec)
+
 
 class KroneckerFactored(CurvatureBlock, abc.ABC):
   """An abstract class for approximating the block with a Kronecker product."""
@@ -1506,7 +1519,13 @@ class NaiveFull(Full):
 
     tangents = jnp.concatenate(params_tangents_flattened, axis=1)
 
-    stats = jnp.einsum("ay,az->yz", tangents, tangents) / batch_size
+    if jnp.iscomplexobj(tangents):
+      stats = (
+          jnp.einsum("ay,az->yz", tangents.real, tangents.real)
+          - jnp.einsum("ay,az->yz", tangents.imag, tangents.imag)) / batch_size
+    else:
+      stats = jnp.einsum("ay,az->yz", tangents, tangents) / batch_size
+
     state.matrix.update(stats, ema_old, ema_new)
 
     return state
