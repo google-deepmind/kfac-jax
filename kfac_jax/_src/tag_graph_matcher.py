@@ -209,10 +209,13 @@ class GraphMatcherComparator:
       equation2: JaxprEqn,
   ) -> bool:
     """Returns whether the two equations are considered equivalent."""
+
     if equation1.primitive.name != equation2.primitive.name:
       return False
+
     equivalence_rule = self.special_eqn_equivalence_rules.get(
         equation1.primitive.name)
+
     if equivalence_rule is not None:
       return equivalence_rule(equation1, equation2)
 
@@ -571,8 +574,10 @@ def match_equations(
     in the graph. Otherwise, returns the full match of the pattern onto the
     graph, in terms of a variable to variable mapping.
   """
+
   # Copy the variables mapping
   current_variables_map = dict(current_variables_map)
+
   def add_vars_if_possible(
       eqn_vars: Sequence[Var],
       graph_vars: Sequence[Var]
@@ -596,47 +601,59 @@ def match_equations(
       current variables map.
     """
     for var1, var2 in zip(eqn_vars, graph_vars):
+
       if (var1 in param_variables and var2 not in graph.params_vars or
           var1 not in param_variables and var2 in graph.params_vars or
           (isinstance(var2, jax.core.Literal) and var1 not in input_vars)):
         return False
+
     current_variables_map.update(zip(eqn_vars, graph_vars))
+
     return True
 
   # Loop over all remaining equations to match
   for i, eqn in enumerate(reversed_eqns_to_match):
+
     assert all(v in current_variables_map for v in eqn.outvars)
 
     # Retrieve the graph equation, whose output currently corresponds to the
     # first output variable of the pattern equation.
     first_output_var = current_variables_map[eqn.outvars[0]]
     graph_eqn = graph.var_to_creation_op.get(first_output_var)
+
     if graph_eqn is None:
       assert first_output_var in (graph.jaxpr.invars + graph.jaxpr.constvars)
       # Clearly the pattern equation is not an input or parameter
       return None
 
     assert isinstance(graph_eqn, JaxprEqn)
+
     # For equations with more than one output, make sure all output variables
     # in the graph are generated from the same graph equation.
     for v in eqn.outvars[1:]:
       if graph_eqn != graph.var_to_creation_op.get(current_variables_map[v]):
         return None
+
     # Check that the graph and pattern equation are equivalent
     if not graph_matcher_rules.are_equivalent(graph_eqn, eqn):
       return None
+
     # Sanity check
     assert len(eqn.invars) == len(graph_eqn.invars)
 
     if eqn.primitive.name in graph_matcher_rules.commutative_ops_names:
+
       # For commutative ops we search through all possible pair alignments.
       # This requires a recursive solution, on top of the iterative one.
       results = []
       for permutation in itertools.permutations(range(len(eqn.invars))):
+
         pattern_vars = [eqn.invars[j] for j in permutation]
+
         # Check if this ordering is feasible
         if not add_vars_if_possible(pattern_vars, graph_eqn.invars):
           continue
+
         # Recursively continue by trying to match the remaining equations.
         candidate_map = match_equations(
             graph=graph,
@@ -646,11 +663,13 @@ def match_equations(
             param_variables=param_variables,
             graph_matcher_rules=graph_matcher_rules,
         )
+
         if candidate_map is not None:
           # Sanity check
           assert all(candidate_map[p] in graph.params_vars
                      for p in param_variables)
           results.append(candidate_map)
+
       # Return appropriately
       if len(results) > 1:
         raise ValueError("Found multiple branch matches in pattern at "
@@ -663,6 +682,7 @@ def match_equations(
       # In the case where we can't update the current variables map directly
       # return
       return None
+
   return current_variables_map
 
 
@@ -687,9 +707,11 @@ def match_pattern(
     The variable to variable mapping between the pattern and graph variable,
     if the pattern can be matched to the root equation, otherwise ``None``.
   """
+
   # Check the number of output variables match.
   if len(pattern.jaxpr.outvars) != len(root_eqn.outvars):
     return None
+
   # Set the current variables mapping to the output variables and the try to
   # check the match from there.
   match_variables_map = match_equations(
@@ -712,6 +734,7 @@ def match_pattern(
       creation_op = graph.var_to_creation_op[v]
       assert isinstance(creation_op, JaxprEqn)
       graph_eqns.append(creation_op)
+
   return GraphMatch(
       pattern=pattern,
       variables_map=match_variables_map,
@@ -1365,6 +1388,7 @@ def _auto_register_tags(
     register_only_until_losses: bool,
 ) -> tuple[JaxprGraph, Sequence[TagLocation]]:
   """Internal function for automatic registration of layer tags."""
+
   higher_counters = {
       "cond": 0,
       "while": 0,
@@ -1642,6 +1666,9 @@ def auto_register_tags(
   )
   func.print_parameter_tags()
 
+  # TODO(jamesmartens,botev): we should probably instead auto-register generic
+  # for multiple matches in the scanner, or when there are any unmatched uses
+  # (even if one of the uses is matched).
   if not allow_multiple_registrations:
     func.check_multiple_registrations()
 

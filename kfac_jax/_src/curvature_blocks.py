@@ -277,7 +277,8 @@ class CurvatureBlock(utils.Finalizable):
     return 1.0
 
   def __str__(self):
-    return f"{self.__class__.__name__}[{self.name}]({self.parameters_shapes!r})"
+    return (f"{self.__class__.__name__}, tag name: {self.name}, "
+            f"params shapes: {self.parameters_shapes!r}")
 
   @utils.auto_scope_method
   def init(
@@ -1104,6 +1105,10 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       raise NotImplementedError()
 
     super().__init__(layer_tag_eq)
+
+  def __str__(self):
+    return (f"{self.__class__.__name__}(axis_groups={self.axis_groups}), "
+            f"tag name: {self.name}, params shapes: {self.parameters_shapes!r}")
 
   @abc.abstractmethod
   def parameters_shaped_list_to_array(

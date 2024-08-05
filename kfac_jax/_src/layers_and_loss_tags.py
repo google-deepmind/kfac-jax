@@ -206,11 +206,13 @@ def loss_eqn_construct_loss(
 
 def loss_eqn_class_name(eqn: jax.core.JaxprEqn) -> str:
   """The name of the underlying `~LossFunction` class."""
+
   if not isinstance(eqn.primitive, LossTag):
     raise ValueError("Primitive must be a LossTag.")
 
   meta: LossMetaData[T] = eqn.params.get("meta")
   assert meta is not None and isinstance(meta, LossMetaData)
+
   return meta.loss_class.__name__
 
 
@@ -220,25 +222,32 @@ def get_and_verify_layer_meta(
     err_suffix: str = "",
 ) -> LayerMetaData:
   """Verifies that the number of arguments matches expectations."""
+
   meta = params.get("meta")
+
   if meta is None or not isinstance(meta, LayerMetaData):
     raise ValueError(f"Meta must be LayerMetaData, but found {meta=}.")
+
   n = len(args)
+
   for i in meta.inputs_index:
     if i >= n:
       raise ValueError(
           f"Meta data has {meta.input_index=}, but only {n} "
           f"arguments passed for {err_suffix}.")
+
   for i in meta.outputs_index:
     if i >= n:
       raise ValueError(
           f"Meta data has {meta.output_index=}, but only {n} "
           f"arguments passed for {err_suffix}.")
+
   for i in meta.params_index:
     if i >= n:
       raise ValueError(
           f"Meta data has {meta.params_index=}, but only {n} "
           f"arguments passed for {err_suffix}.")
+
   return meta
 
 
@@ -339,6 +348,7 @@ def layer_eqn_data(  # pytype: disable=invalid-annotation
     eqn: jax.core.JaxprEqn,
     raise_an_error: bool = True,
 ) -> LayerData[jax.core.Var]:
+
   if isinstance(eqn.primitive, LayerTag):
     return eqn.primitive.layer_data(eqn.invars, eqn.params, str(eqn))
 
