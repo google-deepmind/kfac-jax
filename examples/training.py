@@ -526,10 +526,11 @@ class SupervisedExperiment(abc.ABC):
               )
           )
 
+  def _post_param_update_processing(self, global_step: Array):
+    pass
+
   def train_step(self, global_step: Array, rng: PRNGKey) -> dict[str, Numeric]:
     """Performs a single training step."""
-
-    del global_step  # Unused
 
     # Perform optimizer step
     result = self.optimizer.step(
@@ -546,6 +547,8 @@ class SupervisedExperiment(abc.ABC):
       self._params, self._opt_state, self._state, stats = result
     else:
       self._params, self._opt_state, stats = result
+
+    self._post_param_update_processing(global_step)
 
     self._maybe_update_polyak_average_and_stats(rng, stats)
 
