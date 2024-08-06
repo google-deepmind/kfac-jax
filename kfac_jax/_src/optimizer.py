@@ -33,6 +33,7 @@ Params = utils.Params
 Batch = utils.Batch
 FuncState = Any
 FuncAux = utils.FuncAux
+Scalar = utils.Scalar
 
 ScheduleType = (
     Callable[[Numeric, Numeric | None], Numeric] |
@@ -146,6 +147,7 @@ class Optimizer(utils.WithStagedMethods):
       num_estimator_samples: int = 1,
       should_vmap_estimator_samples: bool = False,
       norm_to_scale_identity_weight_per_block: str | None = None,
+      precon_power: Scalar = -1.0,
   ):
     """Initializes the K-FAC optimizer with the provided settings.
 
@@ -377,6 +379,10 @@ class Optimizer(utils.WithStagedMethods):
         in utils/math.py for the definition of these. Note that this will not
         affect the exact quadratic model that is used as part of the "adaptive"
         learning rate, momentum, and damping methods. (Default: None)
+      precon_power: The matrix power to use when computing the preconditioner.
+        K-FAC use -1 by default, but ``kfac_jax`` can simulate other optimizers
+        like RMSProp by using -0.5 (along with appropriate changes to
+        ``layer_tag_to_block_ctor`` and  ``estimation_mode``). (Default: -1)
     """
 
     super().__init__(
@@ -461,6 +467,8 @@ class Optimizer(utils.WithStagedMethods):
         norm_to_scale_identity_weight_per_block
     )
 
+    self._precon_power = precon_power
+
     self._params_index = 0
     batch_index = int(value_func_has_state + value_func_has_rng + 1)
 
@@ -524,16 +532,16 @@ class Optimizer(utils.WithStagedMethods):
     return self._damping_adaptation_decay ** self._damping_adaptation_interval
 
   @property
-  def _exact_powers_to_cache(self) -> int | Sequence[int] | None:
+  def _exact_powers_to_cache(self) -> Numeric | Sequence[Numeric] | None:
     if self._use_exact_inverses and self._use_cached_inverses:
-      return -1
+      return self._precon_power
     else:
       return None
 
   @property
-  def _approx_powers_to_cache(self) -> int | Sequence[int] | None:
+  def _approx_powers_to_cache(self) -> Numeric | Sequence[Numeric] | None:
     if not self._use_exact_inverses and self._use_cached_inverses:
-      return -1
+      return self._precon_power
     else:
       return None
 
@@ -809,10 +817,11 @@ class Optimizer(utils.WithStagedMethods):
   ) -> Params:
     """Computes the preconditioned gradient."""
 
-    return self.estimator.multiply_inverse(
+    return self.estimator.multiply_matpower(
         state=state.estimator_state,
         parameter_structured_vector=grads,
         identity_weight=(self.l2_reg + damping) * self._precon_damping_mult,
+        power=self._precon_power,
         exact_power=self._use_exact_inverses,
         use_cached=self._use_cached_inverses,
         pmap_axis_name=self.pmap_axis_name,
