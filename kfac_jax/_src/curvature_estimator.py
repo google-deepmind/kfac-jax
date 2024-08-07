@@ -624,7 +624,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       func: utils.Func,
       params_index: int = 0,
       batch_index: int = 1,
-      default_estimation_mode: str = "fisher_gradients",
+      default_estimation_mode: str = "ggn_curvature_prop",
   ):
     """Initializes the CurvatureEstimator instance.
 
@@ -968,7 +968,7 @@ class BlockDiagonalCurvature(
       func: The model function, which should have at least one registered loss.
       default_estimation_mode: The estimation mode which to use by default when
         calling ``self.update_curvature_matrix_estimate``. If ``None`` this will
-        be ``'fisher_gradients'``.
+        be ``'ggn_curvature_prop'``.
       layer_tag_to_block_ctor: An optional dict mapping tags to specific classes
         of block approximations, which to override the default ones.
       index_to_block_ctor: An optional dict mapping a specific block parameter
@@ -1000,7 +1000,7 @@ class BlockDiagonalCurvature(
 
     super().__init__(
         func=func,
-        default_estimation_mode=default_estimation_mode or "fisher_gradients",
+        default_estimation_mode=default_estimation_mode or "ggn_curvature_prop",
         **kwargs,
     )
 
@@ -1759,7 +1759,7 @@ class ExplicitExactCurvature(BlockDiagonalCurvature):
 
     super().__init__(
         func=retagged_func,
-        default_estimation_mode=default_estimation_mode or "fisher_exact",
+        default_estimation_mode=default_estimation_mode or "ggn_curvature_prop",
         layer_tag_to_block_ctor=layer_tag_to_block_ctor,
         auto_register_tags=False,
         **kwargs,
