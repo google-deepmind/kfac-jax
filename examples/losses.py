@@ -30,8 +30,8 @@ Params = kfac_jax.utils.Params
 
 def l2_regularizer(
     params: Params,
-    haiku_exclude_batch_norm: bool,
-    haiku_exclude_biases: bool,
+    haiku_exclude_batch_norm: bool = False,
+    haiku_exclude_biases: bool = False,
 ) -> Array:
   """Computes an L2 regularizer."""
   assert isinstance(params, Mapping)
