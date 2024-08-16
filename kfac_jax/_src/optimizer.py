@@ -292,7 +292,7 @@ class Optimizer(utils.WithStagedMethods):
         matrix. See the documentation for :class:`~CurvatureEstimator` for a
         detailed description of the possible options. If ``None`` will use
         default estimation_mode mode of the used CurvatureEstimator subclass,
-        which is typically "fisher_gradients". (Default: ``None``)
+        which is typically "ggn_curvature_prop". (Default: ``None``)
       custom_estimator_ctor: Optional constructor for subclass of
         :class:`~BlockDiagonalCurvature`. If specified, the optimizer will use
         this conastructor instead of the default
