@@ -523,7 +523,7 @@ class TestEstimator(parameterized.TestCase):
     self.assertLen(block_eigenvalues, estimator.num_blocks)
     for block_state, eigs, scale in zip(
         cached_state.blocks_states, block_eigenvalues, scales):
-      if isinstance(block_state, kfac_jax.TwoKroneckerFactored.State):
+      if isinstance(block_state, kfac_jax.KroneckerFactored.State):
         in_eigs, _ = kfac_jax.utils.safe_psd_eigh(
             block_state.factors[1].value)
         out_eigs, _ = kfac_jax.utils.safe_psd_eigh(

@@ -46,5 +46,62 @@ class TestStableSqrt(parameterized.TestCase):
     np.testing.assert_allclose(dx, expected_dx)
 
 
+class TestRearrage(parameterized.TestCase):
+  """Test class for the rearrange function."""
+
+  @parameterized.parameters(
+      dict(
+          shape=[32],
+          spec="b->b1",
+          transpose_order=[0],
+          output_shape=[32, 1],
+      ),
+      dict(
+          shape=[32, 30, 40, 3],
+          spec="b h w c -> b h w c",
+          transpose_order=[0, 1, 2, 3],
+          output_shape=[32, 30, 40, 3],
+      ),
+      dict(
+          shape=[32, 30, 40, 3],
+          spec="b h w c -> (b h) w c",
+          transpose_order=[0, 1, 2, 3],
+          output_shape=[960, 40, 3],
+      ),
+      dict(
+          shape=[32, 30, 40, 3],
+          spec="b h w c -> h (b w) c",
+          transpose_order=[1, 0, 2, 3],
+          output_shape=[30, 1280, 3],
+      ),
+      dict(
+          shape=[32, 30, 40, 3],
+          spec="b h w c -> b c h w",
+          transpose_order=[0, 3, 1, 2],
+          output_shape=[32, 3, 30, 40],
+      ),
+      dict(
+          shape=[32, 30, 40, 3],
+          spec="b h w c -> b (c h w)",
+          transpose_order=[0, 3, 1, 2],
+          output_shape=[32, 3600],
+      ),
+  )
+  def test_stable_sqrt(
+      self,
+      shape: list[int],
+      spec: str,
+      transpose_order: list[int],
+      output_shape: list[int],
+  ):
+    """Tests calculation of the stable square root."""
+    rng = jax.random.PRNGKey(0)
+    x = jax.random.normal(rng, shape)
+    y_target = jnp.transpose(x, transpose_order).reshape(output_shape)
+    y = kfac_jax.utils.rearrange(x, spec)
+
+    np.testing.assert_array_equal(y, y_target)
+
+
 if __name__ == "__main__":
   absltest.main()

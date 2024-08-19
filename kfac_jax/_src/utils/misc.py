@@ -99,6 +99,49 @@ def first_dim_is_size(size: int, *args: Array) -> bool:
   return all(arg.shape[0] == size for arg in args)
 
 
+def rearrange(x: Array, spec: str) -> Array:
+  """Rearranges the array according to the given spec, equivalent to https://einops.rocks/api/rearrange."""
+
+  in_str, out_str = spec.split("->")
+  in_str = in_str.replace(" ", "")
+  out_str = out_str.replace(" ", "")
+
+  assert len(in_str) == x.ndim
+
+  # Reorder
+  order = []
+  for axis in out_str.replace("(", "").replace(")", ""):
+    if axis != "1":
+      order.append(in_str.index(axis))
+  x = jnp.transpose(x, order)
+
+  assert len(order) == x.ndim
+
+  # Reshape
+  shape = []
+  open_bracket = False
+  size = None
+  i = 0
+  for s in out_str:
+    if s == "1":
+      shape.append(1)
+    elif s == "(":
+      size = 1
+      open_bracket = True
+    elif s == ")":
+      open_bracket = False
+      shape.append(size)
+      size = None
+    elif open_bracket:
+      size *= x.shape[i]
+      i += 1
+    else:
+      shape.append(x.shape[i])
+      i += 1
+
+  return x.reshape(shape)
+
+
 class State(abc.ABC):
   """Abstract class for state classes."""
 

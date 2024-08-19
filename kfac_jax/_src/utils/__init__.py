@@ -61,6 +61,7 @@ replace_char = misc.replace_char
 call_func_with_conditional_kwargs = misc.call_func_with_conditional_kwargs
 Finalizable = misc.Finalizable
 State = misc.State
+rearrange = misc.rearrange
 del misc
 
 # parallel

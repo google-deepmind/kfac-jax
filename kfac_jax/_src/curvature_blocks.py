@@ -194,7 +194,7 @@ class CurvatureBlock(utils.Finalizable):
 
     output_vars = tags.layer_eqn_data(self._layer_tag_eq).outputs
 
-    return jax.tree_util.tree_map(lambda x: x.aval.shape, output_vars)
+    return jax.tree.map(lambda x: x.aval.shape, output_vars)
 
   @property
   def inputs_shapes(self) -> tuple[Shape, ...]:
@@ -202,12 +202,12 @@ class CurvatureBlock(utils.Finalizable):
 
     input_vars = tags.layer_eqn_data(self._layer_tag_eq).inputs
 
-    return jax.tree_util.tree_map(lambda x: x.aval.shape, input_vars)
+    return jax.tree.map(lambda x: x.aval.shape, input_vars)
 
   @property
   def parameters_shapes(self) -> tuple[Shape, ...]:
     """The shapes of the parameter variables of the block's tag equation."""
-    return tuple(jax.tree_util.tree_map(
+    return tuple(jax.tree.map(
         lambda x: tuple(x.aval.shape), self.parameter_variables))
 
   @property
@@ -639,14 +639,14 @@ class ScaledIdentity(CurvatureBlock):
     identity_weight = identity_weight + scale
 
     if power == 1:
-      return jax.tree_util.tree_map(lambda x: identity_weight * x, vector)
+      return jax.tree.map(lambda x: identity_weight * x, vector)
 
     elif power == -1:
-      return jax.tree_util.tree_map(lambda x: x / identity_weight, vector)
+      return jax.tree.map(lambda x: x / identity_weight, vector)
 
     else:
       identity_weight = jnp.power(identity_weight, power)
-      return jax.tree_util.tree_map(lambda x: identity_weight * x, vector)
+      return jax.tree.map(lambda x: identity_weight * x, vector)
 
   def _eigenvalues_unscaled(
       self,
@@ -1058,7 +1058,26 @@ class Full(CurvatureBlock, abc.ABC):
 
 
 class KroneckerFactored(CurvatureBlock, abc.ABC):
-  """An abstract class for approximating the block with a Kronecker product."""
+  """An abstract class for approximating the block with a Kronecker product.
+
+  The constructor takes two special arguments:
+    - parameters_specs: A list, where each element specifies for each
+      parameter a "rearrange string". This is in the format `abc->b(ca)`
+      similar to `einops.rearrange`.
+    - parameters_concat_axis: The axis along which the parameters will be
+      concatenated to form a single array after each parameter has been
+      rearranged according to its "rearrange string".
+
+  The above implies that:
+    - All parameters must have the same rank after they have been rearranged.
+    - All parameters must have the same size along all axes except the
+      concatenation axis after they have been rearranged.
+
+  By default, each parameter is rearanged to a matrix, by merging all dimensions
+  except the last one. If a parameter is a vector (rank 1), it is rearranged to
+  a matrix with the first dimension being 1. Then concatenation is done along
+  axis=0.
+  """
 
   @utils.register_state_class
   class State(CurvatureBlock.State):
@@ -1085,81 +1104,87 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
   def __init__(
       self,
       layer_tag_eq: tags.LayerTagEqn,
-      axis_groups: Sequence[Sequence[int]] | None = None,
+      parameters_specs: Sequence[str] | None = None,
+      parameters_concat_axis: int = 0,
   ):
 
     # Even though the superclass constructor will set this later, we need to do
     # it now since it's used below.
     self._layer_tag_eq = layer_tag_eq
 
-    if axis_groups is None:
-      self.axis_groups = tuple((i,) for i in range(self.array_ndim))
+    if parameters_specs is None:
+      parameters_specs = []
+
+      for shape in self.parameters_shapes:
+
+        if len(shape) == 1:
+          parameters_specs.append("a -> 1a")
+
+        else:
+          in_str = _ALPHABET[:len(shape)]
+          out_str = f"({in_str[:-1]}){in_str[-1]}"
+          parameters_specs.append(f"{in_str} -> {out_str}")
+
     else:
-      self.axis_groups = tuple(tuple(g) for g in axis_groups)
+      assert len(parameters_specs) == self.number_of_parameters
 
-    all_axis = sum(self.axis_groups, ())
-
-    # Make sure the axis groups are sorted
-    if sorted(all_axis) != list(range(min(all_axis), max(all_axis) + 1)):
-      # We currently don't support out of order axis groups
-      raise NotImplementedError()
+    self.parameters_specs = parameters_specs
+    self.parameters_concat_axis = parameters_concat_axis
 
     super().__init__(layer_tag_eq)
 
   def __str__(self):
-    return (f"{self.__class__.__name__}(axis_groups={self.axis_groups}), "
-            f"tag name: {self.name}, params shapes: {self.parameters_shapes!r}")
+    return (
+        f"{self.__class__.__name__}(parameter_specs={self.parameters_specs}, "
+        f"parameters_concat_axis={self.parameters_concat_axis}), "
+        f"tag name: {self.name}, params shapes: {self.parameters_shapes!r}"
+    )
 
-  @abc.abstractmethod
   def parameters_shaped_list_to_array(
       self,
       parameters_shaped_list: Sequence[Array],
   ) -> Array:
-    """Combines all parameters to a single non axis grouped array."""
+    """Combines all parameters to a single array."""
+    values = []
+    for p, spec in zip(
+        parameters_shaped_list,
+        self.parameters_specs,
+        strict=True,
+    ):
+      values.append(utils.rearrange(p, spec))
 
-  @abc.abstractmethod
+    return jnp.concatenate(values, axis=self.parameters_concat_axis)
+
   def array_to_parameters_shaped_list(self, array: Array) -> tuple[Array, ...]:
     """An inverse transformation of ``self.parameters_shaped_list_to_array``."""
+    parameters_list = []
+    n = 0
+    index = [slice(None)] * array.ndim
+
+    for shape, spec in zip(
+        self.parameters_shapes,
+        self.parameters_specs,
+        strict=True,
+    ):
+      zero = utils.rearrange(jnp.zeros(shape), spec)
+      d = zero.shape[self.parameters_concat_axis]
+      index[self.parameters_concat_axis] = slice(n, n + d)
+      p = array[tuple(index)]
+      parameters_list.append(p.reshape(shape))
+      n += d
+
+    return tuple(parameters_list)
 
   @property
   def array_shape(self) -> Shape:
     """The shape of the single non axis grouped array."""
-    avals = [jnp.zeros(v.aval.shape) for v in self.parameter_variables]  # pytype: disable=attribute-error  # always-use-property-annotation
+    avals = [jnp.zeros(shape) for shape in self.parameters_shapes]
     return self.parameters_shaped_list_to_array(avals).shape
 
   @property
   def array_ndim(self) -> int:
     """The number of dimensions of the single non axis grouped array."""
     return len(self.array_shape)
-
-  @property
-  def grouped_array_shape(self) -> Shape:
-    """The shape of the single axis grouped array."""
-    return tuple(
-        utils.product([self.array_shape[i] for i in group])
-        for group in self.axis_groups
-    )
-
-  @property
-  def grouped_array_ndim(self) -> int:
-    """The number of dimensions of the grouped array."""
-    return len(self.grouped_array_shape)
-
-  def parameter_shaped_list_to_grouped_array(
-      self,
-      parameters_shaped_list: Sequence[Array],
-  ) -> Array:
-    """Combines all parameters to a single grouped array."""
-    array = self.parameters_shaped_list_to_array(parameters_shaped_list)
-    return jnp.reshape(array, self.grouped_array_shape)
-
-  def grouped_array_to_parameters_shaped_list(
-      self,
-      grouped_array: Array,
-  ) -> tuple[Array, ...]:
-    """An inverse transformation of ``self.parameter_shaped_list_to_grouped_array``."""
-    array = jnp.reshape(grouped_array, self.array_shape)
-    return self.array_to_parameters_shaped_list(array)
 
   def _init(
       self,
@@ -1172,7 +1197,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
     cache = {}
     factors = []
 
-    for i, d in enumerate(self.grouped_array_shape):
+    for i, d in enumerate(self.array_shape):
 
       factors.append(
           utils.WeightedMovingAverage.zeros_array((d, d), self.dtype)
@@ -1225,9 +1250,9 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       use_cached: bool,
   ) -> tuple[Array, ...]:
 
-    assert len(state.factors) == self.grouped_array_ndim
+    assert len(state.factors) == self.array_ndim
 
-    vector = self.parameter_shaped_list_to_grouped_array(vector)
+    vector = self.parameters_shaped_list_to_array(vector)
 
     if power == 1:
 
@@ -1307,7 +1332,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
       result = utils.kronecker_product_axis_mul_v(factors, vector)
 
-    return self.grouped_array_to_parameters_shaped_list(result)
+    return self.array_to_parameters_shaped_list(result)
 
   def _eigenvalues_unscaled(
       self,
@@ -1315,7 +1340,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       use_cached: bool,
   ) -> Array:
 
-    assert len(state.factors) == self.grouped_array_ndim
+    assert len(state.factors) == self.array_ndim
 
     if use_cached:
       s = [
@@ -1337,13 +1362,13 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       eigenvalues: bool,
   ) -> State:
 
-    assert len(state.factors) == self.grouped_array_ndim
+    assert len(state.factors) == self.array_ndim
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
 
     scale = self.state_dependent_scale(state)
-    factor_scale = jnp.power(scale, 1.0 / len(self.axis_groups))
+    factor_scale = jnp.power(scale, 1.0 / self.array_ndim)
 
     if eigenvalues or exact_powers:
 
@@ -1388,53 +1413,14 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
         utils.psd_matrix_norm(f.value, norm_type=norm_type)
         for f in state.factors)
 
+  def _to_dense_unscaled(self, state: "KroneckerFactored.State") -> Array:
 
-class TwoKroneckerFactored(KroneckerFactored):
-  """A Kronecker factored block for layers with weights and an optional bias."""
-
-  def __init__(
-      self,
-      layer_tag_eq: tags.LayerTagEqn,
-  ):
-    super().__init__(layer_tag_eq, ((0,), (1,)))
-
-  @property
-  def has_bias(self) -> bool:
-    """Whether this layer's equation has a bias."""
-    return len(self.parameter_variables) == 2
-
-  def parameters_shaped_list_to_array(
-      self,
-      parameters_shaped_list: Sequence[Array],
-  ) -> Array:
-
-    for p, s in zip(parameters_shaped_list, self.parameters_shapes):
-      assert p.shape == s
-
-    if self.has_bias:
-      w, b = parameters_shaped_list
-      return jnp.concatenate([w.reshape([-1, w.shape[-1]]), b[None]], axis=0)
-
-    else:
-      # This correctly reshapes the parameters of both dense and conv2d blocks
-      [w] = parameters_shaped_list
-      return w.reshape([-1, w.shape[-1]])
-
-  def array_to_parameters_shaped_list(self, array: Array) -> tuple[Array, ...]:
-
-    if self.has_bias:
-      w, b = array[:-1], array[-1]
-      return w.reshape(self.parameters_shapes[0]), b
-
-    else:
-      return tuple([array.reshape(self.parameters_shapes[0])])
-
-  def _to_dense_unscaled(self, state: KroneckerFactored.State) -> Array:
-
+    # We currently support this only for 2 parameters
     assert 0 < self.number_of_parameters <= 2
     inputs_factor = state.factors[0].value
 
-    if self.has_bias and self.parameters_canonical_order[0] != 0:
+    if (self.number_of_parameters == 2 and
+        self.parameters_canonical_order[0] != 0):
 
       # Permute the matrix according to the parameters canonical order
       inputs_factor = utils.block_permuted(
@@ -1621,7 +1607,7 @@ class DenseFull(Full):
     return state
 
 
-class DenseTwoKroneckerFactored(TwoKroneckerFactored):
+class DenseTwoKroneckerFactored(KroneckerFactored):
   """A :class:`~TwoKroneckerFactored` block specifically for dense layers."""
 
   @utils.auto_scope_method
@@ -1635,6 +1621,7 @@ class DenseTwoKroneckerFactored(TwoKroneckerFactored):
       batch_size: Numeric,
   ) -> KroneckerFactored.State:
     del identity_weight
+    assert 1 <= self.number_of_parameters <= 2
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
@@ -1644,7 +1631,7 @@ class DenseTwoKroneckerFactored(TwoKroneckerFactored):
 
     assert utils.first_dim_is_size(batch_size, x, dy)
 
-    if self.has_bias:
+    if self.number_of_parameters == 2:
       x_one = jnp.ones_like(x[:, :1])
       x = jnp.concatenate([x, x_one], axis=1)
 
@@ -1854,7 +1841,7 @@ class Conv2DFull(Full):
     return state
 
 
-class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
+class Conv2DTwoKroneckerFactored(KroneckerFactored):
   """A :class:`~TwoKroneckerFactored` block specifically for 2D convolution layers."""
 
   def fixed_scale(self) -> Numeric:
@@ -1953,7 +1940,7 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
     input_cov_m = input_cov_m / normalizer
     input_cov_v = input_cov_v / normalizer
 
-    if not self.has_bias:
+    if self.number_of_parameters == 1:
       return input_cov_m
 
     if weighting_array is None:
@@ -1980,14 +1967,15 @@ class Conv2DTwoKroneckerFactored(TwoKroneckerFactored):
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
       self,
-      state: TwoKroneckerFactored.State,
+      state: KroneckerFactored.State,
       estimation_data: tracer.LayerVjpData[Array],
       ema_old: Numeric,
       ema_new: Numeric,
       identity_weight: Numeric,
       batch_size: Numeric,
-  ) -> TwoKroneckerFactored.State:
+  ) -> KroneckerFactored.State:
     del identity_weight
+    assert 1 <= self.number_of_parameters <= 2
 
     # Copy this first since we mutate it later in this function.
     state = state.copy()
