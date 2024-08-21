@@ -123,6 +123,7 @@ kronecker_eigen_basis_axis_mul_v = math.kronecker_eigen_basis_axis_mul_v
 kronecker_product_mul_v = math.kronecker_product_mul_v
 kronecker_eigen_basis_mul_v = math.kronecker_eigen_basis_mul_v
 safe_psd_eigh = math.safe_psd_eigh
+tnt_scale = math.tnt_scale
 loop_and_parallelize_average = math.loop_and_parallelize_average
 psd_matrix_norm = math.psd_matrix_norm
 invert_psd_matrices = math.invert_psd_matrices

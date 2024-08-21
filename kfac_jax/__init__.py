@@ -84,12 +84,16 @@ Full = curvature_blocks.Full
 KroneckerFactored = curvature_blocks.KroneckerFactored
 NaiveDiagonal = curvature_blocks.NaiveDiagonal
 NaiveFull = curvature_blocks.NaiveFull
+NaiveTNT = curvature_blocks.NaiveTNT
 DenseDiagonal = curvature_blocks.DenseDiagonal
 DenseFull = curvature_blocks.DenseFull
 DenseTwoKroneckerFactored = curvature_blocks.DenseTwoKroneckerFactored
+RepeatedDenseKroneckerFactored = curvature_blocks.RepeatedDenseKroneckerFactored
+DenseTNT = curvature_blocks.DenseTNT
 Conv2DDiagonal = curvature_blocks.Conv2DDiagonal
 Conv2DFull = curvature_blocks.Conv2DFull
 Conv2DTwoKroneckerFactored = curvature_blocks.Conv2DTwoKroneckerFactored
+Conv2DTNT = curvature_blocks.Conv2DTNT
 ScaleAndShiftDiagonal = curvature_blocks.ScaleAndShiftDiagonal
 ScaleAndShiftFull = curvature_blocks.ScaleAndShiftFull
 set_max_parallel_elements = curvature_blocks.set_max_parallel_elements
@@ -165,12 +169,16 @@ __all__ = (
     "KroneckerFactored",
     "NaiveDiagonal",
     "NaiveFull",
+    "NaiveTNT",
     "DenseDiagonal",
     "DenseFull",
     "DenseTwoKroneckerFactored",
+    "RepeatedDenseKroneckerFactored",
+    "DenseTNT",
     "Conv2DDiagonal",
     "Conv2DFull",
     "Conv2DTwoKroneckerFactored",
+    "Conv2DTNT",
     "ScaleAndShiftDiagonal",
     "ScaleAndShiftFull",
     "set_max_parallel_elements",

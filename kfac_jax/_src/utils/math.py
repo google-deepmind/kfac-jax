@@ -1001,6 +1001,22 @@ def safe_psd_eigh(
   return jnp.clip(s, a_min=0.0), q
 
 
+def tnt_scale(factors: Sequence[Array]) -> Numeric:
+  """Computes the correct scaling factor for a TNT factorization."""
+
+  if len(factors) == 1:
+    return 1.0
+
+  # These should be the same values
+  zs = jnp.asarray([jnp.trace(factor) for factor in factors])
+
+  # We want to compute geometric_mean(zs) ** -(num_factors - 1)
+
+  mean_log = jnp.mean(jnp.log(zs))
+
+  return jnp.exp(-(len(factors) - 1) * mean_log)
+
+
 def loop_and_parallelize_average(
     func: Callable[..., ArrayTree],
     max_parallel_size: int,
