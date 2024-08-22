@@ -1300,6 +1300,7 @@ def create_optimizer(
     has_aux: bool,
     has_func_state: bool,
     has_rng: bool,
+    model_func_for_estimator: kfac_jax.optimizer.ValueFunc | None,
     dataset_size: int,
     train_total_batch_size: int,
     total_steps: int | None,
@@ -1341,6 +1342,7 @@ def create_optimizer(
         value_func_has_aux=has_aux,
         value_func_has_state=has_func_state,
         value_func_has_rng=has_rng,
+        value_func_for_estimator=model_func_for_estimator,
         multi_device=True,
         **kwargs,
     )

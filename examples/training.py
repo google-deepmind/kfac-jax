@@ -141,12 +141,16 @@ class SupervisedExperiment(abc.ABC):
     has_aux: Whether the model function returns any auxiliary data.
     has_rng: Whether the model function needs a PRNG key.
     has_func_state: Whether the model function has a state.
+    model_func_for_estimator: A function that allows a different
+      computation of the loss of the model for the estimator.
     eval_splits: Evaluation splits of the evaluation dataset loader.
     batch_size: An instance of `ExperimentBatchSizes`.
     init_parameters_func: A function that initializes the parameters and
       optionally the state of the model if it has one.
     params_init: A function that initializes the model parameters.
     model_loss_func: A function that computes the loss for the model.
+    estimator_model_func: The `model_func_for_estimator` with `is_training` set
+      to `True`.
     train_model_func: The `model_loss_func` with `is_training` set to `True`.
     eval_model_func: The `model_loss_func` with `is_training` set to `False`.
     eval_batch: A pmapped version of `self._evaluate_single_batch`.
@@ -163,6 +167,7 @@ class SupervisedExperiment(abc.ABC):
       has_aux: bool,
       has_rng: bool,
       has_func_state: bool,
+      model_func_for_estimator: kfac_jax.optimizer.ValueFunc | None = None,
       eval_splits: tuple[str, ...] = ("train", "test"),
       batch_size_calculator_ctor: BatchSizeCalculatorCtor = BatchSizeCalculator,
   ):
@@ -180,6 +185,8 @@ class SupervisedExperiment(abc.ABC):
       has_aux: Whether the model function returns auxiliary data.
       has_rng: Whether the model function requires an RNG.
       has_func_state: Whether the model function has a state.
+      model_func_for_estimator: A function that allows a different
+        computation of the loss of the model for the estimator.
       eval_splits: Evaluation splits of the evaluation dataset loader.
       batch_size_calculator_ctor: A constructor function to create a batch size
         calculator.
@@ -203,6 +210,10 @@ class SupervisedExperiment(abc.ABC):
 
     self.params_init = jax.pmap(init_parameters_func)
     self.model_loss_func = model_loss_func
+    self.model_func_for_estimator = model_func_for_estimator
+    self.estimator_model_func = functools.partial(
+        self.model_func_for_estimator, is_training=True
+    ) if self.model_func_for_estimator is not None else None
     self.train_model_func = functools.partial(
         self.model_loss_func, is_training=True
     )
@@ -386,6 +397,7 @@ class SupervisedExperiment(abc.ABC):
         has_aux=self.has_aux,
         has_func_state=self.has_func_state,
         has_rng=self.has_rng,
+        model_func_for_estimator=self.estimator_model_func,
         dataset_size=self.dataset_size,
         train_total_batch_size=self.batch_size.train.total,
         total_steps=self.config.training.steps,

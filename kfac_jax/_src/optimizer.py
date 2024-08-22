@@ -99,6 +99,7 @@ class Optimizer(utils.WithStagedMethods):
       value_func_has_aux: bool = False,
       value_func_has_state: bool = False,
       value_func_has_rng: bool = False,
+      value_func_for_estimator: ValueFunc | None = None,
       use_adaptive_learning_rate: bool = False,
       learning_rate_schedule: ScheduleType | None = None,
       use_adaptive_momentum: bool = False,
@@ -212,6 +213,11 @@ class Optimizer(utils.WithStagedMethods):
       value_func_has_rng: Boolean. Specifies whether the provided callable
         ``value_and_grad_func`` additionally takes as input an rng key.
         (Default: ``False``)
+      value_func_for_estimator: ValueFunc. If specified, this function will be
+        used by the preconditioner estimator instead of ``value_and_grad_func``.
+        This is useful for cases where the value function used for training is
+        expensive to add to the preconditioner, e.g. because it has costly
+        regularizers. (Default: ``None``)
       use_adaptive_learning_rate: Boolean. Specifies whether to use the special
         rule from the original K-FAC paper for picking the learning rate at each
         step. Note that this won't work well for stochastic objectives. If this
@@ -488,7 +494,8 @@ class Optimizer(utils.WithStagedMethods):
 
     # Curvature estimator
     self._estimator = estimator_ctor(
-        func=self._value_func,
+        func=(self._value_func if value_func_for_estimator is None else
+              value_func_for_estimator),
         default_estimation_mode=estimation_mode,
         params_index=self._params_index,
         batch_index=batch_index,
