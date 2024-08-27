@@ -567,9 +567,9 @@ class SupervisedExperiment(abc.ABC):
     if "aux" in stats:
       stats.update(stats.pop("aux", {}))
 
-    stats["progress"] = self.progress(self._python_step)
-
     self._python_step += 1
+
+    stats["progress"] = self.progress(self._python_step)
 
     for name in self.config.get("per_device_stats_to_log", []):
       gathered_stat = jnp.reshape(
