@@ -13,10 +13,12 @@
 # limitations under the License.
 """K-FAC losses and layers tagging Jax primitives."""
 import dataclasses
+import functools
 from typing import Any, Generic, Sequence, TypeVar
 
 import jax
 from jax import core
+
 
 # Types for annotation
 T = TypeVar("T")
@@ -450,6 +452,12 @@ def register_scale_and_shift(
       has_shift=shift is not None,
       **kwargs,
   )
+
+
+register_repeated_dense = functools.partial(
+    register_dense,
+    variant="repeated_dense",
+)
 
 
 class LossTagEqn(core.JaxprEqn):

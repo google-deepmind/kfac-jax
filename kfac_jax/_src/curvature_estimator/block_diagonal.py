@@ -42,6 +42,7 @@ _DEFAULT_TAG_TO_BLOCK_CTOR: dict[str, CurvatureBlockCtor] = dict(
     conv2d=curvature_blocks.Conv2DTwoKroneckerFactored,
     generic=curvature_blocks.NaiveDiagonal,
     scale_and_shift=curvature_blocks.ScaleAndShiftDiagonal,
+    repeated_dense=curvature_blocks.RepeatedDenseKroneckerFactored,
 )
 
 
@@ -860,4 +861,3 @@ class BlockDiagonalCurvature(
   @utils.auto_scope_method
   def to_dense_matrix(self, state: State) -> Array:
     return scipy.linalg.block_diag(*self.to_diagonal_block_dense_matrix(state))
-
