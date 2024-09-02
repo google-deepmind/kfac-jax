@@ -29,6 +29,7 @@ from jaxline import experiment
 from jaxline import utils as pipe_utils
 import kfac_jax
 from examples import datasets
+from examples import optax_wrapper
 from examples import optimizers
 import ml_collections
 import more_itertools
@@ -386,7 +387,7 @@ class SupervisedExperiment(abc.ABC):
 
   def create_optimizer(
       self,
-  ) -> optimizers.OptaxWrapper | kfac_jax.Optimizer:
+  ) -> optax_wrapper.OptaxWrapper | kfac_jax.Optimizer:
     """Creates the optimizer specified in the experiment's config."""
     optimizer_config = copy.deepcopy(self.config.optimizer)
     return optimizers.create_optimizer(
