@@ -344,9 +344,11 @@ class SupervisedExperiment(abc.ABC):
       self,
       params_polyak: WeightedMovingAverage[Params] | None,
       params: Params,
+      state: FuncState,
       weight: Numeric = 1.0,
   ) -> WeightedMovingAverage[Params]:
     """Updates the polyak-averaged version of the parameters."""
+    del state
 
     assert self._use_polyak_avg_with_decay_factor is not None
 
@@ -532,7 +534,7 @@ class SupervisedExperiment(abc.ABC):
         stats.update({k + "_polyak": v for k, v in aux_polyak.items()})
 
       self._params_polyak = self._update_polyak_average_pmap(
-          self._params_polyak, self._params,
+          self._params_polyak, self._params, self._state,
           kfac_jax.utils.replicate_all_local_devices(
               self._polyak_weight(self._python_step,
                                   kfac_jax.utils.get_first(stats))
