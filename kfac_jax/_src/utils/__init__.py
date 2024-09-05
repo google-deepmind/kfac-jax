@@ -41,6 +41,7 @@ Func = types.Func
 ValueFunc = types.ValueFunc
 ValueAndGradFunc = types.ValueAndGradFunc
 AssumedFuncOutput = types.AssumedFuncOutput
+ScheduleType = types.ScheduleType
 tree_is_empty = types.tree_is_empty
 abstract_objects_equal = types.abstract_objects_equal
 get_float_dtype_and_check_consistency = (

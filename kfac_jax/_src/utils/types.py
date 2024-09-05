@@ -41,6 +41,10 @@ ValueAndGradFunc = Callable[..., tuple[Array, Params]]
 AssumedFuncOutput = (Array | tuple[Array, FuncAux] |
                      tuple[Array, tuple[FuncState, FuncAux]])
 SCALAR_TYPES = (float, int)
+ScheduleType = (
+    Callable[[Numeric, Numeric | None], Numeric] |
+    Callable[[Numeric], Numeric]
+    )
 
 
 def tree_is_empty(obj: ArrayTree) -> bool:

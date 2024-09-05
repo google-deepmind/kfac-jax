@@ -52,6 +52,7 @@ from kfac_jax._src.curvature_estimator import block_diagonal
 from kfac_jax._src.curvature_estimator import curvature_estimator
 from kfac_jax._src.curvature_estimator import explicit_exact
 from kfac_jax._src.curvature_estimator import implicit_exact
+from kfac_jax._src.curvature_estimator import optax_interface
 
 
 BlockDiagonalCurvature = block_diagonal.BlockDiagonalCurvature
@@ -75,3 +76,6 @@ LossFunctionsSequence = implicit_exact.LossFunctionsSequence
 LossFunctionInputs = implicit_exact.LossFunctionInputs
 LossFunctionInputsSequence = implicit_exact.LossFunctionInputsSequence
 LossFunctionInputsTuple = implicit_exact.LossFunctionInputsTuple
+
+OptaxPreconditioner = optax_interface.OptaxPreconditioner
+OptaxPreconditionState = optax_interface.OptaxPreconditionState

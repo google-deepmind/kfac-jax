@@ -112,6 +112,8 @@ set_default_tag_to_block_ctor = (
     curvature_estimator.set_default_tag_to_block_ctor)
 get_default_tag_to_block_ctor = (
     curvature_estimator.get_default_tag_to_block_ctor)
+OptaxPreconditioner = curvature_estimator.OptaxPreconditioner
+OptaxPreconditionState = curvature_estimator.OptaxPreconditionState
 
 # Optimizers
 Optimizer = optimizer.Optimizer

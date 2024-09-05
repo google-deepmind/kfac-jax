@@ -19,27 +19,29 @@ from typing import Any, Callable, NamedTuple, Sequence
 import jax
 from jax import lax
 import jax.numpy as jnp
-import kfac_jax
+from kfac_jax._src import utils
+from kfac_jax._src.curvature_estimator import block_diagonal
+from kfac_jax._src.curvature_estimator import curvature_estimator
 import optax
 
 
-Array = kfac_jax.utils.Array
-Numeric = kfac_jax.utils.Numeric
-PRNGKey = kfac_jax.utils.PRNGKey
-Params = kfac_jax.utils.Params
-Batch = kfac_jax.utils.Batch
-ValueFunc = kfac_jax.optimizer.ValueFunc
-FuncArgsVariants = kfac_jax.optimizer.FuncArgsVariants
-ScheduleType = kfac_jax.optimizer.ScheduleType
-EstimatorState = kfac_jax.curvature_estimator.BlockDiagonalCurvature.State
+Array = utils.Array
+Numeric = utils.Numeric
+PRNGKey = utils.PRNGKey
+Params = utils.Params
+Batch = utils.Batch
+ValueFunc = utils.ValueFunc
+FuncArgs = utils.FuncArgs
+ScheduleType = utils.ScheduleType
+EstimatorState = block_diagonal.BlockDiagonalCurvature.State
 
 
-class PreconditionState(NamedTuple):
+class OptaxPreconditionState(NamedTuple):
   count: Array
   estimator_state: EstimatorState
 
 
-class Preconditioner:
+class OptaxPreconditioner:
   """An Optax-compatible K-FAC preconditioner."""
 
   def __init__(
@@ -59,12 +61,12 @@ class Preconditioner:
       patterns_to_skip: Sequence[str] = (),
       auto_register_kwargs: dict[str, Any] | None = None,
       layer_tag_to_block_ctor: (
-          dict[str, kfac_jax.curvature_estimator.CurvatureBlockCtor] | None
+          dict[str, curvature_estimator.CurvatureBlockCtor] | None
       ) = None,
       pmap_axis_name: str = "kfac_axis",
       batch_size_extractor: Callable[
           [Batch], Numeric
-      ] = kfac_jax.utils.default_batch_size_extractor,
+      ] = utils.default_batch_size_extractor,
       distributed_inverses: bool = True,
       distributed_precon_apply: bool = True,
       num_samples: int = 1,
@@ -168,29 +170,32 @@ class Preconditioner:
         norm_to_scale_identity_weight_per_block
     )
 
+    auto_register_kwargs = auto_register_kwargs or {}
+    auto_register_kwargs.update(dict(
+        register_only_generic=register_only_generic,
+        patterns_to_skip=patterns_to_skip,
+    ))
     # Curvature estimator
-    self._estimator = kfac_jax.curvature_estimator.BlockDiagonalCurvature(
+    self._estimator = block_diagonal.BlockDiagonalCurvature(
         func=value_func,
         default_estimation_mode=estimation_mode,
         params_index=0,
         layer_tag_to_block_ctor=layer_tag_to_block_ctor,
-        register_only_generic=register_only_generic,
-        patterns_to_skip=patterns_to_skip,
         distributed_multiplies=distributed_precon_apply,
         distributed_cache_updates=distributed_inverses,
         num_samples=num_samples,
         should_vmap_samples=should_vmap_samples,
-        **(auto_register_kwargs or {}),
+        auto_register_kwargs=auto_register_kwargs,
     )
 
   def init(
       self,
-      func_args: FuncArgsVariants,
+      func_args: FuncArgs,
       rng: PRNGKey,
-  ) -> PreconditionState:
+  ) -> OptaxPreconditionState:
     """Initializes the preconditioner and returns the state."""
 
-    return PreconditionState(
+    return OptaxPreconditionState(
         count=jnp.array(0, dtype=jnp.int32),
         estimator_state=self.estimator.init(
             rng=rng,
@@ -202,23 +207,19 @@ class Preconditioner:
     )
 
   @property
-  def _exact_powers_to_cache(self) -> int | Sequence[int] | None:
-
+  def _exact_powers_to_cache(self) -> int | None:
     if self._use_exact_inverses and self._use_cached_inverses:
       return -1
-    else:
-      return None
+    return None
 
   @property
-  def _approx_powers_to_cache(self) -> int | Sequence[int] | None:
-
+  def _approx_powers_to_cache(self) -> int | None:
     if not self._use_exact_inverses and self._use_cached_inverses:
       return -1
-    else:
-      return None
+    return None
 
   @property
-  def estimator(self) -> kfac_jax.curvature_estimator.BlockDiagonalCurvature:
+  def estimator(self) -> block_diagonal.BlockDiagonalCurvature:
     """The underlying curvature estimator used by the preconditioner."""
     return self._estimator
 
@@ -227,7 +228,7 @@ class Preconditioner:
     return self._pmap_axis_name
 
   def get_identity_weight(
-      self, state: PreconditionState
+      self, state: OptaxPreconditionState
   ) -> Array | float:
 
     damping = self._damping
@@ -239,18 +240,18 @@ class Preconditioner:
 
   def sync_estimator_state(
       self,
-      state: PreconditionState,
-  ) -> PreconditionState:
+      state: OptaxPreconditionState,
+  ) -> OptaxPreconditionState:
     """Syncs the estimator state."""
 
-    return PreconditionState(
+    return OptaxPreconditionState(
         count=state.count,
         estimator_state=self.estimator.sync(
             state.estimator_state, pmap_axis_name=self.pmap_axis_name),
     )
 
   def should_update_estimator_curvature(
-      self, state: PreconditionState
+      self, state: OptaxPreconditionState
   ) -> Array | bool:
     """Whether at the current step the preconditioner should update the curvature estimates."""
 
@@ -260,7 +261,7 @@ class Preconditioner:
     return state.count % self._curvature_update_period == 0
 
   def should_sync_estimate_curvature(
-      self, state: PreconditionState
+      self, state: OptaxPreconditionState
   ) -> Array | bool:
     """Whether at the current step the preconditioner should synchronize (pmean) the curvature estimates."""
 
@@ -272,7 +273,7 @@ class Preconditioner:
     return self.should_update_inverse_cache(state)
 
   def should_update_inverse_cache(
-      self, state: PreconditionState
+      self, state: OptaxPreconditionState
   ) -> Array | bool:
     """Whether at the current step the preconditioner should update the inverse cache."""
 
@@ -283,10 +284,10 @@ class Preconditioner:
 
   def maybe_update(
       self,
-      state: PreconditionState,
-      func_args: FuncArgsVariants,
+      state: OptaxPreconditionState,
+      func_args: FuncArgs,
       rng: PRNGKey,
-  ) -> PreconditionState:
+  ) -> OptaxPreconditionState:
     """Updates the estimates if it is the right iteration."""
 
     # NOTE: This maybe update curvatures and inverses at an iteration. But
@@ -303,12 +304,12 @@ class Preconditioner:
 
     state = self.maybe_update_inverse_cache(state)
 
-    return PreconditionState(state.count, state.estimator_state)
+    return OptaxPreconditionState(state.count, state.estimator_state)
 
   def _update_estimator_curvature(
       self,
       estimator_state: EstimatorState,
-      func_args: FuncArgsVariants,
+      func_args: FuncArgs,
       rng: PRNGKey,
       ema_old: Numeric,
       ema_new: Numeric,
@@ -322,6 +323,7 @@ class Preconditioner:
         ema_new=ema_new,
         # Note that the batch is always the last entry of FuncArgsVariantsdef
         batch_size=self._batch_size_extractor(func_args[-1]),
+        identity_weight=self.get_identity_weight(estimator_state),
         rng=rng,
         func_args=func_args,
     )
@@ -336,12 +338,12 @@ class Preconditioner:
 
   def maybe_update_estimator_curvature(
       self,
-      state: PreconditionState,
-      func_args: FuncArgsVariants,
+      state: OptaxPreconditionState,
+      func_args: FuncArgs,
       rng: PRNGKey,
       decay_old_ema: Array | bool = True,
       sync: Array | bool = True,
-  ) -> PreconditionState:
+  ) -> OptaxPreconditionState:
     """Updates the curvature estimates if it is the right iteration."""
 
     ema_old = decay_old_ema * self._curvature_ema + (1.0 - decay_old_ema) * 1.0
@@ -359,8 +361,8 @@ class Preconditioner:
 
   def maybe_update_inverse_cache(
       self,
-      state: PreconditionState,
-  ) -> PreconditionState:
+      state: OptaxPreconditionState,
+  ) -> OptaxPreconditionState:
     """Updates the estimator state cache if it is the right iteration."""
 
     if state.count is None:
@@ -383,11 +385,11 @@ class Preconditioner:
 
   def _maybe_update_estimator_state(
       self,
-      state: PreconditionState,
+      state: OptaxPreconditionState,
       should_update: Array | bool,
       update_func: Callable[..., EstimatorState],
       **update_func_kwargs,
-  ) -> PreconditionState:
+  ) -> OptaxPreconditionState:
     """Updates the estimator state if it should update."""
 
     estimator_state = lax.cond(
@@ -397,12 +399,12 @@ class Preconditioner:
         state.estimator_state,
     )
 
-    return PreconditionState(state.count, estimator_state)
+    return OptaxPreconditionState(state.count, estimator_state)
 
   def apply(
       self,
       updates: optax.Updates,
-      state: PreconditionState,
+      state: OptaxPreconditionState,
   ) -> optax.Updates:
     """Preconditions (= multiplies the inverse curvature estimation matrix to) updates."""
 
@@ -419,13 +421,13 @@ class Preconditioner:
 
     if self._norm_constraint is not None:
 
-      sq_norm_grads = kfac_jax.utils.inner_product(new_updates, updates)
+      sq_norm_grads = utils.inner_product(new_updates, updates)
       del updates
 
       max_coefficient = jnp.sqrt(self._norm_constraint / sq_norm_grads)
       coeff = jnp.minimum(max_coefficient, 1)
 
-      new_updates = kfac_jax.utils.scalar_mul(new_updates, coeff)
+      new_updates = utils.scalar_mul(new_updates, coeff)
 
     else:
       del updates
@@ -435,7 +437,7 @@ class Preconditioner:
   def multiply_curvature(
       self,
       updates: optax.Updates,
-      state: PreconditionState,
+      state: OptaxPreconditionState,
   ) -> optax.Updates:
     """Multiplies the (non-inverse) curvature estimation matrix to updates."""
 
@@ -447,7 +449,7 @@ class Preconditioner:
     # `use_exact_inverses == False` (default). In particular, the former uses
     # non-factored damping while the latter uses factored one, and the two are
     # NOT the exact inverses of each other.
-    updates = self.estimator.multiply(
+    return self.estimator.multiply(
         state=state.estimator_state,
         parameter_structured_vector=updates,
         identity_weight=self.get_identity_weight(state),
@@ -456,7 +458,6 @@ class Preconditioner:
         pmap_axis_name=self.pmap_axis_name,
         norm_to_scale_identity_weight_per_block=self._norm_to_scale_identity_weight_per_block,
     )
-    return updates
 
   def as_gradient_transform(
       self, use_inverse: bool = True
@@ -474,15 +475,14 @@ class Preconditioner:
         state,
         params=None,
         *,
-        precond_state: PreconditionState,
+        precond_state: OptaxPreconditionState,
         **extra_args,
     ):
       del params, extra_args
-      updates = multiply_fn(updates, precond_state)
-      return updates, state
+      return multiply_fn(updates, precond_state), state
 
     return optax.GradientTransformationExtraArgs(init_fn, update_fn)
 
-  def increment_count(self, state: PreconditionState):
+  def increment_count(self, state: OptaxPreconditionState):
     count_inc = optax.safe_int32_increment(state.count)
-    return PreconditionState(count_inc, state.estimator_state)
+    return OptaxPreconditionState(count_inc, state.estimator_state)

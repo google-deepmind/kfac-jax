@@ -34,11 +34,8 @@ Batch = utils.Batch
 FuncState = Any
 FuncAux = utils.FuncAux
 Scalar = utils.Scalar
+ScheduleType = utils.ScheduleType
 
-ScheduleType = (
-    Callable[[Numeric, Numeric | None], Numeric] |
-    Callable[[Numeric], Numeric]
-    )
 FuncArgsVariants = (
     tuple[Params, Batch] |
     tuple[Params, FuncState, Batch] |

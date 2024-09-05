@@ -16,7 +16,6 @@ from typing import Callable, Iterator, Mapping, NamedTuple
 
 import jax
 import kfac_jax
-from examples import optax_preconditioner
 import optax
 
 
@@ -29,8 +28,8 @@ OptaxState = kfac_jax.utils.ArrayTree
 ScheduleType = kfac_jax.optimizer.ScheduleType
 OptaxCtor = Callable[[ScheduleType], optax.GradientTransformation]
 
-PreconditionState = optax_preconditioner.PreconditionState
-Preconditioner = optax_preconditioner.Preconditioner
+PreconditionState = kfac_jax.OptaxPreconditionState
+Preconditioner = kfac_jax.OptaxPreconditioner
 
 
 class OptaxAndPreconditionState(NamedTuple):
