@@ -539,7 +539,8 @@ class SupervisedExperiment(abc.ABC):
               )
           )
 
-  def _post_param_update_processing(self, global_step: Array):
+  def _post_param_update_processing(
+      self, global_step: Array, stats: dict[str, Numeric]):
     pass
 
   def train_step(self, global_step: Array, rng: PRNGKey) -> dict[str, Numeric]:
@@ -561,7 +562,7 @@ class SupervisedExperiment(abc.ABC):
     else:
       self._params, self._opt_state, stats = result
 
-    self._post_param_update_processing(global_step)
+    self._post_param_update_processing(global_step, stats)
 
     self._maybe_update_polyak_average_and_stats(rng, stats)
 

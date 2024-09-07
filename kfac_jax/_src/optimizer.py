@@ -147,7 +147,7 @@ class Optimizer(utils.WithStagedMethods):
       norm_to_scale_identity_weight_per_block: str | None = None,
       precon_power: Scalar = -1.0,
   ):
-    """Initializes the K-FAC optimizer with the provided settings.
+    """Initializes the kfac_jax optimizer with the provided settings.
 
     NOTE: Please read the docstring for this constructor carefully. Especially
     the description of ``value_and_grad_func``.
@@ -404,13 +404,13 @@ class Optimizer(utils.WithStagedMethods):
       raise ValueError("When use_adaptive_damping is False you should not "
                        "provide a value for initial_damping.")
     if use_adaptive_learning_rate and learning_rate_schedule is not None:
-      raise ValueError("If you are using adaptive learning rate than "
+      raise ValueError("If you are using adaptive learning rate then "
                        "`learning_rate_schedule` should be None.")
     if use_adaptive_momentum and momentum_schedule is not None:
-      raise ValueError("If you are using adaptive momentum than "
+      raise ValueError("If you are using adaptive momentum then "
                        "`momentum_schedule` should be None.")
     if use_adaptive_damping and damping_schedule is not None:
-      raise ValueError("If you are using adaptive damping than "
+      raise ValueError("If you are using adaptive damping then "
                        "`damping_schedule` should be None.")
 
     self._value_and_grad_func = value_and_grad_func
