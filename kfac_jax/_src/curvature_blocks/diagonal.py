@@ -346,8 +346,7 @@ class ScaleAndShiftDiagonal(Diagonal):
 
     if self.has_scale:
 
-      assert (state.diagonal_factors[0].raw_value.shape ==
-              self.parameters_shapes[0])
+      assert state.diagonal_factors[0].shape == self.parameters_shapes[0]
 
       scale_shape = estimation_data.primals.params[0].shape
 

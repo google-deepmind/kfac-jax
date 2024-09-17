@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC for accumulating statistics."""
-from typing import Any, Generic
+from typing import Any, Callable, Generic
 
 import jax
 import jax.numpy as jnp
@@ -28,72 +28,76 @@ DType = types.DType
 ArrayTree = types.ArrayTree
 TArrayTree = types.TArrayTree
 
+AddFunction = Callable[[TArrayTree, TArrayTree, Numeric, Numeric], TArrayTree]
+
+
+def default_add_function(
+    obj1: TArrayTree,
+    obj2: TArrayTree,
+    coeff1: Numeric,
+    coeff2: Numeric
+) -> TArrayTree:
+
+  return jax.tree_util.tree_map(
+      lambda x, y: coeff1 * x + coeff2 * y, obj1, obj2)
+
 
 @misc.register_state_class
 class WeightedMovingAverage(Generic[TArrayTree], misc.State):
   """A wrapped class for an arbitrary weighted moving average."""
 
   weight: Numeric
-  raw_value: TArrayTree | None
+  value: TArrayTree | None
 
   @property
   def ndim(self) -> int:
-    assert self.raw_value is not None
-    return self.raw_value.ndim
+    assert self.value is not None
+    return self.value.ndim
 
   @property
   def shape(self) -> Shape:
-    assert self.raw_value is not None
-    return self.raw_value.shape
+    assert self.value is not None
+    return self.value.shape
 
   @property
   def dtype(self) -> DType:
-    assert self.raw_value is not None
-    return self.raw_value.dtype
-
-  @property
-  def value(self) -> TArrayTree:
-    """The value of the underlying arrays data structure."""
-    return jax.tree_util.tree_map(lambda x: x / self.weight, self.raw_value)
+    assert self.value is not None
+    return self.value.dtype
 
   def update(
       self,
       value: TArrayTree,
       old_weight_multiplier: Numeric,
       new_weight: Numeric,
+      add_function: AddFunction = default_add_function,
   ):
     """Updates the underlying array and weight accordingly."""
 
-    assert self.raw_value is not None
+    assert self.value is not None
 
     # A negative value of new_weight means we should only update the value
     # (with -new_weight) and not the total running weight. This roughly
     # corresponds to summation instead of averaging, and is useful in a few
     # contexts.
-    new_weight_for_value = jnp.abs(new_weight)
-    new_weight_for_weight = jax.nn.relu(new_weight)
+    self.weight = old_weight_multiplier * self.weight + jax.nn.relu(new_weight)
+    eta_for_old = jax.nn.relu(new_weight) / self.weight
+    eta_for_new = jnp.abs(new_weight) / self.weight
 
-    self.weight = self.weight * old_weight_multiplier + new_weight_for_weight
-
-    self.raw_value = jax.tree_util.tree_map(
-        lambda x, y: x * old_weight_multiplier + y * new_weight_for_value,
-        self.raw_value,
-        value,
-    )
+    self.value = add_function(self.value, value, 1.0 - eta_for_old, eta_for_new)
 
   def sync(self, pmap_axis_name: str | None):
     """Syncs the underlying array across devices."""
 
-    if self.raw_value is None:
-      raise ValueError("`raw_value` has not been set yet.")
+    if self.value is None:
+      raise ValueError("`_value` has not been set yet.")
 
-    self.raw_value = parallel.pmean_if_pmap(self.raw_value, pmap_axis_name)
+    self.value = parallel.pmean_if_pmap(self.value, pmap_axis_name)
 
   def clear(self, value_to_none: bool = False):
     """Resets the weighted average."""
 
     self.weight = jnp.zeros_like(self.weight)
-    self.raw_value = None if value_to_none else jnp.zeros_like(self.raw_value)
+    self.value = None if value_to_none else jnp.zeros_like(self.value)
 
   def value_and_clear(self) -> TArrayTree:
     """Retrieves the value of the weighted average and clears it."""
@@ -101,6 +105,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
     value = self.value
     self.clear()
 
+    assert value is not None
     return value
 
   @classmethod
@@ -113,7 +118,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
 
     return cls(  # pytype: disable=wrong-keyword-args
         weight=jnp.zeros([], dtype=dtype),
-        raw_value=jnp.zeros(shape, dtype=dtype),
+        value=jnp.zeros(shape, dtype=dtype),
     )
 
   @classmethod
@@ -124,7 +129,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
         weight=jnp.array(
             0.0, dtype=types.get_float_dtype_and_check_consistency(value)
         ),
-        raw_value=jax.tree_util.tree_map(jnp.zeros_like, value),
+        value=jax.tree_util.tree_map(jnp.zeros_like, value),
     )
 
 

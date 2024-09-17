@@ -403,7 +403,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       # Permute the matrix according to the parameters canonical order
       inputs_factor = utils.block_permuted(
           state.factors[0].value,
-          block_sizes=[state.factors[0].raw_value.shape[0] - 1, 1],
+          block_sizes=[state.factors[0].shape[0] - 1, 1],
           block_order=(1, 0),
       )
 

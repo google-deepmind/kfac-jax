@@ -113,8 +113,16 @@ def create_optimizer(
     train_total_batch_size: int,
     total_steps: int | None,
     total_epochs: float | None,
+    schedule_free_config: config_dict.ConfigDict,
 ) -> optax_wrapper.OptaxWrapper | kfac_jax.Optimizer:
   """Creates an optimizer from the provided configuration."""
+
+  is_optax = "kfac" not in name and hasattr(optax, name)
+
+  if not is_optax and schedule_free_config.enabled:
+    raise ValueError(
+        "Schedule Free is only supported for optax optimizers."
+    )
 
   value_and_grad_func = jax.value_and_grad(train_model_func, has_aux=has_aux)
 
@@ -155,7 +163,7 @@ def create_optimizer(
         **kwargs,
     )
 
-  elif hasattr(optax, name):
+  elif is_optax:
 
     learning_rate_schedule = schedules.construct_schedule(
         dataset_size=dataset_size,
@@ -164,7 +172,15 @@ def create_optimizer(
         total_epochs=total_epochs,
         **kwargs.pop("learning_rate_schedule")
     )
-    optax_ctor = lambda lr: (getattr(optax, name)(learning_rate=lr, **kwargs))
+
+    if schedule_free_config.enabled:
+      optax_ctor = lambda lr: optax.contrib.schedule_free(
+          base_optimizer=getattr(optax, name)(learning_rate=lr, **kwargs),
+          learning_rate=lr,
+          **schedule_free_config.kwargs
+      )
+    else:
+      optax_ctor = lambda lr: (getattr(optax, name)(learning_rate=lr, **kwargs))
 
     return optax_wrapper.OptaxWrapper(
         value_and_grad_func=value_and_grad_func,

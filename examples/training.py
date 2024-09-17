@@ -33,6 +33,7 @@ from examples import optax_wrapper
 from examples import optimizers
 import ml_collections
 import more_itertools
+import optax
 
 
 # Types for annotation
@@ -42,6 +43,7 @@ PRNGKey = kfac_jax.utils.PRNGKey
 Params = kfac_jax.utils.Params
 Batch = kfac_jax.utils.Batch
 FuncState = kfac_jax.utils.FuncState
+FuncAux = kfac_jax.utils.FuncAux
 WeightedMovingAverage = kfac_jax.utils.WeightedMovingAverage
 
 InitFunc = Callable[[PRNGKey, Batch], Params]
@@ -154,7 +156,8 @@ class SupervisedExperiment(abc.ABC):
       to `True`.
     train_model_func: The `model_loss_func` with `is_training` set to `True`.
     eval_model_func: The `model_loss_func` with `is_training` set to `False`.
-    eval_batch: A pmapped version of `self._evaluate_single_batch`.
+    train_batch_pmap: A pmapped version of `self._train_batch`.
+    eval_batch_pmap: A pmapped version of `self._eval_batch`.
     optimizer: The optimizer instance used for training.
   """
 
@@ -200,6 +203,7 @@ class SupervisedExperiment(abc.ABC):
     self.has_rng = has_rng
     self.has_func_state = has_func_state
     self.eval_splits = eval_splits
+
     self.batch_size = ExperimentBatchSizes(
         train=batch_size_calculator_ctor(
             mode="train", **self.config.batch_size.train
@@ -215,21 +219,23 @@ class SupervisedExperiment(abc.ABC):
     self.estimator_model_func = functools.partial(
         self.model_func_for_estimator, is_training=True
     ) if self.model_func_for_estimator is not None else None
+
     self.train_model_func = functools.partial(
         self.model_loss_func, is_training=True
     )
     self.eval_model_func = functools.partial(
         self.model_loss_func, is_training=False
     )
-    self.eval_batch = jax.pmap(
-        self._evaluate_single_batch, axis_name="eval_axis"
+
+    self.train_batch_pmap = jax.pmap(
+        self._train_batch, axis_name="train_axis"
+    )
+    self.eval_batch_pmap = jax.pmap(
+        self._eval_batch, axis_name="eval_axis"
     )
 
     # Log some useful information
     getattr(self.batch_size, self.mode).log_machines_setup()
-
-    # Create the optimizer
-    self.optimizer = self.create_optimizer()
 
     # Initialize the state
     self._train_input, self._eval_input, self._init_batch = None, None, None
@@ -237,35 +243,62 @@ class SupervisedExperiment(abc.ABC):
     self._params, self._state, self._opt_state = None, None, None
     self._params_polyak = None
 
+    # None corresponds to not using Polyak averaging. To get non-decayed Polyak
+    # averaging (aka classic Polyak averaging with a straight average), set this
+    # to 1.0.
     self._use_polyak_avg_with_decay_factor = config.get(
         "use_polyak_avg_with_decay_factor", None)
 
     self._log_train_stats_with_polyak_avg_every_n_steps = config.get(
         "log_train_stats_with_polyak_avg_every_n_steps", 0)
 
-    if (self._use_polyak_avg_with_decay_factor is None
-        and self._log_train_stats_with_polyak_avg_every_n_steps != 0):
-      raise ValueError(
-          "Polyak averaging must be enabled if setting"
-          "log_train_stats_with_polyak_avg_every_n_steps != 0.")
-
-    if self._log_train_stats_with_polyak_avg_every_n_steps != 0:
-      self._train_model_func_pmap = jax.pmap(self.train_model_func)
-      self._get_value_pmap = jax.pmap(lambda x: x.value)
+    self._get_value_pmap = jax.pmap(lambda x: x.value)
 
     if self._use_polyak_avg_with_decay_factor:
       self._update_polyak_average_pmap = jax.pmap(self._update_polyak_average,
                                                   donate_argnums=0)
+
+    self._refresh_func_state_for_eval_with_n_iters = config.get(
+        "refresh_func_state_for_eval_with_n_iters", 0)
+
+    if "schedule_free" in config:
+
+      self._schedule_free_config = config.schedule_free
+
+      if (self._schedule_free_config.enabled
+          and self._use_polyak_avg_with_decay_factor is not None):
+        raise ValueError("Cannot use Schedule Free method and Polyak averaging "
+                         "together.")
+
+    else:
+      schedule_free_config = ml_collections.ConfigDict()
+      schedule_free_config.enabled = False
+      self._schedule_free_config = schedule_free_config.lock()
+
+    if self._schedule_free_config.enabled:
+      self._schedule_free_eval_params_pmap = jax.pmap(
+          optax.contrib.schedule_free_eval_params)
 
     self._python_step = 0
     self._num_tensors = 0
     self._num_parameters = 0
     self._optimizer_state_size = 0
 
+    # Create the optimizer
+    self.optimizer = self.create_optimizer()
+
   @property
   @abc.abstractmethod
   def dataset_size(self) -> int:
     """The number of data points in the training set."""
+
+  @property
+  def _schedule_free_enabled(self):
+    return self._schedule_free_config.enabled
+
+  @property
+  def _polyak_avg_enabled(self):
+    return self._use_polyak_avg_with_decay_factor is not None
 
   @property
   def train_input(self) -> Iterator[Batch]:
@@ -340,6 +373,10 @@ class SupervisedExperiment(abc.ABC):
     del global_step, stats
     return 1.0
 
+  @property
+  def _polyak_add_function(self):
+    return kfac_jax.utils.default_add_function
+
   def _update_polyak_average(
       self,
       params_polyak: WeightedMovingAverage[Params] | None,
@@ -357,7 +394,8 @@ class SupervisedExperiment(abc.ABC):
       params_polyak = params_polyak.copy()
 
     params_polyak.update(
-        params, self._use_polyak_avg_with_decay_factor, weight)
+        params, self._use_polyak_avg_with_decay_factor, weight,
+        add_function=self._polyak_add_function)
 
     return params_polyak
 
@@ -403,6 +441,7 @@ class SupervisedExperiment(abc.ABC):
         train_total_batch_size=self.batch_size.train.total,
         total_steps=self.config.training.steps,
         total_epochs=self.config.training.epochs,
+        schedule_free_config=self._schedule_free_config,
     )
 
   def maybe_initialize_state(self):
@@ -494,6 +533,28 @@ class SupervisedExperiment(abc.ABC):
   ) -> Iterator[Batch]:
     """Constructs the training dataset."""
 
+  def _train_batch(
+      self,
+      params: Params,
+      func_state: FuncState | None,
+      rng: PRNGKey | None,
+      batch: Batch,
+  ) -> tuple[Array, FuncState | None, FuncAux | None]:
+    """Evaluates a single batch in training mode."""
+
+    func_args = kfac_jax.optimizer.make_func_args(
+        params=params,
+        func_state=func_state,
+        rng=rng,
+        batch=batch,
+        has_state=self.has_func_state,
+        has_rng=self.has_rng,
+    )
+
+    return kfac_jax.optimizer.extract_func_outputs(
+        self.train_model_func(*func_args),
+        has_aux=self.has_aux, has_state=self.has_func_state)
+
   def _maybe_update_polyak_average_and_stats(
       self,
       rng: PRNGKey,
@@ -501,7 +562,7 @@ class SupervisedExperiment(abc.ABC):
   ):
     """Updates the polyak-averaged version of the parameters and gets stats."""
 
-    if self._use_polyak_avg_with_decay_factor is not None:
+    if self._polyak_avg_enabled:
 
       if (self._log_train_stats_with_polyak_avg_every_n_steps and (
           (self._python_step + 1) %
@@ -514,18 +575,12 @@ class SupervisedExperiment(abc.ABC):
         else:
           batch = self.train_inputs.peek()  # pytype: disable=attribute-error
 
-        func_args = kfac_jax.optimizer.make_func_args(
+        loss_polyak, _, aux_polyak = self.train_batch_pmap(
             params=self._get_value_pmap(self._params_polyak),
             func_state=self._state,
             rng=rng,
             batch=batch,
-            has_state=self.has_func_state,
-            has_rng=self.has_rng,
         )
-
-        loss_polyak, _, aux_polyak = kfac_jax.optimizer.extract_func_outputs(
-            self._train_model_func_pmap(*func_args),
-            has_aux=self.has_aux, has_state=self.has_func_state)
 
         assert aux_polyak is not None
         stats["loss_polyak"] = loss_polyak
@@ -599,14 +654,13 @@ class SupervisedExperiment(abc.ABC):
   ) -> Iterator[Batch]:
     """Constructs the evaluation dataset."""
 
-  def _evaluate_single_batch(
+  def _eval_batch(
       self,
       global_step: Array,
       params: Params,
-      params_polyak: WeightedMovingAverage[Params] | None,
-      func_state: FuncState,
+      func_state: FuncState | None,
       opt_state: kfac_jax.Optimizer.State | optimizers.OptaxState,
-      rng: PRNGKey,
+      rng: PRNGKey | None,
       batch: Batch,
   ) -> dict[str, Array]:
     """Evaluates a single batch."""
@@ -624,31 +678,39 @@ class SupervisedExperiment(abc.ABC):
 
     loss, stats = self.eval_model_func(*func_args)
 
-    if params_polyak is not None:
-
-      func_args = kfac_jax.optimizer.make_func_args(
-          params=params_polyak.value,
-          func_state=func_state,
-          rng=rng,
-          batch=batch,
-          has_state=self.has_func_state,
-          has_rng=self.has_rng,
-      )
-
-      loss_no_polyak = loss
-      stats_no_polyak = stats
-
-      loss, stats = self.eval_model_func(*func_args)
-
-      stats.update({k + "_no_polyak": v for k, v in stats_no_polyak.items()})
-      stats["loss_no_polyak"] = loss_no_polyak
-
     stats["loss"] = loss
 
     if hasattr(opt_state, "data_seen"):
       stats["data_seen"] = opt_state.data_seen
 
     return stats
+
+  def _refresh_func_state(
+      self,
+      params: Params,
+      func_state: FuncState,
+      rng: PRNGKey,
+      dataset_iter_thunk: Callable[[], Iterator[kfac_jax.utils.Batch]],
+      num_iters: int,
+  ) -> FuncState:
+    """Refreshes func_state on the given data using num_iters iterations."""
+
+    dataset_iter = dataset_iter_thunk()
+
+    for _ in range(num_iters):
+
+      rng_batch, rng = kfac_jax.utils.p_split(rng)
+
+      try:
+        batch = next(dataset_iter)
+      except StopIteration:
+        dataset_iter = dataset_iter_thunk()
+        batch = next(dataset_iter)
+
+      _, func_state, _ = self.train_batch_pmap(
+          params, func_state, rng_batch, batch)
+
+    return func_state
 
   def run_evaluation(
       self,
@@ -657,11 +719,53 @@ class SupervisedExperiment(abc.ABC):
   ) -> dict[str, Numeric]:
     """Runs the evaluation of the currently loaded model parameters."""
 
+    if self._polyak_avg_enabled:
+      params_polyak = self._get_value_pmap(self._params_polyak)
+    else:
+      params_polyak = None
+
+    if self._schedule_free_enabled:
+
+      assert isinstance(self._opt_state,
+                        optax_wrapper.OptaxAndPreconditionState)
+      assert isinstance(self._opt_state.optax_state,
+                        optax.contrib.ScheduleFreeState)
+
+      params_schedule_free = self._schedule_free_eval_params_pmap(
+          self._opt_state.optax_state, self._params)
+    else:
+      params_schedule_free = None
+
     all_stats = dict()
 
     # Evaluates both the train and eval split metrics
     for name, dataset_iter_thunk in self.eval_input.items():
+
       logging.info("Running evaluation for %s", name)
+
+      if params_polyak is not None and self.has_func_state:
+        assert self._state is not None
+        func_state_polyak = self._refresh_func_state(
+            params_polyak,
+            self._state,
+            rng,
+            dataset_iter_thunk,
+            self._refresh_func_state_for_eval_with_n_iters,
+        )
+      else:
+        func_state_polyak = self._state
+
+      if params_schedule_free is not None and self.has_func_state:
+        assert self._state is not None
+        func_state_schedule_free = self._refresh_func_state(
+            params_schedule_free,
+            self._state,
+            rng,
+            dataset_iter_thunk,
+            self._refresh_func_state_for_eval_with_n_iters,
+        )
+      else:
+        func_state_schedule_free = self._state
 
       averaged_stats = kfac_jax.utils.MultiChunkAccumulator.empty(True)
 
@@ -669,10 +773,26 @@ class SupervisedExperiment(abc.ABC):
 
         key, rng = kfac_jax.utils.p_split(rng)
 
-        stats = self.eval_batch(
-            global_step, self._params, self._params_polyak, self._state,
-            self._opt_state, key, batch
-        )
+        stats = self.eval_batch_pmap(
+            global_step, self._params, self._state, self._opt_state, key, batch)
+
+        if params_polyak is not None:
+          stats_no_polyak = stats
+          stats = self.eval_batch_pmap(
+              global_step, params_polyak, func_state_polyak, self._opt_state,
+              key, batch)
+          stats.update(
+              {k + "_no_polyak": v for k, v in stats_no_polyak.items()
+               if k != "data_seen"})
+
+        if params_schedule_free is not None:
+          stats_no_sf = stats
+          stats = self.eval_batch_pmap(
+              global_step, params_schedule_free, func_state_schedule_free,
+              self._opt_state, key, batch)
+          stats.update(
+              {k + "_no_sf": v for k, v in stats_no_sf.items()
+               if k != "data_seen"})
 
         averaged_stats.add(stats, 1)
 

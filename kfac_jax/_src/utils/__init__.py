@@ -134,6 +134,7 @@ stable_sqrt = math.stable_sqrt
 del math
 
 # accumulators
+default_add_function = accumulators.default_add_function
 WeightedMovingAverage = accumulators.WeightedMovingAverage
 MultiChunkAccumulator = accumulators.MultiChunkAccumulator
 del accumulators
