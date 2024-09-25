@@ -44,7 +44,8 @@ class TestGraphMatcher(parameterized.TestCase):
       # params removed in https://github.com/google/jax/pull/14211
       skip_params = ["lhs_shape", "rhs_shape", "meta"]
     else:
-      skip_params = ["meta"]
+      # algorithm parameter added in https://github.com/jax-ml/jax/pull/23574
+      skip_params = ["algorithm", "transpose_algorithm", "meta"]
     if eqn1.primitive.name == "cond":
       raise NotImplementedError()
     elif eqn1.primitive.name == "while":
