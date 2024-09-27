@@ -108,8 +108,8 @@ def kfac_resnet50_schedule(
   ))
 
 
-# TODO(jamesmartens,kazukiosawa,botev): Some possible future improvements to
-# the schedules code:
+# TODO(jamesmartens,timothycnguyen,joeljennings): Some possible future
+# improvements to the schedules code:
 # - Put the logic to calculate "warmup_data" (or "warmup_steps") and
 #   "total_data" (or "total_steps") in a place so that we can apply warmup to
 #   an arbitrary schedule.
@@ -122,6 +122,8 @@ def kfac_resnet50_schedule(
 #   general warmup scheduler factory that returns a combination of `polynomial_
 #   schedule` and the given base scheduler based on the arguments e.g. warmup_
 #   steps.
+# - Abstract out the logic to compute data_seen and global_step from the
+#   arguments to the schedule functions.
 
 
 # TODO(jamesmartens,kazukiosawa,botev): change these argument names to be not be
@@ -140,7 +142,7 @@ def cosine_schedule(
     warmup_fraction: float | None = None,
     data_seen: Numeric | None = None,
 ) -> Numeric:
-  """A cosine schedule described in the TAT paper."""
+  """A cosine schedule, similar to Optax."""
 
   if (total_steps is None) == (total_epochs is None):
     raise ValueError("Exactly one of `total_steps` and `total_epochs` must be "
@@ -303,8 +305,8 @@ def exponential_decay_schedule(
     start_steps: int | None = None,
     start_fraction: float | None = None,
     data_seen: Numeric | None = None,
-):
-  """Exponential decay schedule."""
+) -> Numeric:
+  """Exponential decay schedule, similar to Optax."""
 
   if (total_steps is None) == (total_epochs is None):
     raise ValueError("Exactly one of 'total_steps' and 'total_epochs' must be "
@@ -375,6 +377,32 @@ def exponential_decay_schedule(
   return val
 
 
+def _custom_polynomial_schedule(
+    init_value: Numeric,
+    end_value: Numeric,
+    power: Numeric,
+    transition_steps: int,
+    transition_begin: int = 0
+) -> Callable[[Numeric], Numeric]:
+  """A polynomial schedule similar to Optax that works even when init_value < end_value."""
+
+  # See the Optax docstring for polynomial_schedule for more information about
+  # what this computation is doing.
+
+  def schedule(count):
+
+    count = jnp.clip(count - transition_begin, 0, transition_steps)
+
+    if init_value >= end_value:
+      frac = 1.0 - count / transition_steps
+      return (init_value - end_value) * (frac**power) + end_value
+    else:
+      frac = count / transition_steps
+      return (end_value - init_value) * (frac**power) + init_value
+
+  return schedule
+
+
 def polynomial_schedule(
     global_step: int,
     dataset_size: int,
@@ -389,7 +417,7 @@ def polynomial_schedule(
     start_fraction: float | None = None,
     data_seen: Numeric | None = None,
 ):
-  """Polynomial schedule (defaults to linear)."""
+  """Polynomial schedule (defaults to linear), similar to Optax."""
 
   if (total_steps is None) == (total_epochs is None):
     raise ValueError("Exactly one of 'total_steps' and 'total_epochs' must be "
@@ -435,7 +463,7 @@ def polynomial_schedule(
     else:
       total_data = total_steps * train_total_batch_size
 
-    val = optax.polynomial_schedule(
+    val = _custom_polynomial_schedule(
         init_value=init_value,
         end_value=end_value,
         power=power,
@@ -448,7 +476,7 @@ def polynomial_schedule(
     if start_fraction is not None:
       start_steps = start_fraction * total_steps
 
-    val = optax.polynomial_schedule(
+    val = _custom_polynomial_schedule(
         init_value=init_value,
         end_value=end_value,
         power=power,
