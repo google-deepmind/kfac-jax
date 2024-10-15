@@ -90,9 +90,10 @@ def imagenet_sgd_schedule(
 def fixed_schedule(
     global_step: Numeric,
     value: Numeric,
-) -> Array:
+) -> Numeric:
   """Fixed/constant schedule."""
-  return jnp.ones_like(global_step) * value
+  del global_step
+  return value
 
 
 def kfac_resnet50_schedule(
@@ -495,7 +496,7 @@ def construct_schedule(
     total_steps: int | None,
     total_epochs: float | None,
     **kwargs,
-) -> Callable[[Numeric], Array]:
+) -> Callable[[Numeric], Numeric]:
   """Constructs the actual schedule from its name and extra kwargs."""
 
   name_to_ctor = {
