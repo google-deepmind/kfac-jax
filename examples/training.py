@@ -152,8 +152,6 @@ class SupervisedExperiment(abc.ABC):
       optionally the state of the model if it has one.
     params_init: A function that initializes the model parameters.
     model_loss_func: A function that computes the loss for the model.
-    estimator_model_func: The `model_func_for_estimator` with `is_training` set
-      to `True`.
     train_model_func: The `model_loss_func` with `is_training` set to `True`.
     eval_model_func: The `model_loss_func` with `is_training` set to `False`.
     train_batch_pmap: A pmapped version of `self._train_batch`.
@@ -216,9 +214,6 @@ class SupervisedExperiment(abc.ABC):
     self.params_init = jax.pmap(init_parameters_func)
     self.model_loss_func = model_loss_func
     self.model_func_for_estimator = model_func_for_estimator
-    self.estimator_model_func = functools.partial(
-        self.model_func_for_estimator, is_training=True
-    ) if self.model_func_for_estimator is not None else None
 
     self.train_model_func = functools.partial(
         self.model_loss_func, is_training=True
@@ -436,7 +431,9 @@ class SupervisedExperiment(abc.ABC):
         has_aux=self.has_aux,
         has_func_state=self.has_func_state,
         has_rng=self.has_rng,
-        model_func_for_estimator=self.estimator_model_func,
+        model_func_for_estimator=functools.partial(
+            self.model_func_for_estimator, is_training=True
+        ) if self.model_func_for_estimator is not None else None,
         dataset_size=self.dataset_size,
         train_total_batch_size=self.batch_size.train.total,
         total_steps=self.config.training.steps,

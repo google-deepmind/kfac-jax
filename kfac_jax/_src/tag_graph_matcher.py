@@ -12,11 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC functionality for auto-detecting layer tags and graph matching."""
+
+import collections
 import dataclasses
 import functools
 import itertools
 import pprint
-from typing import Any, Callable, Mapping, Sequence, TypeVar
+from typing import Any, Callable, Mapping, Sequence, Set, TypeVar
 
 from absl import logging
 import immutabledict
@@ -273,6 +275,7 @@ class JaxprGraph:
       leaf_vars: Sequence[Var],
   ) -> JaxprEqns:
     """Returns the sub-graph equations between root vars and leaf vars."""
+
     eqns = []
     # Extract the subgraph equations such that they both depend on root_vars and
     # leaf_vars depends on them
@@ -284,18 +287,24 @@ class JaxprGraph:
 
     to_process_eqns = [self.var_to_creation_op[v] for v in leaf_vars]
     processed_vars = set()
+
     while to_process_eqns:
+
       next_eqn = to_process_eqns.pop()
       eqns.append(next_eqn)
+
       for v in next_eqn.invars:
         if (not isinstance(v, jax.core.Literal) and v not in root_vars and
             v not in processed_vars and v in self.var_to_creation_op):
           to_process_eqns.append(self.var_to_creation_op[v])
           processed_vars.add(v)
+
     return tuple(eqns)
 
   @functools.cached_property
   def losses_eqns(self) -> tuple[tags.LossTagEqn, ...]:
+    # Note that this function won't look inside higher order primitives of this
+    # graph to find loss tags.
     return tuple(
         eqn for eqn in self.closed_jaxpr.jaxpr.eqns
         if isinstance(eqn.primitive, tags.LossTag)
@@ -310,15 +319,24 @@ class JaxprGraph:
   @functools.cached_property
   def manual_registrations(self) -> tuple[tags.LayerTagEqn, ...]:
     """Returns all manually registered tags."""
+
+    # Note that this function won't look inside higher order primitives of this
+    # graph to find layer tags.
+
     registered_tags = []
+
     for eqn in self.jaxpr.eqns:
+
       if isinstance(eqn.primitive, tags.LayerTag):
+
         for param in tags.layer_eqn_data(eqn).params:
           if param not in self.params_vars:
             raise ValueError("One of the parameters of the manual layer "
                              f"registration equation: {eqn} is not part of "
                              "the parameters of the global function.")
+
         registered_tags.append(eqn)
+
     return tuple(registered_tags)
 
 
@@ -395,8 +413,9 @@ def make_jax_graph(
     out_shapes = [jax.ShapeDtypeStruct(shape=v.aval.shape, dtype=v.aval.dtype)
                   for v in closed_jaxpr.jaxpr.outvars]  # pytype:disable=attribute-error
 
+  closed_jaxpr = clean_jaxpr(closed_jaxpr)
+
   if clean_broadcasts:
-    closed_jaxpr = clean_jaxpr(closed_jaxpr)
     closed_jaxpr = merge_broadcasts_jaxpr(closed_jaxpr)
     closed_jaxpr = clean_jaxpr(closed_jaxpr)
 
@@ -494,11 +513,14 @@ class GraphPattern:
       tag.
     """
     assert len(out_vars) == 1
+
     if self.in_values_preprocessor is not None:
       in_vars, eqns = self.in_values_preprocessor(in_vars, make_var_func)
     else:
       eqns = []
+
     new_out_vars = [make_var_func(v.aval) for v in out_vars]
+
     tag_eqn = jax.core.new_jaxpr_eqn(
         invars=[*out_vars, *in_vars],
         outvars=new_out_vars,
@@ -506,6 +528,7 @@ class GraphPattern:
         params=self.parameters_extractor_func(graph_eqns),
         effects=set(),
     )
+
     return [*eqns, tag_eqn]
 
 
@@ -547,6 +570,7 @@ class GraphMatch:
       make_var_func: MakeVarFunc,
   ) -> JaxprEqns:
     """Creates a new ``JaxprEqn`` for this match."""
+
     in_vars = [self.variables_map[k] for k in self.pattern.graph.jaxpr.invars]
     in_vars = [env.get(v, v) for v in in_vars]
     out_vars = [self.variables_map[k]
@@ -556,6 +580,7 @@ class GraphMatch:
     eqns = self.pattern.tag_ctor(
         in_vars, out_vars, self.graph_eqns, make_var_func)
     assert len(out_vars) == len(eqns[-1].outvars)
+
     # Reinsert the output in the environment
     for k, v in zip(out_vars, eqns[-1].outvars):
       env[k] = v
@@ -570,6 +595,7 @@ def match_equations(
     input_vars: Vars,
     param_variables: Vars,
     graph_matcher_rules: GraphMatcherComparator,
+    matchable_graph_params: Set[Var],
 ) -> dict[Var, Var] | None:
   """Tries to continue matching the remaining equations to the Jaxpr graph.
 
@@ -585,6 +611,9 @@ def match_equations(
     param_variables: The parameter variables of the pattern.
     graph_matcher_rules: A :class:`~GraphMatcherRules` instance, which is used
       for determining equivalence of individual Jax primitives.
+    matchable_graph_params: A subset of graph.params_vars consisting of
+      parameters that may appear in matches as parameters (not merely input
+      variables).
 
   Returns:
     ``None`` if it is not possible to finish matching the remaining equations
@@ -619,8 +648,11 @@ def match_equations(
     """
     for var1, var2 in zip(eqn_vars, graph_vars):
 
-      if (var1 in param_variables and var2 not in graph.params_vars or
-          var1 not in param_variables and var2 in graph.params_vars or
+      var2_matchable = isinstance(var2, jax.core.Var) and (
+          var2 in matchable_graph_params)
+
+      if (var1 in param_variables and not var2_matchable or
+          var1 not in param_variables and var2_matchable or
           (isinstance(var2, jax.core.Literal) and var1 not in input_vars)):
         return False
 
@@ -679,11 +711,12 @@ def match_equations(
             input_vars=input_vars,
             param_variables=param_variables,
             graph_matcher_rules=graph_matcher_rules,
+            matchable_graph_params=matchable_graph_params,
         )
 
         if candidate_map is not None:
           # Sanity check
-          assert all(candidate_map[p] in graph.params_vars
+          assert all(candidate_map[p] in matchable_graph_params
                      for p in param_variables)
           results.append(candidate_map)
 
@@ -695,6 +728,7 @@ def match_equations(
         return results[0]
       else:
         return None
+
     elif not add_vars_if_possible(eqn.invars, graph_eqn.invars):
       # In the case where we can't update the current variables map directly
       # return
@@ -708,6 +742,7 @@ def match_pattern(
     root_eqn: JaxprEqn,
     pattern: GraphPattern,
     graph_matcher_rules: GraphMatcherComparator,
+    matchable_graph_params: Set[Var],
 ) -> GraphMatch | None:
   """Tries to match the ``pattern`` in the Jaxpr graph from the ``root_eqn``.
 
@@ -719,6 +754,9 @@ def match_pattern(
     pattern: The pattern, which we are trying to match.
     graph_matcher_rules: A :class:`~GraphMatcherRules` instance, which is used
       for determining equivalence of individual Jax primitives.
+    matchable_graph_params: A subset of graph.params_vars consisting of
+      parameters that may appear in matches as parameters (not merely input
+      variables).
 
   Returns:
     The variable to variable mapping between the pattern and graph variable,
@@ -729,7 +767,7 @@ def match_pattern(
   if len(pattern.jaxpr.outvars) != len(root_eqn.outvars):
     return None
 
-  # Set the current variables mapping to the output variables and the try to
+  # Set the current variables mapping to the output variables and then try to
   # check the match from there.
   match_variables_map = match_equations(
       graph=graph,
@@ -739,17 +777,23 @@ def match_pattern(
       input_vars=pattern.jaxpr.invars,
       param_variables=pattern.param_vars,
       graph_matcher_rules=graph_matcher_rules,
+      matchable_graph_params=matchable_graph_params,
   )
+
   if match_variables_map is None:
     return None
 
   # Extract all the graph equations corresponding to the pattern.
   graph_eqns = []
   for k, v in match_variables_map.items():
+
     if (k not in pattern.graph.jaxpr.invars and
         not isinstance(v, jax.core.Literal)):
+
       creation_op = graph.var_to_creation_op[v]
+
       assert isinstance(creation_op, JaxprEqn)
+
       graph_eqns.append(creation_op)
 
   return GraphMatch(
@@ -764,18 +808,17 @@ def find_layer_tags_and_patterns(
     eqns_for_patterns: Sequence[JaxprEqn],
     graph_matcher_rules: GraphMatcherComparator,
     graph_patterns: Sequence[GraphPattern],
-) -> tuple[tuple[tags.LayerTagEqn, ...], dict[Var, GraphMatch]]:
+    matchable_params: Set[Var],
+) -> dict[Var, GraphMatch]:
   """Tries to automatically match ``patterns_to_match`` in the Jaxpr graph.
 
-  The method returns a pair of ``(manual_registrations, matches)``, where
-  ``manual_registrations`` is a tuple of all layer tags that are already
-  present in the graph and ``matches`` contains all newly discovered matches
-  of any pattern. Each entry has as a key the variable of the graph
-  corresponding to the output of the pattern, while each value is a triple
-  ``(pattern, match_map, eqns)`` where ``pattern`` is the :class:`~JaxprGraph`
-  of the pattern that has been matched, ``match_map`` is mapping the pattern
-  variables to the corresponding graph variables and ``eqns`` is the sequence
-  of all graph equations corresponding to the pattern equations.
+  The method returns all newly discovered matches of any pattern. Each entry has
+  as a key the variable of the graph corresponding to the output of the pattern,
+  while each value is a triple ``(pattern, match_map, eqns)`` where ``pattern``
+  is the :class:`~JaxprGraph` of the pattern that has been matched,
+  ``match_map`` is mapping the pattern variables to the corresponding graph
+  variables and ``eqns`` is the sequence of all graph equations corresponding to
+  the pattern equations.
 
   Args:
     graph: The :class:`~JaxprGraph` on which we are searching for matching
@@ -787,43 +830,56 @@ def find_layer_tags_and_patterns(
     graph_patterns: A sequence of :class:`~GraphPattern` objects, which contain
       all patterns to use, in order of precedence, which to try to find in the
       graph before registering a parameter with a generic layer tag.
+    matchable_params: A subset of graph.params_vars consisting of parameters
+      that may appear in matches as parameters (not merely input variables).
 
   Returns:
-    The pair ``(manual_registrations, matches)``.
+    See above.
   """
+
   # This list keeps track to any equations that are already in a pattern and
   # hence should not be part of any other.
   registered_equations = []
 
   # First add any manual registrations to this.
   for eqn in graph.manual_registrations:
+
     layer_data = tags.layer_eqn_data(eqn)
+
     for manual_eqn in graph.sub_graph_eqns(
         layer_data.inputs + layer_data.params, layer_data.outputs
     ):
       registered_equations.append(manual_eqn)
 
   matches = {}
-  # Loop through all equations in reverse and for each one check every pattern
+
+  # Loop through all equations in reverse, and for each one check every pattern
   for eqn in reversed(eqns_for_patterns):
+
     if eqn in registered_equations or eqn.primitive.name in HIGHER_ORDER_NAMES:
       continue
 
     for pattern in graph_patterns:
+
       match = match_pattern(
           graph=graph,
           root_eqn=eqn,
           pattern=pattern,
           graph_matcher_rules=graph_matcher_rules,
+          matchable_graph_params=matchable_params,
       )
+
       if match is not None:
+
         # Add all the match equations to the registered equations
         registered_equations.extend(match.graph_eqns)
+
         # Add the match to the mapping of graph matches
         matches[match.output_var] = match
+
         break
 
-  return graph.manual_registrations, matches
+  return matches
 
 
 def read_env(
@@ -929,7 +985,7 @@ def clean_jaxpr(
 
     # Note that we currently only trace dependencies into higher order
     # primitives, but not *through* them. If a single output of a higher order
-    # primtive is a dependency, then all of its inputs are treated as such too.
+    # primitive is a dependency, then all of its inputs are treated as such too.
     eqn = apply_to_higher_order_primitives(
         eqn,
         functools.partial(
@@ -1471,7 +1527,10 @@ class TagLocation:
       else:
         raise NotImplementedError()
 
+      # Indices inside of the higher order primitive
       p_indexes = [invars.index(p) for p in param_vars]
+
+      # Inputs (to the higher order primitive) corresponding to those indices
       param_vars = tuple(eqn.invars[pi] for pi in p_indexes)
 
     return param_vars
@@ -1500,14 +1559,21 @@ class TaggedFunction:
     return jax.tree_util.tree_unflatten(self._func_graph.out_tree, flat_output)
 
   def _compute_parameter_labels(self) -> Mapping[Var, Sequence[str]]:
-    # Collect all registration for every tagged parameter
+    """Computes the parameter labels as a dict from params to strings."""
+
+    # Collect all registrations for every tagged parameter
     tagged_params = {}
+
     for tag_l in self._tag_locations:
       for p in tag_l.top_level_parameters:
+
         assert p in self._func_graph.params_vars
+
         if p not in tagged_params:
           tagged_params[p] = []
+
         tagged_params[p].append(tag_l.full_name)
+
     return tagged_params
 
   def print_parameter_tags(self):
@@ -1537,6 +1603,7 @@ def _auto_register_tags(
     graph_patterns: Sequence[GraphPattern],
     register_orphans: bool,
     register_only_until_losses: bool,
+    matchable_params: Set[Var],
 ) -> tuple[JaxprGraph, Sequence[TagLocation]]:
   """Internal function for automatic registration of layer tags."""
 
@@ -1551,25 +1618,65 @@ def _auto_register_tags(
 
   # Extract the sub-graph that leads to losses
   if register_only_until_losses:
+
     eqns_for_registration = []
     sub_graph_vars = set()
     for eqn in reversed(graph.jaxpr.eqns):
+
+      # Note that graph.losses_eqns won't recurse into higher order primitives
+      # to find loss tags, so any losses defined inside such primitives will be
+      # effectively chopped out.
+
       if (eqn in graph.losses_eqns or
           any(v in sub_graph_vars for v in eqn.outvars)):
+
         eqns_for_registration.append(eqn)
         sub_graph_vars.update(
             v for v in eqn.invars if not isinstance(v, jax.core.Literal))
+
     eqns_for_registration = eqns_for_registration[::-1]
+
   else:
     eqns_for_registration = graph.jaxpr.eqns
+
+  # Count number of uses of each parameter and if it exceeds 1, we don't do any
+  # automatic registration. Note that we don't have to recurse into higher order
+  # primitives to count uses because we only care about whether there is more
+  # than one use of a given parameter. If there is, and they are not all inside
+  # of one higher order primitive, we will catch it here. If they're all in one
+  # higher order primitive, then we will catch that when we recursively call
+  # _auto_register_tags, and no registrations will happen at that level.
+  # Finally, the parameter in question will be seen as an orphan and registered
+  # as generic *only* at the top-level call of _auto_register_tags, as intended
+  # (since register_orphans is True only at the top-level call).
+  param_uses = collections.Counter()
+  for eqn in eqns_for_registration:
+    if not isinstance(eqn.primitive, tags.LayerTag):
+      for v in eqn.invars:
+        if v in graph.params_vars:
+          param_uses[v] += 1
+
+  manual_registrations = graph.manual_registrations
+  manually_tagged_params = set()
+  for eqn in manual_registrations:
+    for p in tags.layer_eqn_data(eqn).params:
+      manually_tagged_params.add(p)
+
+  # Parameters that are eligible for auto-matching are those that have exactly
+  # one use in the graph and are not manually tagged.
+  single_use_params = {p for p in graph.params_vars if param_uses[p] <= 1}
+  matchable_params = (single_use_params & matchable_params) - manually_tagged_params  # pylint: disable=line-too-long
 
   # Process all higher order primitives
   eqns = []
   tag_locations = []
   for eqn in graph.jaxpr.eqns:
-    if (eqn not in eqns_for_registration or
-        eqn.primitive.name not in HIGHER_ORDER_NAMES):
+
+    if not (eqn in eqns_for_registration
+            and eqn.primitive.name in HIGHER_ORDER_NAMES):
+
       eqns.append(eqn)
+
       continue
 
     eqn_name = eqn.primitive.name
@@ -1587,17 +1694,26 @@ def _auto_register_tags(
     final_jaxprs = []
     final_tag_locations = []
     for original_jaxpr in sub_jaxprs:
+
       sub_jaxpr = to_closed_jaxpr(original_jaxpr)
-      params_vars = []
-      for out_v, in_v in zip(eqn.invars, sub_jaxpr.jaxpr.invars):
-        if out_v in graph.params_vars:
-          params_vars.append(in_v)
+
+      sub_params_vars = []
+      sub_matchable_params = set()
+      for outer_v, inner_v in zip(eqn.invars, sub_jaxpr.jaxpr.invars):
+
+        if outer_v in graph.params_vars:
+          sub_params_vars.append(inner_v)
+
+        if isinstance(outer_v, Var) and outer_v in matchable_params:
+          assert isinstance(inner_v, Var)
+          sub_matchable_params.add(inner_v)
+
       sub_graph, sub_tag_locations = _auto_register_tags(
           graph=JaxprGraph(
               name=graph.name + f"_{eqn_name}",
               closed_jaxpr=sub_jaxpr,
-              params_tree=jax.tree_util.tree_structure(params_vars),
-              params_vars=params_vars,
+              params_tree=jax.tree_util.tree_structure(sub_params_vars),
+              params_vars=sub_params_vars,
               out_tree=jax.tree_util.tree_structure(sub_jaxpr.jaxpr.outvars),
               tag_ctor=None,
           ),
@@ -1605,9 +1721,12 @@ def _auto_register_tags(
           graph_patterns=graph_patterns,
           register_orphans=False,
           register_only_until_losses=False,
+          matchable_params=sub_matchable_params,
       )
+
       final_jaxprs.append(
           to_jaxpr_or_closed_jaxpr(sub_graph.closed_jaxpr, original_jaxpr))
+
       final_tag_locations.append(sub_tag_locations)
 
     if eqn_name == "cond":
@@ -1631,6 +1750,7 @@ def _auto_register_tags(
       raise NotImplementedError()
 
     eqns.append(eqn.replace(params=eqn_params))
+
     del sub_graph, final_jaxprs, final_tag_locations
 
     # Insert the sub-registrations into the tagged_params
@@ -1654,15 +1774,17 @@ def _auto_register_tags(
   del graph
 
   # Find matches
-  manual_registrations, matches = find_layer_tags_and_patterns(
+  matches = find_layer_tags_and_patterns(
       graph=mid_graph,
       eqns_for_patterns=eqns_for_registration,
       graph_matcher_rules=graph_matcher_rules,
-      graph_patterns=graph_patterns
+      graph_patterns=graph_patterns,
+      matchable_params=matchable_params,
   )
 
   tagged_params = set()
-  # Automatically detected registrations in higher order primitives
+
+  # Registrations in higher order primitives
   for tag_l in tag_locations:
     for p in tag_l.top_level_parameters:
       tagged_params.add(p)
@@ -1672,7 +1794,7 @@ def _auto_register_tags(
     for p in tags.layer_eqn_data(manual_eqn).params:
       tagged_params.add(p)
 
-  # Automatically detect registrations
+  # Automatically detected registrations
   for match in matches.values():
     for p in match.param_graph_variables:
       tagged_params.add(p)
@@ -1684,11 +1806,16 @@ def _auto_register_tags(
   pattern_counters = {}
 
   if register_orphans:
+
     for param in mid_graph.params_vars:
+
       if param not in tagged_params:
+
         orphan_p = make_var_func(param.aval)
+
         n = pattern_counters.get("generic", 0)
         pattern_counters["generic"] = n + 1
+
         eqns.append(
             jax.core.new_jaxpr_eqn(
                 invars=[param],
@@ -1704,18 +1831,22 @@ def _auto_register_tags(
                 effects=set(),
             )
         )
+
         env[param] = orphan_p
         tag_locations.append(TagLocation(eqns[-1]))
 
   for eqn in mid_graph.jaxpr.eqns:
+
     invars = [env.get(v, v) if isinstance(v, Var) else v
               for v in eqn.invars]
     eqns.append(eqn.replace(invars=invars))
 
     if isinstance(eqn.primitive, tags.LayerTag):
+
       # Mark manual registrations
       meta = eqns[-1].params.get("meta")
       assert meta is not None and isinstance(meta, tags.LayerMetaData)
+
       if meta.name is None:
         n = pattern_counters.get(meta.variant, 0)
         pattern_counters[meta.variant] = n + 1
@@ -1724,9 +1855,12 @@ def _auto_register_tags(
       tag_locations.append(TagLocation(eqn))
 
     for var in eqn.outvars:
+
       # Check if this is a match of a graph pattern
       match = matches.get(var)
+
       if match is not None:
+
         for additional_eqn in match.create_eqn(env, make_var_func):
           eqns.append(additional_eqn)
 
@@ -1741,6 +1875,7 @@ def _auto_register_tags(
 
   final_outvars = [env.get(v, v) if isinstance(v, Var) else v
                    for v in mid_graph.jaxpr.outvars]
+
   final_graph = JaxprGraph(
       name=mid_graph.name,
       closed_jaxpr=ClosedJaxpr(
@@ -1752,6 +1887,7 @@ def _auto_register_tags(
       out_tree=mid_graph.out_tree,
       tag_ctor=None,
   )
+
   return final_graph, tag_locations
 
 
@@ -1762,7 +1898,6 @@ def auto_register_tags(
     register_only_generic: bool = False,
     compute_only_loss_tags: bool = True,
     patterns_to_skip: Sequence[str] = (),
-    allow_multiple_registrations: bool = False,
     graph_matcher_rules: GraphMatcherComparator = GraphMatcherComparator(),
     graph_patterns: Sequence[GraphPattern] = DEFAULT_GRAPH_PATTERNS,
 ) -> TaggedFunction:
@@ -1780,8 +1915,6 @@ def auto_register_tags(
       actual output.
     patterns_to_skip: The names of any patterns from the provided list, which to
       be skipped/not used during the pattern matching.
-    allow_multiple_registrations: Whether to raise an error if a parameter is
-      registered with more than one layer tag.
     graph_matcher_rules: A :class:`~GraphMatcherRules` instance, which is used
       for determining equivalence of individual Jax primitives.
     graph_patterns: A sequence of :class:`~GraphPattern` objects, which contain
@@ -1790,6 +1923,7 @@ def auto_register_tags(
   Returns:
     A transformed function as described above.
   """
+
   graph = make_jax_graph(
       func=func,
       func_args=func_args,
@@ -1799,7 +1933,7 @@ def auto_register_tags(
       clean_broadcasts=True,
   )
 
-  patterns = () if register_only_generic else  tuple(
+  patterns = () if register_only_generic else tuple(
       pattern for pattern in graph_patterns
       if pattern.name not in patterns_to_skip)
 
@@ -1808,9 +1942,9 @@ def auto_register_tags(
       graph_matcher_rules=graph_matcher_rules,
       graph_patterns=patterns,
       register_orphans=True,
-      register_only_until_losses=True
+      register_only_until_losses=True,
+      matchable_params=set(graph.params_vars),
   )
-  # TOOO(name manual tags)
 
   func = TaggedFunction(
       func_graph=func_graph,
@@ -1818,10 +1952,6 @@ def auto_register_tags(
   )
   func.print_parameter_tags()
 
-  # TODO(jamesmartens,botev): we should probably instead auto-register generic
-  # for multiple matches in the scanner, or when there are any unmatched uses
-  # (even if one of the uses is matched).
-  if not allow_multiple_registrations:
-    func.check_multiple_registrations()
+  func.check_multiple_registrations()
 
   return func

@@ -790,9 +790,7 @@ def _layer_tag_vjp(
       write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
 
       if isinstance(eqn.primitive, tags.LossTag):
-
         num_losses_passed += 1
-
         if num_losses_passed == len(processed_jaxpr.loss_tags):
           break
 
