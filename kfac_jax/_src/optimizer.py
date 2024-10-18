@@ -1017,6 +1017,7 @@ class Optimizer(utils.WithStagedMethods):
       sync: Array | bool,
   ) -> tuple[State, utils.MultiChunkAccumulator]:
     """A single burnin step, updating only the curvature estimate."""
+
     if self._damping_schedule is None:
       assert state.damping is not None
       damping = state.damping
@@ -1306,9 +1307,14 @@ class Optimizer(utils.WithStagedMethods):
 
     if step_counter_int == 0:
 
-      if data_iterator is not None:
+      if self.num_burnin_steps > 0:
+
+        if data_iterator is None:
+          raise ValueError("If num_burnin_steps > 0, data_iterator must be "
+                           "provided.")
 
         rng, burnin_rng = self._rng_split(rng, 2)
+
         state, func_state = self.burnin(
             num_steps=self.num_burnin_steps,
             params=params,
