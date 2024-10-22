@@ -240,6 +240,11 @@ def stepwise_schedule(
     raise ValueError("Exactly one of 'warmup_epochs' and 'warmup_steps' must "
                      "be set.")
 
+  num_boundaries = len(epoch_boundaries or step_boundaries)
+  if len(lr_decay_factors) != num_boundaries:
+    raise ValueError(f"len(lr_decay_factors)={len(lr_decay_factors)} must be "
+                     f"equal to the number of boundaries={num_boundaries}.")
+
   values = jnp.concatenate(
       [jnp.array([1.0]), jnp.array(lr_decay_factors)]) * initial_learning_rate
 
