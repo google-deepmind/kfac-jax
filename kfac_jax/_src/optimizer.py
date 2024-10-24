@@ -400,9 +400,6 @@ class Optimizer(utils.WithStagedMethods):
     if use_adaptive_damping and initial_damping is None:
       raise ValueError("When use_adaptive_damping is True you must provide a "
                        "value for initial_damping.")
-    if not use_adaptive_damping and initial_damping is not None:
-      raise ValueError("When use_adaptive_damping is False you should not "
-                       "provide a value for initial_damping.")
     if use_adaptive_learning_rate and learning_rate_schedule is not None:
       raise ValueError("If you are using adaptive learning rate then "
                        "`learning_rate_schedule` should be None.")
