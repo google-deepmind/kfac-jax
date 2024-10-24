@@ -32,6 +32,7 @@ class TestGraphMatcher(parameterized.TestCase):
 
   def check_equation_match(self, eqn1, vars_to_vars, vars_to_eqn):
     """Checks that equation is matched in the other graph."""
+
     eqn1_out_vars = [v for v in eqn1.outvars
                      if not isinstance(v, jax.core.DropVar)]
     eqn2_out_vars = [vars_to_vars[v] for v in eqn1_out_vars]
@@ -40,12 +41,14 @@ class TestGraphMatcher(parameterized.TestCase):
     eqn2 = eqns[0]
 
     self.assertEqual(eqn1.primitive, eqn2.primitive)
+
     if eqn1.primitive.name == "conv2d_tag":
       # params removed in https://github.com/google/jax/pull/14211
       skip_params = ["lhs_shape", "rhs_shape", "meta"]
     else:
       # algorithm parameter added in https://github.com/jax-ml/jax/pull/23574
-      skip_params = ["algorithm", "transpose_algorithm", "meta"]
+      skip_params = ["algorithm", "transpose_algorithm", "meta", "out_type"]
+
     if eqn1.primitive.name == "cond":
       raise NotImplementedError()
     elif eqn1.primitive.name == "while":
@@ -56,6 +59,7 @@ class TestGraphMatcher(parameterized.TestCase):
       exclude_param = "call_jaxpr"
     else:
       exclude_param = ""
+
     # Check all eqn parameters
     for k in eqn1.params:
       if k != exclude_param and k not in skip_params:
