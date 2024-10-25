@@ -1088,6 +1088,7 @@ def merge_broadcasts_jaxpr(jaxpr: J) -> J:
                     eqn.params["broadcast_dimensions"][d]
                     for d in prev_eqn.params["broadcast_dimensions"]
                 ),
+                "sharding": None,
             },
             outvars=eqn.outvars,
         )
