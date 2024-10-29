@@ -42,12 +42,7 @@ class TestGraphMatcher(parameterized.TestCase):
 
     self.assertEqual(eqn1.primitive, eqn2.primitive)
 
-    if eqn1.primitive.name == "conv2d_tag":
-      # params removed in https://github.com/google/jax/pull/14211
-      skip_params = ["lhs_shape", "rhs_shape", "meta"]
-    else:
-      # algorithm parameter added in https://github.com/jax-ml/jax/pull/23574
-      skip_params = ["algorithm", "transpose_algorithm", "meta", "out_type"]
+    skip_params = ["meta"]
 
     if eqn1.primitive.name == "cond":
       raise NotImplementedError()
@@ -63,6 +58,9 @@ class TestGraphMatcher(parameterized.TestCase):
     # Check all eqn parameters
     for k in eqn1.params:
       if k != exclude_param and k not in skip_params:
+        if k not in eqn2.params:
+          raise ValueError(f"Key {k} not found in eqn2.params "
+                           f"for eqn1: {eqn1} and eqn2: {eqn2}")
         self.assertEqual(eqn1.params[k], eqn2.params[k], k)
 
     if isinstance(eqn1.primitive, kfac_jax.LayerTag):

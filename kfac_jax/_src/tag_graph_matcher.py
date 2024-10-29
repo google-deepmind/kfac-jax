@@ -142,7 +142,7 @@ def dot_general_equivalent(
 ) -> bool:
   if not (equation1.primitive.name == "dot_general" and
           equation2.primitive.name == "dot_general"):
-    raise ValueError("This is only applicable to `conv_general_dilated` "
+    raise ValueError("This is only applicable to `dot_general_equivalent` "
                      "primitive.")
   # We ignore precision and preferred_element_type
   return (equation1.params["dimension_numbers"] ==
@@ -1840,6 +1840,7 @@ def _auto_register_tags(
 
     invars = [env.get(v, v) if isinstance(v, Var) else v
               for v in eqn.invars]
+
     eqns.append(eqn.replace(invars=invars))
 
     if isinstance(eqn.primitive, tags.LayerTag):
