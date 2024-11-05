@@ -14,11 +14,9 @@
 """K-FAC utilities for classes with staged methods."""
 import functools
 import numbers
-import operator
 from typing import Any, Callable, Sequence
 
 import jax
-import jax.numpy as jnp
 
 from kfac_jax._src.utils import misc
 from kfac_jax._src.utils import parallel
@@ -174,8 +172,6 @@ def staged(
   else:
     donate_argnums: tuple[int, ...] = tuple(donate_argnums)
 
-  bcast_argnums = static_argnums or ()
-
   # shift static_argnums by 1 and include instance (self)
   static_argnums = (0,) + tuple(i + 1 for i in (static_argnums or ()))
   # shift donate_argnums by 1 and include state
@@ -193,46 +189,24 @@ def staged(
       return method(instance, *args)
 
     with instance.staging_context():
-      if instance.multi_device and instance.debug:
-        # In this case we want to call `method` once for each device index.
-        # Note that this might not always produce sensible behavior, and will
-        # depend on the details of the method and if it has side effects on the
-        # state of the class.
 
-        outs = []
-        non_bcast_args = [args[i] if i not in bcast_argnums else None
-                          for i in range(len(args))]
+      if instance.multi_device:
 
-        for i in range(jax.local_device_count()):
-
-          non_bcast_args_i = jax.tree_util.tree_map(
-              operator.itemgetter(i), non_bcast_args)
-
-          args_i = [
-              non_bcast_args_i[j] if j not in bcast_argnums else args[j]
-              for j in range(len(args))
-          ]
-
-          outs.append(method(instance, *args_i))
-
-        outs = jax.tree_util.tree_map(lambda *args_: jnp.stack(args_), *outs)
-
-      elif instance.debug:
-        outs = method(instance, *args)
-
-      elif instance.multi_device:
         # Compute in_axes so we broadcast any argument that is a scalar
         in_axes = [None]
         for i in range(len(args)):
+
           if (isinstance(args[i], numbers.Number) or
               (isinstance(args[i], jax.Array) and not args[i].shape)):
             # Single scalar
             in_axes.append(None)
+
           else:
             in_axes.append(0)
 
         in_axes = tuple(in_axes)
         key = (instance.pmap_axis_name, in_axes)
+
         func = pmap_funcs.get(key)
 
         if func is None:
@@ -245,10 +219,19 @@ def staged(
           )
           pmap_funcs[key] = func
 
-        outs = func(instance, *args)
+        if instance.debug:
+          with jax.disable_jit():
+            outs = func(instance, *args)
+        else:
+          outs = func(instance, *args)
 
       else:
-        outs = jitted_func(instance, *args)
+
+        if instance.debug:
+          with jax.disable_jit():
+            outs = jitted_func(instance, *args)
+        else:
+          outs = jitted_func(instance, *args)
 
     return outs
 

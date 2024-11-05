@@ -809,8 +809,6 @@ class BlockDiagonalCurvature(
 
     if self._distributed_cache_updates and pmap_axis_name is not None:
 
-      assert utils.in_pmap(pmap_axis_name)
-
       def filter_outputs(thunk, vals):
 
         # We must precompute the matches outside of the thunk itself, as the

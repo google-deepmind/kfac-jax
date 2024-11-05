@@ -131,6 +131,7 @@ class Optimizer(utils.WithStagedMethods):
           dict[str, curvature_estimator.CurvatureBlockCtor] | None) = None,
       multi_device: bool = False,
       debug: bool = False,
+      invalid_metric_value: Numeric = jnp.nan,
       batch_size_extractor: Callable[
           [Batch], Numeric
       ] = utils.default_batch_size_extractor,
@@ -331,8 +332,15 @@ class Optimizer(utils.WithStagedMethods):
       multi_device: Boolean. Whether to use pmap and run the optimizer on
         multiple devices. (Default: ``False``)
       debug: Boolean. If neither the step or init functions should be jitted.
-        Note that this also overrides ``multi_device`` and prevents using pmap.
-        (Default: ``False``)
+        Note that this also overrides ``multi_device`` and prevents using pmap,
+        instead using a "simulated pmap" that loops over the device index and
+        does everything on the default device. (Default: ``False``)
+      invalid_metric_value: Numeric. Certain metrics returned from the step
+        function are not always computed at each iteration, or may otherwise
+        be invalid. In such cases we need to return a value anyway. jnp.nan is
+        a natural choice, but can sometimes cause problems (e.g. false positives
+        JAX's automatic NaN checker). This argument allows the user to specify a
+        different value to return in such cases. (Default: ``jnp.nan``)
       batch_size_extractor: A function that takes as input the function
         arguments and returns the batch size for a single device. (Default:
         ``kfac.utils.default_batch_size_extractor``)
@@ -459,6 +467,8 @@ class Optimizer(utils.WithStagedMethods):
     self._include_per_param_norms_in_stats = include_per_param_norms_in_stats
     self._include_registered_loss_in_stats = include_registered_loss_in_stats
     self._batch_size_extractor = batch_size_extractor
+
+    self._invalid_metric_value = invalid_metric_value
 
     self._use_cached_inverses = (self._inverse_update_period != 1)
     self._use_exact_inverses = use_exact_inverses
@@ -796,6 +806,7 @@ class Optimizer(utils.WithStagedMethods):
 
     return loss, grads, func_state, aux
 
+  @functools.partial(utils.staged, donate_argnums=0)
   def _maybe_update_inverse_cache(self, state: State, damping: Array) -> State:
     """Updates the estimator state cache if it is the right iteration."""
     return self._maybe_update_estimator_state(
@@ -906,12 +917,12 @@ class Optimizer(utils.WithStagedMethods):
         quad_change = lax.cond(
             self.should_update_damping(state),
             lambda args: self._compute_quad_change_for_damping(*args),
-            lambda args: jnp.nan,
+            lambda args: self._invalid_metric_value,
             (state, delta, grads, damping, func_args),
         )
 
       else:
-        quad_change = jnp.nan
+        quad_change = self._invalid_metric_value
 
       return coefficients, quad_change
 
@@ -1165,14 +1176,15 @@ class Optimizer(utils.WithStagedMethods):
       state.damping, rho, new_loss = lax.cond(
           self.should_update_damping(state),
           lambda args: self._update_damping(*args),
-          lambda args: (args[0], jnp.nan, jnp.nan),
+          lambda args: (args[0], self._invalid_metric_value,
+                        self._invalid_metric_value),
           operand=(state.damping, loss, quad_model_change,
                    (params,) + func_args[1:])
       )
     else:
       # If not adjusting the damping we don't compute these here and just set
-      # them to NaN.
-      new_loss, rho = jnp.nan, jnp.nan
+      # them to self._invalid_metric_value.
+      new_loss, rho = self._invalid_metric_value, self._invalid_metric_value
 
     # Compute per-device and total batch size
     batch_size = self._batch_size_extractor(func_args[-1])
