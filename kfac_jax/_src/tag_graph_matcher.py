@@ -1178,8 +1178,11 @@ def _make_general_dense_pattern(
     out_dim: int = 7,
 ) -> GraphPattern:
   """Creates a pattern for a dense or repeated dense layer."""
+
   in_axes = [0, [None, None]] if with_bias else [0, [None]]
+
   f = _dense_with_reshape if reshape else _dense
+
   for _ in range(num_repeated_axes):
     f = jax.vmap(f, in_axes=in_axes)
 
@@ -1188,30 +1191,39 @@ def _make_general_dense_pattern(
               [[in_dim, out_dim]])
 
   name = "dense_with_bias" if with_bias else "dense_no_bias",
+
   if num_repeated_axes > 0:
     name = f"repeated[{num_repeated_axes}]_{name}"
+    variant = "repeated_dense"
+  else:
+    variant = "dense"
 
   return GraphPattern(
       name=name,
       tag_primitive=tags.layer_tag,
       compute_func=f,
-      parameters_extractor_func=_dense_parameter_extractor,
+      parameters_extractor_func=functools.partial(
+          _dense_parameter_extractor, variant=variant),
       example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
   )
 
 
 def _conv2d(x: Array, params: Sequence[Array]) -> Array:
   """Example of a conv2d layer function."""
+
   w = params[0]
+
   y = jax.lax.conv_general_dilated(
       x,
       w,
       window_strides=(2, 2),
       padding="SAME",
       dimension_numbers=("NHWC", "HWIO", "NHWC"))
+
   if len(params) == 1:
     # No bias
     return y
+
   # Add bias
   return y + params[1][None, None, None]
 
@@ -1221,6 +1233,7 @@ def _conv2d_parameter_extractor(
     variant: str = "conv2d",
 ) -> Mapping[str, Any]:
   """Extracts all parameters from the `conv_general_dilated` operator."""
+
   n = num_unique_inputs(reversed_eqns[::-1])
 
   for eqn in reversed_eqns:
@@ -1234,15 +1247,19 @@ def _conv2d_parameter_extractor(
           ),
           **eqn.params,
       )
+
   assert False
 
 
 def _make_conv2d_pattern(
     with_bias: bool,
 ) -> GraphPattern:
+
   x_shape = [2, 8, 8, 5]
+
   p_shapes = ([[3, 3, 5, 4], [4]] if with_bias else
               [[3, 3, 5, 4]])
+
   return GraphPattern(
       name="conv2d_with_bias" if with_bias else "conv2d_no_bias",
       tag_primitive=tags.layer_tag,
@@ -1259,15 +1276,19 @@ def _scale_and_shift(
     has_shift: bool,
 ) -> Array:
   """Example of a scale and shift function."""
+
   if has_scale and has_shift:
     scale, shift = params
     return x * scale + shift
+
   elif has_scale:
     [scale] = params
     return x * scale
+
   elif has_shift:
     [shift] = params
     return x + shift
+
   else:
     raise ValueError("You must have either `has_scale` or `has_shift` set "
                      "to True.")
@@ -1278,8 +1299,11 @@ def _scale_and_shift_parameter_extractor(
     variant: str = "scale_and_shift",
 ) -> Mapping[str, Any]:
   """Extracts all parameters from the `conv_general_dilated` operator."""
+
   has_scale = False
+
   has_shift = False
+
   for eqn in reversed_eqns:
     if eqn.primitive.name == "mul":
       has_scale = True
@@ -1305,10 +1329,14 @@ def _make_scale_and_shift_pattern(
     p_dim: int = 13,
 ) -> GraphPattern:
   """Creates a scale and shift graph pattern."""
+
   assert broadcast_ndim >= 0
+
   assert has_scale or has_shift
+
   x_shape = [i + 2 for i in range(broadcast_ndim)] + [p_dim]
   p_shapes = [[p_dim], [p_dim]] if (has_scale and has_shift) else [[p_dim]]
+
   if has_scale and has_shift:
     name = f"scale_and_shift_broadcast_{broadcast_ndim}"
   elif has_scale:
@@ -1317,6 +1345,7 @@ def _make_scale_and_shift_pattern(
     name = f"shift_only_broadcast_{broadcast_ndim}"
   else:
     raise ValueError("Unreachable.")
+
   return GraphPattern(
       name=name,
       tag_primitive=tags.layer_tag,
@@ -1334,12 +1363,16 @@ def _normalization_haiku(
     has_shift: bool,
 ) -> Array:
   """Example of normalization as is defined in Haiku."""
+
   if len(params) not in (1, 2):
     raise ValueError("The inputs to the `normalization_haiku` computation must "
                      f"have either 1 or 2 parameters, but got {len(params)}.")
+
   [inputs, rsqrt_var] = inputs
+
   inv = params[0] * rsqrt_var if has_scale else rsqrt_var
   outputs = inputs * inv
+
   return outputs + params[-1] if has_shift else outputs
 
 
@@ -1374,10 +1407,14 @@ def _normalization_haiku_preprocessor(
   Returns:
     The canonical input to ``scale_and_shift`` pattern.
   """
+
   [in_var, rsqrt_var, *param_vars] = in_vars
+
   # The equation below corresponds to the computation:
   # normalized_inputs = inputs * rsqrt_var
+
   normalized_inputs_var = make_var_func(in_var.aval)
+
   normalized_inputs_eqn = jax.core.new_jaxpr_eqn(
       invars=[in_var, rsqrt_var],
       outvars=[normalized_inputs_var],
@@ -1385,6 +1422,7 @@ def _normalization_haiku_preprocessor(
       params=dict(),
       effects=set(),
   )
+
   return (normalized_inputs_var, *param_vars), [normalized_inputs_eqn]
 
 
@@ -1392,8 +1430,11 @@ def _make_normalization_haiku_pattern(
     broadcast_ndim: int,
     p_dim: int = 13,
 ):
+
   assert broadcast_ndim >= 0
+
   x_shape = [i + 2 for i in range(broadcast_ndim)] + [p_dim]
+
   return GraphPattern(
       name=f"normalization_haiku_broadcast_{broadcast_ndim}",
       tag_primitive=tags.layer_tag,
