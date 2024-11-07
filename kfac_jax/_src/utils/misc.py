@@ -16,6 +16,7 @@ import abc
 import dataclasses
 import functools
 import inspect
+import itertools
 from typing import Any, Callable, Iterator, Sequence, TypeVar
 
 import jax
@@ -23,6 +24,7 @@ import jax.numpy as jnp
 from kfac_jax._src.utils import types
 
 T = types.T
+S = TypeVar("S", bound=Sequence)
 Array = types.Array
 Numeric = types.Numeric
 ArrayTree = types.ArrayTree
@@ -62,6 +64,17 @@ def fake_element_from_iterator(
     while True:
       yield next(iterator)
   return fake_element, equivalent_iterator()
+
+
+def filter_sequence(
+    unfiltered_sequence: S,
+    bool_sequence: Sequence[bool]
+) -> S:
+
+  filtered = itertools.compress(unfiltered_sequence, bool_sequence)
+
+  return tuple(filtered) if isinstance(
+      unfiltered_sequence, tuple) else list(filtered)
 
 
 def to_tuple_or_repeat(

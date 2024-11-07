@@ -923,7 +923,9 @@ def to_jaxpr_or_closed_jaxpr(closed_jaxpr: ClosedJaxpr, original: J) -> J:
   return closed_jaxpr
 
 
-def apply_to_higher_order_primitives(eqn, func, *args, **kwargs):
+def apply_to_higher_order_primitives(
+    eqn: JaxprEqn,
+    func: Callable[[J], J]):
   """Applies `func` only to higher order Jax primitives."""
 
   if eqn.primitive.name not in HIGHER_ORDER_NAMES:
@@ -932,23 +934,23 @@ def apply_to_higher_order_primitives(eqn, func, *args, **kwargs):
   elif eqn.primitive.name == "cond":
     params = dict(**eqn.params)
     params["branches"] = tuple(
-        func(branch, *args, **kwargs) for branch in params["branches"]
+        func(branch) for branch in params["branches"]
     )
     return eqn.replace(params=params)
 
   elif eqn.primitive.name == "while":
     params = dict(**eqn.params)
-    params["body_jaxpr"] = func(params["body_jaxpr"], *args, **kwargs)
+    params["body_jaxpr"] = func(params["body_jaxpr"])
     return eqn.replace(params=params)
 
   elif eqn.primitive.name in ("scan", "pjit"):
     params = dict(**eqn.params)
-    params["jaxpr"] = func(params["jaxpr"], *args, **kwargs)
+    params["jaxpr"] = func(params["jaxpr"])
     return eqn.replace(params=params)
 
   elif eqn.primitive.name in ("xla_call", "xla_pmap"):
     params = dict(**eqn.params)
-    params["call_jaxpr"] = func(params["call_jaxpr"], *args, **kwargs)
+    params["call_jaxpr"] = func(params["call_jaxpr"])
     return eqn.replace(params=params)
 
   else:
@@ -968,18 +970,24 @@ def clean_jaxpr(
   if outvar_is_dep is None:
     outvar_is_dep = (True,) * len(closed_jaxpr.jaxpr.outvars)
 
-  dependants = set(
-      var for var, is_dep in zip(closed_jaxpr.jaxpr.outvars,
-                                 outvar_is_dep, strict=True)
-      if is_dep and not isinstance(var, jax.core.Literal)
-      )
+  final_outvars = []
+  dependants = set()
+
+  for var, is_dep in zip(closed_jaxpr.jaxpr.outvars, outvar_is_dep,
+                         strict=True):
+    if is_dep:
+
+      final_outvars.append(var)
+
+      if not isinstance(var, jax.core.Literal):
+        dependants.add(var)
 
   for eqn in reversed(closed_jaxpr.jaxpr.eqns):
 
-    # It's much more complicated to trace dependencies through iterative higher
-    # order primitives, so we don't do it.
+    # It's much more complicated to trace dependencies through *iterative*
+    # higher order primitives, so we don't do it.
     if eqn.primitive.name in ITERATIVE_HIGHER_ORDER_NAMES:
-      outvar_is_dep_for_eqn = None
+      outvar_is_dep_for_eqn = (True,) * len(eqn.outvars)
     else:
       outvar_is_dep_for_eqn = tuple(var in dependants for var in eqn.outvars)
 
@@ -990,10 +998,29 @@ def clean_jaxpr(
         eqn,
         functools.partial(
             clean_jaxpr,
-            outvar_is_dep=outvar_is_dep_for_eqn
+            outvar_is_dep=outvar_is_dep_for_eqn,
+            preserve_tags=preserve_tags
             ),
-        preserve_tags=preserve_tags
         )
+
+    if eqn.primitive.name in HIGHER_ORDER_NAMES:
+
+      params = dict(**eqn.params)
+
+      if "out_shardings" in params:
+        params["out_shardings"] = utils.filter_sequence(params["out_shardings"],
+                                                        outvar_is_dep_for_eqn)
+      if "out_layouts" in params:
+        params["out_layouts"] = utils.filter_sequence(params["out_layouts"],
+                                                      outvar_is_dep_for_eqn)
+
+      eqn = eqn.replace(
+          outvars=utils.filter_sequence(eqn.outvars, outvar_is_dep_for_eqn),
+          params=params,
+          )
+
+    else:
+      assert all(outvar_is_dep_for_eqn) or not any(outvar_is_dep_for_eqn)
 
     check = False
 
@@ -1018,46 +1045,12 @@ def clean_jaxpr(
   if dependants:
     raise ValueError("Something went wrong with the dead code elimination.")
 
-  # Because trying to eliminate output variables from higher order primitives is
-  # too much work, we instead just replace them with zeros, which is moderately
-  # hacky.
-  # TODO(jamesmartens,botev): Consider doing something better here.
-  final_outvars = []
-  for var, is_dep in zip(closed_jaxpr.jaxpr.outvars, outvar_is_dep,
-                         strict=True):
-
-    if not isinstance(var, jax.core.Literal) and not is_dep:
-
-      assert isinstance(var.aval, jax.core.ShapedArray)
-
-      if not var.aval.shape:  # scalar case
-
-        val = np.zeros(var.aval.shape, dtype=var.aval.dtype)
-        zero_literal = jax.core.Literal(val, var.aval)
-
-        final_outvars.append(zero_literal)
-
-      else:
-
-        def dummy_func():
-          return jnp.zeros(var.aval.shape, dtype=var.aval.dtype)  # pylint: disable=cell-var-from-loop
-
-        dummy_jaxpr = jax.make_jaxpr(dummy_func)()
-
-        assert len(dummy_jaxpr.eqns) == 1
-        assert len(dummy_jaxpr.eqns[0].outvars) == 1
-
-        eqns.append(dummy_jaxpr.eqns[0])
-        final_outvars.append(dummy_jaxpr.eqns[0].outvars[0])
-
-    else:
-      final_outvars.append(var)
-
   closed_jaxpr = ClosedJaxpr(
       jaxpr=closed_jaxpr.jaxpr.replace(eqns=list(reversed(eqns)),
                                        outvars=final_outvars),
       consts=closed_jaxpr.consts,
   )
+
   return to_jaxpr_or_closed_jaxpr(closed_jaxpr, jaxpr)
 
 

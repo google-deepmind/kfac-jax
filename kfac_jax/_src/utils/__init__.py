@@ -52,6 +52,7 @@ del types
 deserialize_state_tree = misc.deserialize_state_tree
 serialize_state_tree = misc.serialize_state_tree
 to_tuple_or_repeat = misc.to_tuple_or_repeat
+filter_sequence = misc.filter_sequence
 first_dim_is_size = misc.first_dim_is_size
 fake_element_from_iterator = misc.fake_element_from_iterator
 default_batch_size_extractor = misc.default_batch_size_extractor
