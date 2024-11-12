@@ -1393,13 +1393,14 @@ def _make_scale_and_shift_pattern(
   )
 
 
-def _normalization_haiku(
+def _normalization_haiku_flax(
     inputs: Sequence[Array],
     params: Sequence[Array],
     has_scale: bool,
     has_shift: bool,
+    has_reshape: bool,
 ) -> Array:
-  """Example of normalization as is defined in Haiku."""
+  """Example of normalization as is defined in Haiku/Flax."""
 
   if len(params) not in (1, 2):
     raise ValueError("The inputs to the `normalization_haiku` computation must "
@@ -1407,10 +1408,24 @@ def _normalization_haiku(
 
   [inputs, rsqrt_var] = inputs
 
-  inv = params[0] * rsqrt_var if has_scale else rsqrt_var
+  if has_scale:
+    scale = params[0]
+    if has_reshape:
+      scale = scale.reshape(
+          [1] * (inputs.ndim - scale.ndim) + list(scale.shape))
+    inv = scale * rsqrt_var
+  else:
+    inv = rsqrt_var
+
   outputs = inputs * inv
 
-  return outputs + params[-1] if has_shift else outputs
+  if has_shift:
+    shift = params[1]
+    if has_reshape:
+      shift = shift.reshape(
+          [1] * (inputs.ndim - shift.ndim) + list(shift.shape))
+    return outputs + shift
+  return outputs
 
 
 def _normalization_haiku_preprocessor(
@@ -1465,6 +1480,7 @@ def _normalization_haiku_preprocessor(
 
 def _make_normalization_haiku_pattern(
     broadcast_ndim: int,
+    has_reshape: bool,
     p_dim: int = 13,
 ):
 
@@ -1475,8 +1491,11 @@ def _make_normalization_haiku_pattern(
   return GraphPattern(
       name=f"normalization_haiku_broadcast_{broadcast_ndim}",
       tag_primitive=tags.layer_tag,
-      compute_func=functools.partial(_normalization_haiku,
-                                     has_scale=True, has_shift=True),
+      compute_func=functools.partial(
+          _normalization_haiku_flax,
+          has_scale=True,
+          has_shift=True,
+          has_reshape=has_reshape),
       parameters_extractor_func=_scale_and_shift_parameter_extractor,
       example_args=[[np.zeros(x_shape), np.zeros(x_shape)],
                     [np.zeros([p_dim]), np.zeros([p_dim])]],
@@ -1498,8 +1517,10 @@ DEFAULT_GRAPH_PATTERNS = (
     _make_conv2d_pattern(False),
     _make_scale_and_shift_pattern(1, True, True),
     _make_scale_and_shift_pattern(0, True, True),
-    _make_normalization_haiku_pattern(1),
-    _make_normalization_haiku_pattern(0),
+    _make_normalization_haiku_pattern(1, False),
+    _make_normalization_haiku_pattern(1, True),
+    _make_normalization_haiku_pattern(0, False),
+    _make_normalization_haiku_pattern(0, True),
     _make_scale_and_shift_pattern(1, True, False),
     _make_scale_and_shift_pattern(0, True, False),
     _make_scale_and_shift_pattern(1, False, True),
