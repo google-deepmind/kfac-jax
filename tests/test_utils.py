@@ -26,6 +26,7 @@ class TestStableSqrt(parameterized.TestCase):
 
   def test_stable_sqrt(self):
     """Tests calculation of the stable square root."""
+
     x = jnp.asarray([1.0, 1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6, 0.0])
     expected_y = jnp.sqrt(x)
     expected_dx = jnp.minimum(1 / (2 * expected_y), 1000.0)
@@ -87,20 +88,42 @@ class TestRearrage(parameterized.TestCase):
           output_shape=[32, 3600],
       ),
   )
-  def test_stable_sqrt(
+  def test_rearrange(
       self,
       shape: list[int],
       spec: str,
       transpose_order: list[int],
       output_shape: list[int],
   ):
-    """Tests calculation of the stable square root."""
+    """Tests rearrange function."""
+
     rng = jax.random.PRNGKey(0)
     x = jax.random.normal(rng, shape)
     y_target = jnp.transpose(x, transpose_order).reshape(output_shape)
     y = kfac_jax.utils.rearrange(x, spec)
 
     np.testing.assert_array_equal(y, y_target)
+
+
+class InPmapTest(absltest.TestCase):
+  """Test class for the in_pmap function."""
+
+  def test_in_pmap_outside_pmap(self):
+    self.assertFalse(kfac_jax.utils.in_pmap("my_axis"))
+
+  def test_in_pmap_inside_pmap(self):
+    def f(x):
+      self.assertTrue(kfac_jax.utils.in_pmap("my_axis"))
+      return x + 1
+
+    jax.pmap(f, axis_name="my_axis")(jnp.ones([jax.local_device_count()]))
+
+  def test_in_pmap_inside_pmap_wrong_axis(self):
+    def f(x):
+      self.assertFalse(kfac_jax.utils.in_pmap("my_axis"))
+      return x + 1
+
+    jax.pmap(f, axis_name="their_axis")(jnp.ones([jax.local_device_count()]))
 
 
 if __name__ == "__main__":
