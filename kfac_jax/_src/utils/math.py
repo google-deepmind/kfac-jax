@@ -14,16 +14,14 @@
 """K-FAC utilities for various mathematical operations."""
 import functools
 import string
-from typing import Callable, Sequence, Iterable, TypeVar
+from typing import Callable, Iterable, Sequence, TypeVar
 
 import jax
 from jax import lax
 from jax.experimental.sparse import linalg as experimental_splinalg
 import jax.numpy as jnp
 from jax.scipy import linalg
-
 from kfac_jax._src.utils import types
-
 import numpy as np
 import optax
 import tree
@@ -154,6 +152,13 @@ def weighted_sum_of_objects(
 
 def sum_objects(objects: Sequence[TArrayTree]) -> TArrayTree:
   return weighted_sum_of_objects(objects, [1] * len(objects))
+
+
+def pytree_size(pytree):
+  """Computes total size of pytree leaves."""
+  return jax.tree_util.tree_reduce(
+      lambda x, y: x + y, jax.tree_util.tree_map(jnp.size, pytree), 0
+  )
 
 
 def _inner_product_float64(obj1: ArrayTree, obj2: ArrayTree) -> Array:
@@ -1155,3 +1160,8 @@ def _stable_sqrt_fwd(
 _sqrt_bound_derivative.defjvp(_stable_sqrt_fwd)
 
 stable_sqrt = functools.partial(_sqrt_bound_derivative, max_gradient=1000.0)
+
+
+def cosine_similarity(v1: ArrayTree, v2: ArrayTree) -> Array:
+  """Computes the cosine similarity between flattened pytrees."""
+  return inner_product(v1, v2) / (norm(v1) * norm(v2))

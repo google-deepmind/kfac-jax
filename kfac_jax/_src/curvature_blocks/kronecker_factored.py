@@ -16,6 +16,7 @@ import abc
 import math
 from typing import Any, Sequence
 
+import jax
 import jax.numpy as jnp
 from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import patches_second_moment as psm
@@ -280,7 +281,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
     else:
 
-      if power != -1 and power != -0.5:
+      if power not in [-1, -0.5, 0.5]:
         raise NotImplementedError(
             f"Approximations for power {power} is not yet implemented."
         )
@@ -305,6 +306,19 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
           factors = utils.invert_psd_matrices(factors)
         elif power == -0.5:
           factors = utils.inverse_sqrt_psd_matrices(factors)
+        # TODO(timothycnguyen): Hacky psd square root. Will find a better way.
+        elif power == 0.5:
+          inverse_sqrt_factors = utils.inverse_sqrt_psd_matrices(factors)
+
+          def matmul(x, y):
+            if x.ndim == y.ndim == 2:
+              return jnp.dot(x, y)
+            assert x.ndim == y.ndim == 1
+            return x * y
+
+          factors = jax.tree_util.tree_map(
+              matmul, factors, inverse_sqrt_factors
+          )
         else:
           raise NotImplementedError()
 

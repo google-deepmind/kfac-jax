@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """K-FAC utilities for classes with staged methods."""
+
 import functools
 import numbers
 from typing import Any, Callable, Sequence
 
 import jax
-
+from jax import lax
 from kfac_jax._src.utils import misc
 from kfac_jax._src.utils import parallel
 from kfac_jax._src.utils import types
+
 
 TArrayTree = types.TArrayTree
 
@@ -128,6 +130,18 @@ class WithStagedMethods(misc.Finalizable):
       return parallel.replicate_all_local_devices(obj)
     else:
       return obj
+
+  def pmean_if_pmap_wrapper(
+      self,
+      func: Callable[..., TArrayTree],
+  ) -> Callable[..., TArrayTree]:
+    """Wraps a function to perform a pmean if `multi_device`."""
+    if self.multi_device:
+      return lambda *args, **kwargs: lax.pmean(
+          func(*args, **kwargs), self.pmap_axis_name
+      )
+    else:
+      return func
 
 
 def staged(

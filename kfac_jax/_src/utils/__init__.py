@@ -107,6 +107,7 @@ scalar_mul = math.scalar_mul
 scalar_div = math.scalar_div
 weighted_sum_of_objects = math.weighted_sum_of_objects
 sum_of_objects = math.sum_objects
+pytree_size = math.pytree_size
 inner_product = math.inner_product
 symmetric_matrix_inner_products = math.symmetric_matrix_inner_products
 matrix_of_inner_products = math.matrix_of_inner_products
@@ -131,6 +132,7 @@ psd_matrix_norm = math.psd_matrix_norm
 invert_psd_matrices = math.invert_psd_matrices
 inverse_sqrt_psd_matrices = math.inverse_sqrt_psd_matrices
 stable_sqrt = math.stable_sqrt
+cosine_similarity = math.cosine_similarity
 
 del math
 
