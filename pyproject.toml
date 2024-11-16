@@ -74,3 +74,6 @@ tests = [  # these should be version pinned?
   "dm-tree>=0.1.7",
   "optax>=0.1.4",
 ]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
