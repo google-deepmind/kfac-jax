@@ -1490,15 +1490,21 @@ def _normalization_haiku_preprocessor(
   return (normalized_inputs_var, *param_vars), [normalized_inputs_eqn]
 
 
-def _make_normalization_haiku_pattern(
+def _make_normalization_haiku_flax_pattern(
     broadcast_ndim: int,
     has_reshape: bool,
     p_dim: int = 13,
-):
+    has_shift: bool = True,
+) -> GraphPattern:
+  """Creates a pattern for a Haiku/Flax normalization layer."""
 
   assert broadcast_ndim >= 0
 
   x_shape = [i + 2 for i in range(broadcast_ndim)] + [p_dim]
+
+  example_params = [np.zeros([p_dim])]
+  if has_shift:
+    example_params.append(np.zeros([p_dim]))
 
   return GraphPattern(
       name=f"normalization_haiku_broadcast_{broadcast_ndim}",
@@ -1506,11 +1512,10 @@ def _make_normalization_haiku_pattern(
       compute_func=functools.partial(
           _normalization_haiku_flax,
           has_scale=True,
-          has_shift=True,
+          has_shift=has_shift,
           has_reshape=has_reshape),
       parameters_extractor_func=_scale_and_shift_parameter_extractor,
-      example_args=[[np.zeros(x_shape), np.zeros(x_shape)],
-                    [np.zeros([p_dim]), np.zeros([p_dim])]],
+      example_args=[[np.zeros(x_shape), np.zeros(x_shape)], example_params],
       in_values_preprocessor=_normalization_haiku_preprocessor
   )
 
@@ -1531,16 +1536,29 @@ DENSE_GRAPH_PATTERNS = tuple(
     )
 )
 
+NORMALIZATION_GRAPH_PATTERNS = tuple(
+    _make_normalization_haiku_flax_pattern(
+        broadcast_ndim=n,
+        has_reshape=r,
+        has_shift=s)
+    for n, r, s in itertools.product(
+        range(2),
+        (False, True),
+        (False, True),
+    )
+)
+
 DEFAULT_GRAPH_PATTERNS = DENSE_GRAPH_PATTERNS + (
     _make_conv2d_pattern(True, False),
     _make_conv2d_pattern(True, True),
     _make_conv2d_pattern(False, False),
     _make_scale_and_shift_pattern(1, True, True),
-    _make_scale_and_shift_pattern(0, True, True),
-    _make_normalization_haiku_pattern(1, False),
-    _make_normalization_haiku_pattern(1, True),
-    _make_normalization_haiku_pattern(0, False),
-    _make_normalization_haiku_pattern(0, True),
+    _make_scale_and_shift_pattern(0, True, True)
+    )
+
+DEFAULT_GRAPH_PATTERNS += NORMALIZATION_GRAPH_PATTERNS
+
+DEFAULT_GRAPH_PATTERNS += (
     _make_scale_and_shift_pattern(1, True, False),
     _make_scale_and_shift_pattern(0, True, False),
     _make_scale_and_shift_pattern(1, False, True),
@@ -1946,7 +1964,7 @@ def _auto_register_tags(
                     inputs_index=(),
                     outputs_index=(0,),
                     params_index=(0,),
-                    name=f"Auto[generic|{n}]",
+                    name=f"Auto[generic({n})]",
                 )),
                 effects=set(),
             )
@@ -1971,7 +1989,7 @@ def _auto_register_tags(
       if meta.name is None:
         n = pattern_counters.get(meta.variant, 0)
         pattern_counters[meta.variant] = n + 1
-        meta.name = f"Manual[{meta.variant}|{n}]"
+        meta.name = f"Manual[{meta.variant}({n})]"
 
       tag_locations.append(TagLocation(eqn))
 
@@ -1991,7 +2009,8 @@ def _auto_register_tags(
         assert meta.name is None
         n = pattern_counters.get(meta.variant, 0)
         pattern_counters[meta.variant] = n + 1
-        meta.name = f"Auto[{meta.variant}|{n}]"
+        meta.name = (f"Auto[tag_variant={meta.variant}({n})|"
+                     f"match_type={match.name}]")
         tag_locations.append(TagLocation(eqns[-1]))
 
   final_outvars = [env.get(v, v) if isinstance(v, Var) else v
