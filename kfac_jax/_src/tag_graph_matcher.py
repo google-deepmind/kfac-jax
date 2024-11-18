@@ -1173,17 +1173,26 @@ def num_unique_inputs(eqns: Sequence[JaxprEqn]) -> int:
 #             |___/
 
 
-def _dense(x: Array, params: Sequence[Array]) -> Array:
+def _dense(
+    x: Array,
+    params: Sequence[Array],
+    axes: int,
+    with_reshape: bool,
+    ) -> Array:
   """Example of a dense layer function."""
-  w, *opt_b = params
-  y = jnp.matmul(x, w)
-  return y if not opt_b else y + opt_b[0]
-
-
-def _dense_with_reshape(x: Array, params: Sequence[Array],) -> Array:
-  w, b = params
-  y = jnp.matmul(x, w)
-  return y + b.reshape([1, b.size])
+  # NOTE: This function uses `tensordot` so contracts over the last
+  # `axes` dimensions of `x` and the first `axes` dimensions of `params`.
+  match params:
+    case [w, b]:
+      y = jnp.tensordot(x, w, axes=axes)
+      if with_reshape:
+        return y + b.reshape((1,) * (y.ndim - b.ndim) + b.shape)
+      else:
+        return y + b
+    case [w]:
+      return jnp.tensordot(x, w, axes=axes)
+    case _:
+      raise ValueError("Unsupported parameters list")
 
 
 def _dense_parameter_extractor(
@@ -1209,25 +1218,23 @@ def _dense_parameter_extractor(
 
 def _make_general_dense_pattern(
     with_bias: bool,
-    reshape: bool,
+    with_reshape: bool,
     num_repeated_axes: int,
-    in_dim: int = 13,
-    out_dim: int = 7,
+    num_in_dims: int,
+    num_out_dims: int,
 ) -> GraphPattern:
   """Creates a pattern for a dense or repeated dense layer."""
+  batch_dim = (2,)
+  repeating_dims = tuple(itertools.repeat(7, num_repeated_axes))
 
-  in_axes = [0, [None, None]] if with_bias else [0, [None]]
+  out_dims = tuple(i + 2 for i in range(num_out_dims))
+  in_dims = tuple(i + 2 for i in range(num_in_dims))
+  x_shape = batch_dim + repeating_dims + in_dims
+  weight_shape = in_dims + out_dims
+  p_shapes = [weight_shape, out_dims] if with_bias else [weight_shape]
 
-  f = _dense_with_reshape if reshape else _dense
-
-  for _ in range(num_repeated_axes):
-    f = jax.vmap(f, in_axes=in_axes)
-
-  x_shape = [9] * num_repeated_axes + [2, in_dim]
-  p_shapes = ([[in_dim, out_dim], [out_dim]] if with_bias else
-              [[in_dim, out_dim]])
-
-  name = "dense_with_bias" if with_bias else "dense_no_bias",
+  name = "dense_with_bias" if with_bias else "dense_no_bias"
+  name = name + ("_with_reshape" if with_reshape else "_no_reshape")
 
   if num_repeated_axes > 0:
     name = f"repeated[{num_repeated_axes}]_{name}"
@@ -1238,7 +1245,8 @@ def _make_general_dense_pattern(
   return GraphPattern(
       name=name,
       tag_primitive=tags.layer_tag,
-      compute_func=f,
+      compute_func=functools.partial(
+          _dense, axes=num_in_dims, with_reshape=with_reshape),
       parameters_extractor_func=functools.partial(
           _dense_parameter_extractor, variant=variant),
       example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
@@ -1506,17 +1514,24 @@ def _make_normalization_haiku_pattern(
       in_values_preprocessor=_normalization_haiku_preprocessor
   )
 
+# NOTE: itertools iterates the last iterator first
+# i.e. [(True, False), 0, 1, 1] [(True, False), 0, 1, 2] ...
+DENSE_GRAPH_PATTERNS = tuple(
+    _make_general_dense_pattern(
+        with_bias=b,
+        with_reshape=r,
+        num_repeated_axes=rep,
+        num_in_dims=n_ins,
+        num_out_dims=n_outs)
+    for (b, r), rep, n_ins, n_outs in itertools.product(
+        ((True, False), (True, True), (False, False)),
+        range(3),
+        range(1, 3),
+        range(1, 3)
+    )
+)
 
-DEFAULT_GRAPH_PATTERNS = (
-    _make_general_dense_pattern(True, False, 0),
-    _make_general_dense_pattern(True, False, 1),
-    _make_general_dense_pattern(True, False, 2),
-    _make_general_dense_pattern(True, True, 0),
-    _make_general_dense_pattern(True, True, 1),
-    _make_general_dense_pattern(True, True, 2),
-    _make_general_dense_pattern(False, False, 0),
-    _make_general_dense_pattern(False, False, 1),
-    _make_general_dense_pattern(False, False, 2),
+DEFAULT_GRAPH_PATTERNS = DENSE_GRAPH_PATTERNS + (
     _make_conv2d_pattern(True, False),
     _make_conv2d_pattern(True, True),
     _make_conv2d_pattern(False, False),
