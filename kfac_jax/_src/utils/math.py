@@ -617,9 +617,6 @@ def pi_adjusted_kronecker_factors(
 
   norms = jnp.array([psd_matrix_norm(f, norm_type=norm_type) for f in factors])
 
-  # Compute the normalized factors `u_i`, such that Trace(u_i) / dim(u_i) = 1
-  us = [fi / ni for fi, ni in zip(factors, norms)]
-
   k = len(factors)
 
   # TODO(jamesmartens,botev): consider making the use of special behavior for
@@ -630,6 +627,9 @@ def pi_adjusted_kronecker_factors(
   def regular_case() -> tuple[Array, ...]:
 
     num_non_scalars = sum(1 if f.size != 1 else 0 for f in factors)
+
+    # Compute the normalized factors `u_i`, such that Trace(u_i) / dim(u_i) = 1
+    us = [fi / ni for fi, ni in zip(factors, norms)]
 
     if num_non_scalars != 0:
 
@@ -666,7 +666,6 @@ def pi_adjusted_kronecker_factors(
     u_hats = []
 
     for u in us:
-
       if u.size == 1:  # scalar case
         u_hat = jnp.ones_like(u)  # damping not used in the scalar factors
 
@@ -688,19 +687,11 @@ def pi_adjusted_kronecker_factors(
 
     c_k = jnp.power(damping, 1.0 / k)
 
-    u_hats = []
-
-    for u in us:
-
-      if u.ndim == 2:
-        u_hat = jnp.eye(u.shape[0], dtype=u.dtype)
-
-      else:
-        u_hat = jnp.ones_like(u)
-
-      u_hats.append(u_hat * c_k)
-
-    return tuple(u_hats)
+    return tuple(
+        c_k * (jnp.eye(fi.shape[0], dtype=fi.dtype) if fi.ndim == 2 else
+               jnp.ones_like(fi))
+        for fi in factors
+    )
 
   if get_special_case_zero_inv():
     return lax.cond(jnp.greater(jnp.min(norms), 0.0), regular_case, zero_case)
@@ -1017,7 +1008,12 @@ def tnt_scale(factors: Sequence[Array]) -> Numeric:
 
   # We want to compute geometric_mean(zs) ** -(num_factors - 1)
 
-  mean_log = jnp.mean(jnp.log(zs))
+  # deal with the case where one of the factors is zero
+  mean_log = lax.select(
+      jnp.greater(jnp.min(zs), 0.0),
+      jnp.mean(jnp.log(zs)),
+      0.0,
+  )
 
   return jnp.exp(-(len(factors) - 1) * mean_log)
 
