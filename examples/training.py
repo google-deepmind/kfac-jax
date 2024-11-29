@@ -621,10 +621,6 @@ class SupervisedExperiment(abc.ABC):
     if "aux" in stats:
       stats.update(stats.pop("aux", {}))
 
-    self._python_step += 1
-
-    stats["progress"] = self.progress(self._python_step)
-
     for name in self.config.get("per_device_stats_to_log", []):
       gathered_stat = jnp.reshape(
           kfac_jax.utils.host_all_gather(stats[name]), [-1]
@@ -633,7 +629,12 @@ class SupervisedExperiment(abc.ABC):
       for i in range(gathered_stat.shape[0]):
         stats[f"{name}_{i}"] = jnp.array([gathered_stat[i]])
 
-    return kfac_jax.utils.get_first(stats)
+    stats = jax.tree_util.tree_map(functools.partial(jnp.mean, axis=0), stats)
+
+    self._python_step += 1
+    stats["progress"] = self.progress(self._python_step)
+
+    return stats
 
   #                  _
   #   _____   ____ _| |
@@ -774,26 +775,35 @@ class SupervisedExperiment(abc.ABC):
             global_step, self._params, self._state, self._opt_state, key, batch)
 
         if params_polyak is not None:
+
           stats_no_polyak = stats
+
           stats = self.eval_batch_pmap(
               global_step, params_polyak, func_state_polyak, self._opt_state,
               key, batch)
+
           stats.update(
               {k + "_no_polyak": v for k, v in stats_no_polyak.items()
                if k != "data_seen"})
 
         if params_schedule_free is not None:
+
           stats_no_sf = stats
+
           stats = self.eval_batch_pmap(
               global_step, params_schedule_free, func_state_schedule_free,
               self._opt_state, key, batch)
+
           stats.update(
               {k + "_no_sf": v for k, v in stats_no_sf.items()
                if k != "data_seen"})
 
         averaged_stats.add(stats, 1)
 
-      # Extract all stats
+      # Extract all stats.
+      # Note that MultiChunkAccumulator.value will perform a pmean
+      # automatically, so it's fine to call "get_first" here instead of taking
+      # the mean.
       for k, v in averaged_stats.value.items():  # pytype: disable=attribute-error
         all_stats[f"{name}_{k}"] = kfac_jax.utils.get_first(v)
 
