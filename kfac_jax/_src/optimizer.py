@@ -872,7 +872,7 @@ class Optimizer(utils.WithStagedMethods):
 
     return precon_grad, sq_norm_scaled_grads
 
-  def _compute_quad_change_for_damping(
+  def _compute_quad_change_for_damping_adapt(
       self,
       state: State,
       delta: Params,
@@ -910,24 +910,30 @@ class Optimizer(utils.WithStagedMethods):
     # we multiply the gradients, while the momentum is the coefficient by
     # which we multiply the velocities.
     neg_learning_rate = -learning_rate if learning_rate is not None else None
-    coefficients = (neg_learning_rate, momentum)
+    fixed_coefficients = (neg_learning_rate, momentum)
 
     if self._use_adaptive_learning_rate or self._use_adaptive_momentum:
 
+      assert fixed_coefficients[0] is None or fixed_coefficients[1] is None
+
       quad_model = self.compute_exact_quad_model_filtered(
-          vectors, grads, func_args, state=state, coefficients=coefficients)
-      return self._solve_quad_model(quad_model, damping, vectors, coefficients)
+          vectors, grads, func_args, state=state,
+          fixed_coefficients=fixed_coefficients)
+
+      return self._solve_quad_model(quad_model, damping, vectors,
+                                    fixed_coefficients)
 
     else:
-      assert all(c is not None for c in coefficients)
-      coefficients: tuple[Numeric, Numeric]
+      assert all(c is not None for c in fixed_coefficients)
+      fixed_coefficients: tuple[Numeric, Numeric]
 
       if self._use_adaptive_damping:
-        delta = self.weighted_sum_of_objects(vectors, coefficients)
+
+        delta = self.weighted_sum_of_objects(vectors, fixed_coefficients)
 
         quad_change = lax.cond(
             self.should_update_damping(state),
-            lambda args: self._compute_quad_change_for_damping(*args),
+            lambda args: self._compute_quad_change_for_damping_adapt(*args),
             lambda args: self._invalid_metric_value,
             (state, delta, grads, damping, func_args),
         )
@@ -935,7 +941,7 @@ class Optimizer(utils.WithStagedMethods):
       else:
         quad_change = self._invalid_metric_value
 
-      return coefficients, quad_change
+      return fixed_coefficients, quad_change
 
   @utils.staged
   def compute_loss_from_registrations(
@@ -1217,9 +1223,9 @@ class Optimizer(utils.WithStagedMethods):
 
       params, state.velocities, state.damping = lax.cond(
           reject_step,
-          lambda: (params, state.velocities, state.damping),
-          lambda: (new_params, delta,
-                   self._reject_damping_increase_factor * state.damping))
+          lambda: (params, state.velocities,
+                   self._reject_damping_increase_factor * state.damping),
+          lambda: (new_params, delta, state.damping))
 
     else:
       # stop the linter from complaining about uninitialized variable
@@ -1404,20 +1410,21 @@ class Optimizer(utils.WithStagedMethods):
       grads: Params,
       func_args: FuncArgsVariants,
       state: State | None = None,
-      coefficients: Sequence[Numeric | None] | None = None,
+      fixed_coefficients: Sequence[Numeric | None] | None = None,
   ) -> tuple[Array, Array, Array]:
     """Computes the components of the exact quadratic model."""
 
-    # We check the coefficients for zeros to save computing the expensive matrix
-    # vector products for vectors that will eventually be multiplied by zero.
+    # We check the fixed_coefficients for zeros to save computing the expensive
+    # matrix vector products for vectors that will eventually be multiplied by
+    # zero. If fixed_coefficients is None, we assume that all coefficients are
+    # free and compute the full model.
 
-    if coefficients is None:
+    if fixed_coefficients is None:
       return self.compute_exact_quad_model(
           vectors, grads, func_args, state=state)
 
-    assert len(vectors) == len(coefficients)
-    # only deal with the two vector case
-    assert len(vectors) == 2
+    assert len(vectors) == len(fixed_coefficients)
+    assert len(vectors) == 2  # only deal with the two vector case
 
     def if_momentum_coeff_zero():
       # only pass in the vectors that won't be multiplied by zero
@@ -1431,11 +1438,12 @@ class Optimizer(utils.WithStagedMethods):
           for arr in quad_model
       )
     # add a check here to save compiling both branches in the static case
-    if isinstance(coefficients[1], float) and coefficients[1] == 0.0:
+    if (isinstance(fixed_coefficients[1], float)
+        and fixed_coefficients[1] == 0.0):
       return if_momentum_coeff_zero()
 
     return jax.lax.cond(
-        coefficients[1] == 0.0,
+        fixed_coefficients[1] == 0.0,
         if_momentum_coeff_zero,
         lambda: self.compute_exact_quad_model(
             vectors, grads, func_args, state=state),
