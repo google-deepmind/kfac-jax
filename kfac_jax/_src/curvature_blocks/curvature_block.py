@@ -17,6 +17,7 @@ import abc
 from typing import Any, Sequence
 
 import jax
+import jax.extend as jex
 import jax.numpy as jnp
 import jax.scipy
 from kfac_jax._src import layers_and_loss_tags as tags
@@ -81,7 +82,7 @@ class CurvatureBlock(utils.Finalizable):
 
   @property
   def layer_tag_primitive(self) -> tags.LayerTag:
-    """The :class:`jax.core.Primitive` corresponding to the block's tag equation."""
+    """The :class:`jex.core.Primitive` corresponding to the block's tag equation."""
 
     primitive = self._layer_tag_eq.primitive
     assert isinstance(primitive, tgm.tags.LayerTag)
@@ -89,14 +90,14 @@ class CurvatureBlock(utils.Finalizable):
     return primitive
 
   @property
-  def parameter_variables(self) -> tuple[jax.core.Var, ...]:
+  def parameter_variables(self) -> tuple[jex.core.Var, ...]:
     """The parameter variables of the underlying Jax equation."""
 
     param_vars = []
 
     for p in tags.layer_eqn_data(self._layer_tag_eq).params:
 
-      assert isinstance(p, jax.core.Var)
+      assert isinstance(p, jex.core.Var)
       param_vars.append(p)
 
     return tuple(param_vars)

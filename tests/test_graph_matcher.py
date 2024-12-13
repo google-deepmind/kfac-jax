@@ -19,6 +19,7 @@ from typing import Callable, Mapping
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
+import jax.extend as jex
 import jax.numpy as jnp
 import kfac_jax
 from tests import models
@@ -76,8 +77,8 @@ class TestGraphMatcher(parameterized.TestCase):
     if exclude_param:
       j1 = eqn1.params[exclude_param]
       j2 = eqn2.params[exclude_param]
-      if isinstance(j1, jax.core.ClosedJaxpr):
-        assert isinstance(j2, jax.core.ClosedJaxpr)
+      if isinstance(j1, jex.core.ClosedJaxpr):
+        assert isinstance(j2, jex.core.ClosedJaxpr)
         self.assertEqual(len(j1.consts), len(j2.consts))
         j1 = j1.jaxpr
         j2 = j2.jaxpr
@@ -85,8 +86,8 @@ class TestGraphMatcher(parameterized.TestCase):
 
     # Check variables
     for v1, v2 in zip(eqn1.invars, eqn2.invars):
-      if isinstance(v1, jax.core.Literal):
-        self.assertIsInstance(v2, jax.core.Literal)
+      if isinstance(v1, jex.core.Literal):
+        self.assertIsInstance(v2, jex.core.Literal)
         self.assertEqual(v1.aval, v2.aval)
       else:
         self.assertEqual(v1.aval.shape, v2.aval.shape)
@@ -125,8 +126,8 @@ class TestGraphMatcher(parameterized.TestCase):
         for v1, v2 in zip(eqn1.outvars, eqn2.outvars):
           if isinstance(v1, jax.core.DropVar):
             self.assertIsInstance(v2, jax.core.DropVar)
-          elif isinstance(v1, jax.core.Literal):
-            self.assertIsInstance(v2, jax.core.Literal)
+          elif isinstance(v1, jex.core.Literal):
+            self.assertIsInstance(v2, jex.core.Literal)
             self.assertEqual(v1.aval, v2.aval)
           else:
             self.assertEqual(v1.aval.shape, v2.aval.shape)

@@ -17,7 +17,7 @@ import functools
 from typing import Any, Generic, Sequence, TypeVar
 
 import jax
-from jax import core
+import jax.extend as jex
 
 
 # Types for annotation
@@ -94,7 +94,7 @@ def get_loss_outputs(
   return tuple(kwargs[name] for name in meta.parameter_dependants)
 
 
-class LossTag(core.Primitive):
+class LossTag(jex.core.Primitive):
   """A Jax primitive for tagging K-FAC losses.
 
   The primitive is no-op at runtime, however its goal is to tag (annotate) the
@@ -103,7 +103,7 @@ class LossTag(core.Primitive):
   curvature matrix.
   """
 
-  # Whether the primitive returns multiple outputs (from core.Primitive)
+  # Whether the primitive returns multiple outputs (from jex.core.Primitive)
   multiple_results = True
 
   def __init__(self):
@@ -175,9 +175,9 @@ class LossTag(core.Primitive):
 
 
 def loss_eqn_parameter_dependants(
-    eqn: jax.core.JaxprEqn,
+    eqn: jex.core.JaxprEqn,
     raise_an_error: bool = True,
-) -> list[jax.core.Var]:
+) -> list[jex.core.Var]:
   """Returns the parameter dependants variables from the give loss equation."""
   if not isinstance(eqn.primitive, LossTag):
     if raise_an_error:
@@ -192,7 +192,7 @@ def loss_eqn_parameter_dependants(
 
 
 def loss_eqn_construct_loss(
-    eqn: jax.core.JaxprEqn,
+    eqn: jex.core.JaxprEqn,
     *args: Array,
 ) -> Any:
   """Constructs an instance of the corresponding :class:`~LossFunction` class."""
@@ -206,7 +206,7 @@ def loss_eqn_construct_loss(
   return meta.loss_class(**kwargs)
 
 
-def loss_eqn_class_name(eqn: jax.core.JaxprEqn) -> str:
+def loss_eqn_class_name(eqn: jex.core.JaxprEqn) -> str:
   """The name of the underlying `~LossFunction` class."""
 
   if not isinstance(eqn.primitive, LossTag):
@@ -253,7 +253,7 @@ def get_and_verify_layer_meta(
   return meta
 
 
-class LayerTag(core.Primitive):
+class LayerTag(jex.core.Primitive):
   """A Jax primitive for tagging K-FAC layers.
 
   The primitive is no-op at runtime, however its goal is to tag (annotate) the
@@ -347,9 +347,9 @@ class LayerTag(core.Primitive):
 
 
 def layer_eqn_data(  # pytype: disable=invalid-annotation
-    eqn: jax.core.JaxprEqn,
+    eqn: jex.core.JaxprEqn,
     raise_an_error: bool = True,
-) -> LayerData[jax.core.Var]:
+) -> LayerData[jex.core.Var]:
 
   if isinstance(eqn.primitive, LayerTag):
     return eqn.primitive.layer_data(eqn.invars, eqn.params, str(eqn))
@@ -360,7 +360,7 @@ def layer_eqn_data(  # pytype: disable=invalid-annotation
     return LayerData(inputs=(), outputs=(), params=())
 
 
-def layer_eqn_name(eqn: jax.core.JaxprEqn) -> str:
+def layer_eqn_name(eqn: jex.core.JaxprEqn) -> str:
   meta = get_and_verify_layer_meta(eqn.invars, eqn.params)
   if meta.name is None:
     raise ValueError("Layer name must be provided at this stage.")
@@ -460,11 +460,11 @@ register_repeated_dense = functools.partial(
 )
 
 
-class LossTagEqn(core.JaxprEqn):
+class LossTagEqn(jex.core.JaxprEqn):
   """A class used only for annotation purposes."""
   primitive: LossTag
 
 
-class LayerTagEqn(core.JaxprEqn):
+class LayerTagEqn(jex.core.JaxprEqn):
   """A class used only for annotation purposes."""
   primitive: LayerTag
