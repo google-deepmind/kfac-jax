@@ -18,6 +18,7 @@ from typing import Any, Callable, Sequence, TypeVar, Generic
 
 from absl import logging
 import jax
+import jax.extend as jex
 import jax.numpy as jnp
 from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import loss_functions
@@ -32,7 +33,7 @@ Shape = utils.Shape
 Params = utils.Params
 FuncArgs = utils.FuncArgs
 FuncOuts = utils.FuncOuts
-Var = jax.core.Var
+Var = jex.core.Var
 LossFunction = loss_functions.LossFunction
 LossFunctionInputs = loss_functions.LossFunctionInputs
 
@@ -80,7 +81,7 @@ LayerTagVjp = tuple[
         tuple[LayerVjpData[Array], ...],  # pytype: disable=invalid-annotation
     ],
 ]
-JaxprOrClosedJaxpr = jax.core.Jaxpr | jax.core.ClosedJaxpr
+JaxprOrClosedJaxpr = jex.core.Jaxpr | jex.core.ClosedJaxpr
 
 
 def shape_and_type(x: Array) -> tuple[Shape, jnp.dtype]:
@@ -99,7 +100,7 @@ def make_cache_key(
 
 
 def extract_tags(
-    jaxpr: jax.core.Jaxpr,
+    jaxpr: jex.core.Jaxpr,
 ) -> tuple[tuple[tags.LayerTagEqn, ...], tuple[tags.LossTagEqn, ...]]:
   """Extracts the layer and the loss tags from the given Jaxpr."""
 
@@ -199,7 +200,7 @@ class ProcessedJaxpr(utils.Finalizable):
 
   def __init__(
       self,
-      jaxpr: jax.core.Jaxpr,
+      jaxpr: jex.core.Jaxpr,
       consts: list[Any],
       in_tree: utils.PyTreeDef,
       params_index: int,
@@ -819,16 +820,16 @@ def _layer_tag_vjp(
     own_func_args = primal_func_args
 
     # Mapping from variable -> value
-    env: dict[jax.core.Var, Array] = {}
+    env: dict[jex.core.Var, Array] = {}
     read = functools.partial(tgm.read_env, env)
 
-    def write(variables: list[jax.core.Var], values: list[Array]) -> None:
+    def write(variables: list[jex.core.Var], values: list[Array]) -> None:
       # if not isinstance(variables, list):
       #   variables = [variables]
       tgm.write_env(env, variables, values)
 
       for v in variables:
-        if not isinstance(v, jax.core.Literal) and v in aux:
+        if not isinstance(v, jex.core.Literal) and v in aux:
           env[v] = env[v] + aux[v]
 
     # Bind args and consts to environment

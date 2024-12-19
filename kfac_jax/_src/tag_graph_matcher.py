@@ -23,13 +23,7 @@ from typing import Any, Callable, Mapping, Sequence, Set, TypeVar
 from absl import logging
 import immutabledict
 import jax
-
-jax_version = (
-    jax.__version_info__ if hasattr(jax, "__version_info__")
-    else tuple(map(int, jax.__version__.split("."))))
-
-if jax_version > (0, 4, 11):
-  import jax.extend as jax_extend  # pylint: disable=g-import-not-at-top
+import jax.extend as jex
 
 import jax.numpy as jnp  # pylint: disable=g-import-not-at-top
 from kfac_jax._src import layers_and_loss_tags as tags
@@ -42,11 +36,11 @@ ITERATIVE_HIGHER_ORDER_NAMES = ("while", "scan")
 # Types for annotation
 Array = utils.Array
 PyTreeDef = utils.PyTreeDef
-Var = jax.core.Var
+Var = jex.core.Var
 Vars = Sequence[Var]
-Jaxpr = jax.core.Jaxpr
-ClosedJaxpr = jax.core.ClosedJaxpr
-JaxprEqn = jax.core.JaxprEqn
+Jaxpr = jex.core.Jaxpr
+ClosedJaxpr = jex.core.ClosedJaxpr
+JaxprEqn = jex.core.JaxprEqn
 JaxprEqns = Sequence[JaxprEqn]
 T = TypeVar("T")
 J = TypeVar("J", Jaxpr, ClosedJaxpr)
@@ -64,10 +58,7 @@ def eval_jaxpr_eqn(eqn: JaxprEqn, in_values: list[T]) -> list[T]:
 
   subfuns, bind_params = eqn.primitive.get_bind_params(eqn.params)
 
-  if jax_version > (0, 4, 11):
-    user_context = jax_extend.source_info_util.user_context
-  else:
-    user_context = jax.core.source_info_util.user_context  # pytype: disable=module-attr
+  user_context = jex.source_info_util.user_context
 
   with user_context(eqn.source_info.traceback):
     output = eqn.primitive.bind(*subfuns, *in_values, **bind_params)
@@ -245,9 +236,9 @@ class JaxprGraph:
       it.
     manual_registrations: Any layer tag equations that have been manually
       registered.
-    jaxpr: The underlying :class:`jax.core.Jaxpr` part of ``self.closed_jaxpr``.
+    jaxpr: The underlying :class:`Jaxpr` part of ``self.closed_jaxpr``.
     consts: The underlying constants part ``self.closed_jaxpr``.
-    outvars: The output variables of the underlying :class:`jax.core.Jaxpr` part
+    outvars: The output variables of the underlying :class:`Jaxpr` part
       of ``self.closed_jaxpr``.
   """
   name: str
@@ -294,7 +285,7 @@ class JaxprGraph:
       eqns.append(next_eqn)
 
       for v in next_eqn.invars:
-        if (not isinstance(v, jax.core.Literal) and v not in root_vars and
+        if (not isinstance(v, jex.core.Literal) and v not in root_vars and
             v not in processed_vars and v in self.var_to_creation_op):
           to_process_eqns.append(self.var_to_creation_op[v])
           processed_vars.add(v)
@@ -383,7 +374,7 @@ def make_jax_graph(
           eqns.append(eqn)
 
         sub_graph_vars.update(
-            v for v in eqn.invars if not isinstance(v, jax.core.Literal)
+            v for v in eqn.invars if not isinstance(v, jex.core.Literal)
         )
 
     consts_i = [
@@ -461,8 +452,8 @@ class GraphPattern:
     in_values_preprocessor: A function that can optionally modify the in_vals
       passed to the tag_primitive, from those that are usually the input to
       the jaxpr.
-    jaxpr: The underlying :class:`jax.core.Jaxpr` represented by the pattern.
-    param_vars: The list of :class:`jax.core.Var` that correspond to parameters
+    jaxpr: The underlying :class:`Jaxpr` represented by the pattern.
+    param_vars: The list of :class:`Var` that correspond to parameters
       in the pattern.
     graph: A :class:`JaxprGraph` representation of the pattern.
   """
@@ -633,7 +624,7 @@ def match_equations(
     If at least one of the pattern variables is a parameter, but the
     corresponding graph variable is not or vise-versa, the method does not
     update the current variables map and returns ``False``. Similarly, if at
-    least one of the graph variables is a :class:`~jax.core.Literal` (meaning a
+    least one of the graph variables is a :class:`iteral` (meaning a
     constant, independent of the function inputs) and the corresponding
     pattern variable is not an input to the pattern, it returns ``False``. In
     all other cases it updates the map and returns ``True``.
@@ -648,12 +639,12 @@ def match_equations(
     """
     for var1, var2 in zip(eqn_vars, graph_vars):
 
-      var2_matchable = isinstance(var2, jax.core.Var) and (
+      var2_matchable = isinstance(var2, jex.core.Var) and (
           var2 in matchable_graph_params)
 
       if (var1 in param_variables and not var2_matchable or
           var1 not in param_variables and var2_matchable or
-          (isinstance(var2, jax.core.Literal) and var1 not in input_vars)):
+          (isinstance(var2, jex.core.Literal) and var1 not in input_vars)):
         return False
 
     current_variables_map.update(zip(eqn_vars, graph_vars))
@@ -788,7 +779,7 @@ def match_pattern(
   for k, v in match_variables_map.items():
 
     if (k not in pattern.graph.jaxpr.invars and
-        not isinstance(v, jax.core.Literal)):
+        not isinstance(v, jex.core.Literal)):
 
       creation_op = graph.var_to_creation_op[v]
 
@@ -883,14 +874,14 @@ def find_layer_tags_and_patterns(
 
 
 def read_env(
-    env: dict[jax.core.Var, T],
+    env: dict[jex.core.Var, T],
     variables: list[jax.core.Atom],
 ) -> list[T]:
   """Reads from the variable-to-array environment during tracing."""
   result = []
   assert isinstance(variables, list)
   for v in variables:
-    if isinstance(v, jax.core.Literal):
+    if isinstance(v, jex.core.Literal):
       # Literals are values baked into the Jaxpr
       result.append(v.val)
     elif isinstance(v, jax.core.DropVar):
@@ -901,8 +892,8 @@ def read_env(
 
 
 def write_env(
-    env: dict[jax.core.Var, T],
-    variables: list[jax.core.Var],
+    env: dict[jex.core.Var, T],
+    variables: list[jex.core.Var],
     values: list[T],
 ) -> None:
   """Writes to the variable-to-array environment during tracing."""
@@ -979,7 +970,7 @@ def clean_jaxpr(
 
       final_outvars.append(var)
 
-      if not isinstance(var, jax.core.Literal):
+      if not isinstance(var, jex.core.Literal):
         dependants.add(var)
 
   for eqn in reversed(closed_jaxpr.jaxpr.eqns):
@@ -1035,7 +1026,7 @@ def clean_jaxpr(
     if check:
       eqns.append(eqn)
       new_dependants = set(v for v in eqn.invars
-                           if not isinstance(v, jax.core.Literal))
+                           if not isinstance(v, jex.core.Literal))
       dependants = dependants.union(new_dependants)
 
   # Dependants should only be invars
@@ -1112,7 +1103,7 @@ def merge_broadcasts_jaxpr(jaxpr: J) -> J:
 
     # We ignore broadcasting of constants
     if (eqn.primitive.name == "broadcast_in_dim" and
-        not all(isinstance(v, jax.core.Literal) for v in eqn.invars)):
+        not all(isinstance(v, jex.core.Literal) for v in eqn.invars)):
 
       if eqn.invars[0] in broadcasts_outputs:
         # Construct a merged equation from the previous and current one
@@ -1139,7 +1130,7 @@ def merge_broadcasts_jaxpr(jaxpr: J) -> J:
 
     else:
       for v in eqn.invars:
-        if not isinstance(v, jax.core.Literal) and v in broadcasts_outputs:
+        if not isinstance(v, jex.core.Literal) and v in broadcasts_outputs:
           eqns.append(broadcasts_outputs[v])
 
       eqns.append(eqn)
@@ -1688,7 +1679,7 @@ class TaggedFunction:
   ):
     self._func_graph = func_graph
     self._tag_locations = tag_locations
-    self._flat_func = jax.core.jaxpr_as_fun(func_graph.closed_jaxpr)
+    self._flat_func = jex.core.jaxpr_as_fun(func_graph.closed_jaxpr)
     self._param_labels = self._compute_parameter_labels()
 
   def __call__(self, *args, **kwargs):
@@ -1770,7 +1761,7 @@ def _auto_register_tags(
 
         eqns_for_registration.append(eqn)
         sub_graph_vars.update(
-            v for v in eqn.invars if not isinstance(v, jax.core.Literal))
+            v for v in eqn.invars if not isinstance(v, jex.core.Literal))
 
     eqns_for_registration = eqns_for_registration[::-1]
 
