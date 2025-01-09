@@ -1859,11 +1859,15 @@ def _auto_register_tags(
       final_tag_locations.append(sub_tag_locations)
 
     if eqn_name == "cond":
-      # TODO(botev): We need to check each branch has identical registrations
-      raise NotImplementedError()
+      if final_tag_locations[0] or final_tag_locations[1]:
+        # TODO(botev): We need to check each branch has identical registrations
+        raise NotImplementedError()
+      sub_tag_locations = []
     else:
       # Extract the sub jaxpr parameter tag registrations and input vars
       [sub_tag_locations] = final_tag_locations  # pylint:disable=unbalanced-tuple-unpacking
+
+    del final_tag_locations
 
     # Update the jaxpr parameter in the equation
     eqn_params = dict(**eqn.params)
@@ -1880,7 +1884,7 @@ def _auto_register_tags(
 
     eqns.append(eqn.replace(params=eqn_params))
 
-    del sub_graph, final_jaxprs, final_tag_locations
+    del final_jaxprs
 
     # Insert the sub-registrations into the tagged_params
     for tag_l in sub_tag_locations:
