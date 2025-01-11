@@ -1005,7 +1005,7 @@ def safe_psd_eigh(
 
   # The matrix is PSD by construction, but numerical inaccuracies can produce
   # slightly negative eigenvalues. Hence, clip at zero.
-  return jnp.clip(s, a_min=0.0), q
+  return jnp.clip(s, min=0.0), q
 
 
 def tnt_scale(factors: Sequence[Array]) -> Numeric:
