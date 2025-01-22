@@ -94,7 +94,7 @@ class _Linear(hk.Linear):
           dimension_numbers=(((1,), (0,)), ((), ())),
           precision=(jax.lax.Precision.HIGHEST, jax.lax.Precision.HIGHEST),
           preferred_element_type=preferred_element_type,
-          out_type=None,
+          out_sharding=None,
       )
     layer_values.append((x, y))
 
