@@ -15,6 +15,7 @@
 import types
 
 from typing import Any, Sequence, Mapping
+import warnings
 
 import haiku as hk
 import jax
@@ -92,11 +93,21 @@ def softmax_cross_entropy(
       raise NotImplementedError("Non-constant loss weights are not currently "
                                 "supported.")
 
+    if logits.ndim == labels.ndim + 1:
+      targets = labels.reshape([-1])
+    else:
+      targets = None
+      warnings.warn("Incorrectly formatted labels detected for softmax cross "
+                    "entropy loss registration. Perhaps you passed 1-hot "
+                    "vectors or asked for label smoothing? These will be "
+                    "ignored for registration purposes, making the use of "
+                    "empirical Fisher estimators impossible.")
+
     # Currently the registration functions only support 2D array inputs values
     # for `logits`, and so we need the reshapes below.
     registration_module.register_softmax_cross_entropy_loss(
         logits.reshape([-1, logits.shape[-1]]),
-        targets=labels.reshape([-1]),
+        targets=targets,
         mask=mask.reshape([-1]) if mask is not None else None,
         weight=weight,
         **extra_registration_kwargs)
