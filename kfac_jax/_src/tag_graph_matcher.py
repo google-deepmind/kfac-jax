@@ -385,7 +385,7 @@ def make_jax_graph(
 
     debug_info = closed_jaxpr.jaxpr.debug_info
     if debug_info is not None:
-      debug_info = jax.core.JaxprDebugInfo(
+      debug_info = jax.core.DebugInfo(
           debug_info.traced_for,
           debug_info.func_src_info,
           debug_info.arg_names,
