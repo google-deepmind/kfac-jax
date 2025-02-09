@@ -115,7 +115,7 @@ def softmax_cross_entropy(
   max_logits = jnp.max(logits, keepdims=True, axis=-1)
 
   # It's unclear whether this stop_gradient is a good idea.
-  # See https://github.com/google/jax/issues/13529
+  # See https://github.com/jax-ml/jax/issues/13529
   max_logits = lax.stop_gradient(max_logits)
 
   logits = logits - max_logits
