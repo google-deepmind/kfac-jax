@@ -30,6 +30,16 @@ from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import utils
 import numpy as np
 
+jax_version = (
+    jax.__version_info__ if hasattr(jax, "__version_info__")
+    else tuple(map(int, jax.__version__.split("."))))
+
+if jax_version >= (0, 5, 1):
+  DebugInfo = jax.core.DebugInfo
+else:
+  DebugInfo = jax.core.JaxprDebugInfo  #  pytype: disable=module-attr
+
+
 HIGHER_ORDER_NAMES = ("cond", "while", "scan", "pjit", "xla_call", "xla_pmap")
 ITERATIVE_HIGHER_ORDER_NAMES = ("while", "scan")
 
@@ -385,7 +395,7 @@ def make_jax_graph(
 
     debug_info = closed_jaxpr.jaxpr.debug_info
     if debug_info is not None:
-      debug_info = jax.core.DebugInfo(
+      debug_info = DebugInfo(
           debug_info.traced_for,
           debug_info.func_src_info,
           debug_info.arg_names,
