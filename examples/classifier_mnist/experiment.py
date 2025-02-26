@@ -66,7 +66,7 @@ def classifier_loss(
   logits = convolutional_classifier().apply(params, batch["images"])
 
   loss, stats = losses.classifier_loss_and_stats(
-      logits=logits,
+      predictions=logits,
       labels_as_int=batch["labels"],
       params=params,
       l2_reg=l2_reg if is_training else 0.0,

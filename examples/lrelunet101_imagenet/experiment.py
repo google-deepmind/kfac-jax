@@ -360,7 +360,7 @@ def lrelunet_loss(
       params, rng, batch["images"], is_training)
 
   return losses.classifier_loss_and_stats(
-      logits=logits,
+      predictions=logits,
       labels_as_int=batch["labels"],
       params=params,
       l2_reg=l2_reg if is_training else 0.0,
