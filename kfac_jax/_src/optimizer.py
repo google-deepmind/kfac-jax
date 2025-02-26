@@ -57,6 +57,9 @@ ReturnEither = (
     tuple[Params, "Optimizer.State", dict[str, Numeric]]
 )
 
+# See Optimizer._solve_quad_model for a description of these parameters.
+QuadModelParams = tuple[Array, Array, Array, Array]
+
 
 class Optimizer(utils.WithStagedMethods):
   """The K-FAC optimizer."""
@@ -891,7 +894,7 @@ class Optimizer(utils.WithStagedMethods):
       quad_model = self.compute_approx_quad_model(state, [delta], grads)
 
     w = jnp.ones([])
-    return self._solve_quad_model(quad_model, damping, [delta], [w])[1]
+    return self._solve_quad_model(quad_model, damping, [w])[1]
 
   def _coefficients_and_quad_change(
       self,
@@ -920,10 +923,10 @@ class Optimizer(utils.WithStagedMethods):
           vectors, grads, func_args, state=state,
           fixed_coefficients=fixed_coefficients)
 
-      return self._solve_quad_model(quad_model, damping, vectors,
-                                    fixed_coefficients)
+      return self._solve_quad_model(quad_model, damping, fixed_coefficients)
 
     else:
+
       assert all(c is not None for c in fixed_coefficients)
       fixed_coefficients: tuple[Numeric, Numeric]
 
@@ -972,7 +975,6 @@ class Optimizer(utils.WithStagedMethods):
     """Updates the damping parameter."""
 
     new_loss = self.compute_loss_value(new_func_args)
-
     # Sync
     new_loss = utils.pmean_if_pmap(new_loss, self.pmap_axis_name)
 
@@ -1388,21 +1390,6 @@ class Optimizer(utils.WithStagedMethods):
     return self._step(params, state, rng, batch, func_state,
                       learning_rate, momentum, damping)
 
-  def compute_l2_quad_matrix(
-      self,
-      vectors: Sequence[Params]
-  ) -> Array:
-    """Computes the matrix corresponding to the prior/regularizer.
-
-    Args:
-      vectors: A sequence of parameter-like PyTree structures, each one
-      representing a different vector.
-
-    Returns:
-      A matrix with i,j entry equal to ``self.l2_reg * v_i^T v_j``.
-    """
-    return self.l2_reg * utils.matrix_of_inner_products(vectors)
-
   @utils.auto_scope_method
   def compute_exact_quad_model_filtered(
       self,
@@ -1411,7 +1398,7 @@ class Optimizer(utils.WithStagedMethods):
       func_args: FuncArgsVariants,
       state: State | None = None,
       fixed_coefficients: Sequence[Numeric | None] | None = None,
-  ) -> tuple[Array, Array, Array]:
+  ) -> QuadModelParams:
     """Computes the components of the exact quadratic model."""
 
     # We check the fixed_coefficients for zeros to save computing the expensive
@@ -1456,7 +1443,7 @@ class Optimizer(utils.WithStagedMethods):
       grads: Params,
       func_args: FuncArgsVariants,
       state: State | None = None,
-  ) -> tuple[Array, Array, Array]:
+  ) -> QuadModelParams:
     """Computes the components of the exact quadratic model."""
 
     del state
@@ -1473,6 +1460,7 @@ class Optimizer(utils.WithStagedMethods):
 
     return (utils.matrix_of_inner_products(c_factor_v),
             utils.matrix_of_inner_products(vectors),
+            utils.matrix_of_inner_products(vectors),
             utils.vector_of_inner_products(grads, vectors))
 
   @functools.partial(utils.staged, donate_argnums=2)
@@ -1482,7 +1470,7 @@ class Optimizer(utils.WithStagedMethods):
       state: State,
       vectors: Sequence[Params],
       grads: Params,
-  ) -> tuple[Array, Array, Array]:
+  ) -> QuadModelParams:
     """Computes the components of the approximate quadratic model."""
 
     # v_i^T C v_j
@@ -1500,6 +1488,7 @@ class Optimizer(utils.WithStagedMethods):
     c_vectors = [c_times_v(v_i) for v_i in vectors]
 
     return (utils.symmetric_matrix_inner_products(c_vectors, vectors),
+            utils.matrix_of_inner_products(vectors),
             utils.matrix_of_inner_products(vectors),
             utils.vector_of_inner_products(grads, vectors))
 
@@ -1520,15 +1509,14 @@ class Optimizer(utils.WithStagedMethods):
   @utils.staged
   def _solve_quad_model(
       self,
-      quad_model_parameters: tuple[Array, Array, Array],
+      quad_model_parameters: QuadModelParams,
       damping: Array,
-      vectors: Sequence[Params],
-      fixed_coefficients: Sequence[Numeric | None] | None = None,
+      fixed_coefficients: Sequence[Numeric | None],
   ) -> tuple[tuple[Numeric, ...], Array]:
     """Solves for the optimal learning rate and momentum of the quadratic model.
 
     The quadratic model is represented as:
-      Q(w) = w^T V^T (C + damping * I) V w / 2.0 + w^T V^T g
+      Q(w) = w^T V^T (C + damping * I + l2_reg * I) V w / 2.0 + w^T V^T g
     where (n - number of vectors, d - dimensions of each vector):
       w (n,) - the vector of free weights (learning rate and momentum)
       V (d, n) - the matrix of proposed vectors for each weight
@@ -1538,13 +1526,13 @@ class Optimizer(utils.WithStagedMethods):
 
     In the implementation we have:
       A = V^T C V
-      D = V^T V
+      D = V^T V  (for damping)
+      R = V^T V  (for L2 regularization)
       b = V^T g
 
     Args:
       quad_model_parameters: The computed matrices A, D and vector b.
       damping: The damping to use for evaluating the quadratic model.
-      vectors: The parameter-like vectors for which to evaluate.
       fixed_coefficients: A list over the vectors of the fixed numerical values
         to use for their coefficients. For each of these that is None, the
         quadratic model is minimized to compute the 'optimal' coefficient value.
@@ -1556,24 +1544,17 @@ class Optimizer(utils.WithStagedMethods):
       The function currently supports only up to two vectors, hence if you
       provide more, it will raise a ``NotImplementedError``.
     """
-    # TODO(jamesmartens,botev): it would be better if this method didn't need
-    # to have 'vectors' passed. We could instead use the 'D' matrix to get the
-    # to get the matrix for the l2 regularization.
 
-    if fixed_coefficients is None:
-      fixed_coefficients = (None,) * len(vectors)
-
-    if len(vectors) != len(fixed_coefficients):
-      raise ValueError("The length of `vectors` must be equal to the length of "
-                       "`fixed_coefficients`.")
+    # TODO(jamesmartens): should revise the above docstring and move most of it
+    # to compute_exact_quad_model.
 
     # pylint: disable=invalid-name
-    A_no_diag, D, b = quad_model_parameters
-    A = A_no_diag + self.compute_l2_quad_matrix(vectors)
+    A_no_diag, D, R, b = quad_model_parameters
+    A = A_no_diag + self.l2_reg * R
     A_damped = A + damping * D
 
     # Sync.
-    # TODO(jamesmartens, botev): we should perform this earlier since it's
+    # TODO(jamesmartens): we should perform this earlier since it's
     # dangerous to have the convention of doing it right before use (especially
     # since the convention everywhere else is to sync quantities immediately
     # after they are first computed).
@@ -1602,7 +1583,7 @@ class Optimizer(utils.WithStagedMethods):
 
       w = jnp.asarray(fixed_coefficients)
 
-    elif len(vectors) == 2:
+    elif len(fixed_coefficients) == 2:
       # Exactly one adapted coefficient
 
       w = [None, None]
@@ -1620,10 +1601,10 @@ class Optimizer(utils.WithStagedMethods):
     w = tuple(w)
     w: tuple[Numeric, ...]
 
-    quadratic_value = self.compute_quadratic_model_value(
+    quad_model_change = self.compute_quadratic_model_value(
         A, A_damped, b, jnp.array(w))
 
-    return w, quadratic_value
+    return w, quad_model_change
 
   @utils.staged
   def _compute_new_damping_and_rho(
