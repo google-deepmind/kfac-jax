@@ -194,9 +194,15 @@ class Full(CurvatureBlock, abc.ABC):
       if power == -1:
         result = utils.psd_solve(matrix, vector)
       else:
+        if power == -0.5:
+          matrix = utils.inverse_sqrt_psd_matrices(matrix)
+        elif power == 0.5:
+          matrix = jnp.dot(matrix, utils.inverse_sqrt_psd_matrices(matrix))
+        else:
+          raise ValueError(f"Unsupported power: {power}")
         # TODO(jamesmartens,botev): investigate this for determinism on GPUs
         # NOTE: this function only works for integer powers
-        result = jnp.matmul(jnp.linalg.matrix_power(matrix, power), vector)
+        result = jnp.matmul(matrix, vector)
 
     else:
 
