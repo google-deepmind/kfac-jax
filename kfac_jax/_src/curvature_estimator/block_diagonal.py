@@ -92,7 +92,12 @@ class BlockDiagonalCurvature(
         diagonal or Kronecker approximations) by looping over one-hot vectors
         for each coordinate of the output instead of using 1/-1 vectors. It is
         more expensive to compute than the other three options by a factor
-        equal to the output dimension, roughly speaking.
+        equal to the output dimension, roughly speaking. Because this assumes
+        independence of elements in the batch, it won't work properly for models
+        that violate this (e.g. ones that use batch normalization). This mode
+        also assumes that all registered losses have an input tensor whose first
+        dimension is the batch dimension (whereas the other modes don't care
+        about this).
 
       * fisher_empirical - computes the 'empirical' Fisher information
         matrix (which uses the data's distribution for the targets, as
@@ -709,15 +714,11 @@ class BlockDiagonalCurvature(
           jnp.zeros_like, list(loss.parameter_dependants for loss in losses))
 
       if estimation_mode == "fisher_exact":
-        shapes = [l.fisher_factor_inner_shape[1:] for l in losses]
+        inner_shapes = [l.fisher_factor_inner_shape[1:] for l in losses]
       else:
-        shapes = [l.ggn_factor_inner_shape[1:] for l in losses]
+        inner_shapes = [l.ggn_factor_inner_shape[1:] for l in losses]
 
-      # For now we support only inner shapes of 1 dimension, hence below the
-      # (loss_num_indices,).
-      assert all(len(s) == 1 for s in shapes)
-
-      total_num_indices = sum(sum(s) for s in shapes)
+      total_num_indices = sum(utils.product(s) for s in inner_shapes)
 
       # This doesn't affect how the averaging is done except how the new stats
       # are weighted vs the old stats (which if they also used this correction
@@ -725,17 +726,17 @@ class BlockDiagonalCurvature(
       ema_new = ema_new / total_num_indices
 
       # This loop should probably be converted into a JAX loop for the sake of
-      # efficient compilation.
-      for i, (loss, (loss_num_indices,)) in enumerate(zip(losses, shapes)):
+      # efficient compilation and reasonable program size.
+      for i, (loss, shape) in enumerate(zip(losses, inner_shapes)):
 
-        for index in range(loss_num_indices):
+        for index in np.ndindex(shape):
 
           vjp_vec = zero_tangents.copy()
 
           if estimation_mode == "fisher_exact":
-            vjp_vec[i] = loss.multiply_fisher_factor_replicated_one_hot([index])
+            vjp_vec[i] = loss.multiply_fisher_factor_replicated_one_hot(index)
           else:
-            vjp_vec[i] = loss.multiply_ggn_factor_replicated_one_hot([index])
+            vjp_vec[i] = loss.multiply_ggn_factor_replicated_one_hot(index)
 
           if isinstance(vjp_vec[i], Array):
             # In the special case of only one parameter, it still needs to be a

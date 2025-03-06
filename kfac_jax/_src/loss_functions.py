@@ -51,13 +51,19 @@ class LossFunction(utils.Finalizable):
   neither summed nor averaged over the batch and the output of evaluate() will
   not be a scalar. It is up to the user to then to correctly manipulate them as
   needed.
+
+  Note that all of the GGN and Fisher (factor) multiplication methods defined in
+  this class refer to the GGN and Fisher of just the loss function itself, which
+  does *not* include the parameterized function (e.g. neural network) that
+  generates the inputs (e.g. predictions or logits) feeding into the loss
+  function.
   """
 
   def __init__(self, weight: Numeric):
     """Initializes the loss instance.
 
     Args:
-      weight: The relative weight attributed to the loss.
+      weight: The weight attributed to the loss.
     """
     if not isinstance(weight, (int, float)) and type(weight) is not object:  # pylint: disable=unidiomatic-typecheck
       if not isinstance(weight, Array) or weight.size > 1:
@@ -72,7 +78,7 @@ class LossFunction(utils.Finalizable):
 
   @property
   def weight(self) -> Numeric:
-    """The relative weight of the loss."""
+    """The weight of the loss."""
     return self._weight
 
   @property
@@ -104,13 +110,17 @@ class LossFunction(utils.Finalizable):
       self,
       parameter_dependants: Sequence[Array],
   ) -> Self:
-    """Creates a copy of the loss function object, but with different def copyinputs."""
+    """Creates a copy of the loss function object, but with different inputs."""
+
     array_args, aux = self.tree_flatten()
+
     assert len(array_args) == (
         self.num_parameter_dependants + self.num_parameter_independants
     )
+
     array_args = (tuple(parameter_dependants) +
                   tuple(array_args[self.num_parameter_dependants:]))
+
     return self.tree_unflatten(aux, array_args)
 
   def tree_flatten(
@@ -136,7 +146,7 @@ class LossFunction(utils.Finalizable):
     Args:
       targets: The targets, on which to evaluate the loss. If this is set to
         ``None`` will use ``self.targets`` instead.
-      coefficient_mode: Specifies how to use the relative weight of the loss in
+      coefficient_mode: Specifies how to use the weight of the loss in
         the returned value. There are three options:
 
         1. 'regular' - returns ``self.weight * loss(targets)``
@@ -167,14 +177,14 @@ class LossFunction(utils.Finalizable):
 
   @abc.abstractmethod
   def _evaluate(self, targets: Array) -> Array:
-    """Evaluates the value of the loss, disregarding the relative weight."""
+    """Evaluates the value of the loss, disregarding the weight."""
 
   def grad_of_evaluate(
       self,
       targets: Array | None,
       coefficient_mode: str,
   ) -> tuple[Array, ...]:
-    """Evaluates the gradient of the loss function, w.r.t. its inputs.
+    """Evaluates the gradient of the loss function w.r.t. its inputs.
 
     Args:
       targets: The targets at which to evaluate the loss. If this is ``None``
@@ -199,9 +209,6 @@ class LossFunction(utils.Finalizable):
   ) -> tuple[Array, ...]:
     """Right-multiplies a vector by the GGN of the loss function.
 
-    Here the GGN is the Generalized Gauss-Newton matrix (whose definition is
-    somewhat flexible) of the loss function with respect to its inputs.
-
     Args:
       vector: The vector to multiply. Must have the same shape(s) as
         ``self.inputs``.
@@ -224,11 +231,6 @@ class LossFunction(utils.Finalizable):
       vector: Array,
   ) -> tuple[Array, ...]:
     """Right-multiplies a vector by a factor B of the GGN.
-
-    Here the GGN is the Generalized Gauss-Newton matrix (whose definition is
-    somewhat flexible) of the loss function with respect to its inputs.
-    Typically this will be block-diagonal across different cases in the batch,
-    since the loss function is typically summed across cases.
 
     Note that B can be any matrix satisfying ``B * B^T = G`` where ``G`` is the
     GGN, but will agree with the one used in the other methods of this class.
@@ -256,11 +258,6 @@ class LossFunction(utils.Finalizable):
   ) -> Array:
     """Right-multiplies a vector by the transpose of a factor B of the GGN.
 
-    Here the GGN is the Generalized Gauss-Newton matrix (whose definition is
-    somewhat flexible) of the loss function with respect to its inputs.
-    Typically this will be block-diagonal across different cases in the batch,
-    since the loss function is typically summed across cases.
-
     Note that B can be any matrix satisfying ``B * B^T = G`` where G is the GGN,
     but will agree with the one used in the other methods of this class.
 
@@ -285,14 +282,9 @@ class LossFunction(utils.Finalizable):
 
   def multiply_ggn_factor_replicated_one_hot(
       self,
-      index: Sequence[int],
+      index: tuple[int, ...],
   ) -> tuple[Array, ...]:
     """Right-multiplies a replicated-one-hot vector by a factor B of the GGN.
-
-    Here the GGN is the Generalized Gauss-Newton matrix (whose definition is
-    somewhat flexible) of the loss function with respect to its inputs.
-    Typically this will be block-diagonal across different cases in the batch,
-    since the loss function is typically summed across cases.
 
     A replicated-one-hot vector means a tensor which, for each slice along the
     batch dimension (assumed to be dimension 0), is 1.0 in the entry
@@ -301,10 +293,15 @@ class LossFunction(utils.Finalizable):
     Note that B can be any matrix satisfying ``B * B^T = G`` where G is the GGN,
     but will agree with the one used in the other methods of this class.
 
+    The reason that we have this special method and don't just use
+    multiply_ggn_factor is that we can be more efficient by using knowledge of
+    the zero-entries in the replicated-one-hot vector.
+
     Args:
       index: A tuple representing in the index of the entry in each slice that
-        is 1.0. Note that len(index) must be equal to the number of elements of
-        the ``ggn_factor_inner_shape`` tensor minus one.
+        is 1.0 (excluding the batch dimension). Note that len(index) must be
+        equal to the number of elements of the ``ggn_factor_inner_shape`` tensor
+        minus one.
 
     Returns:
       The vector right-multiplied by B^T. Will be of the same shape(s) as the
@@ -317,7 +314,7 @@ class LossFunction(utils.Finalizable):
   @abc.abstractmethod
   def multiply_ggn_factor_replicated_one_hot_unweighted(
       self,
-      index: Sequence[int],
+      index: tuple[int, ...],
   ) -> tuple[Array, ...]:
     """Unweighted version of :func:`~LossFunction.multiply_ggn_factor_replicated_one_hot`."""
 
@@ -369,13 +366,6 @@ class NegativeLogProbLoss(LossFunction):
   ) -> tuple[Array, ...]:
     """Right-multiplies a vector by a factor B of the Fisher.
 
-    Here the Fisher is the Fisher information matrix (i.e. expected outer-
-    product of gradients) with respect to the parameters of the underlying
-    probability distribution (whose log-prob defines the loss). Typically this
-    will be block-diagonal across different cases in the batch, since the
-    distribution is usually (but not always) conditionally iid across different
-    cases.
-
     Note that B can be any matrix satisfying ``B * B^T = F`` where F is the
     Fisher, but will agree with the one used in the other methods of this class.
 
@@ -403,13 +393,6 @@ class NegativeLogProbLoss(LossFunction):
   ) -> Array:
     """Right-multiplies a vector by the transpose of a factor B of the Fisher.
 
-    Here the Fisher is the Fisher information matrix (i.e. expected outer-
-    product of gradients) with respect to the parameters of the underlying
-    probability distribution (whose log-prob defines the loss). Typically this
-    will be block-diagonal across different cases in the batch, since the
-    distribution is usually (but not always) conditionally iid across different
-    cases.
-
     Note that B can be any matrix satisfying ``B * B^T = F`` where F is the
     Fisher, but will agree with the one used in the other methods of this class.
 
@@ -434,28 +417,26 @@ class NegativeLogProbLoss(LossFunction):
 
   def multiply_fisher_factor_replicated_one_hot(
       self,
-      index: Sequence[int],
+      index: tuple[int, ...],
   ) -> tuple[Array, ...]:
     """Right-multiplies a replicated-one-hot vector by a factor B of the Fisher.
-
-    Here the Fisher is the Fisher information matrix (i.e. expected outer-
-    product of gradients) with respect to the parameters of the underlying
-    probability distribution (whose log-prob defines the loss). Typically this
-    will be block-diagonal across different cases in the batch, since the
-    distribution is usually (but not always) conditionally iid across different
-    cases.
 
     A replicated-one-hot vector means a tensor which, for each slice along the
     batch dimension (assumed to be dimension 0), is 1.0 in the entry
     corresponding to the given index and 0 elsewhere.
 
-    Note that B can be any matrix satisfying ``B * B^T = H`` where H is the
+    Note that B can be any matrix satisfying ``B * B^T = F`` where F is the
     Fisher, but will agree with the one used in the other methods of this class.
+
+    The reason that we have this special method and don't just use
+    multiply_fisher_factor is that we can be more efficient by using knowledge
+    of the zero-entries in the replicated-one-hot vector.
 
     Args:
       index: A tuple representing in the index of the entry in each slice that
-        is 1.0. Note that len(index) must be equal to the number of elements of
-        the ``fisher_factor_inner_shape`` tensor minus one.
+        is 1.0 (excluding the batch dimension). Note that len(index) must be
+        equal to the number of elements of the ``fisher_factor_inner_shape``
+        tensor minus one.
 
     Returns:
       The vector right-multiplied by B. Will have the same shape(s) as
@@ -468,7 +449,7 @@ class NegativeLogProbLoss(LossFunction):
   @abc.abstractmethod
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
-      index: Sequence[int],
+      index: tuple[int, ...],
   ) -> tuple[Array, ...]:
     """Unweighted version of :func:`~LossFunction.multiply_fisher_factor_replicated_one_hot`."""
 
@@ -504,7 +485,7 @@ class NaturalParamsNegativeLogProbLoss(NegativeLogProbLoss, abc.ABC):
 
   We will take the GGN of the loss to be the Fisher associated with the
   distribution, which also happens to be equal to the Hessian for this class
-  of loss functions.  See here: https://arxiv.org/abs/1412.1193
+  of loss functions. See https://arxiv.org/abs/1412.1193 for details.
 
   Natural parameters are defined for exponential-family models. See for
   example `wikipedia <https://en.wikipedia.org/wiki/Exponential_family>`__.
@@ -530,7 +511,7 @@ class NaturalParamsNegativeLogProbLoss(NegativeLogProbLoss, abc.ABC):
 
   def multiply_ggn_factor_replicated_one_hot_unweighted(
       self,
-      index: Sequence[int],
+      index: tuple[int, ...],
   ) -> tuple[Array, ...]:
     return self.multiply_fisher_factor_replicated_one_hot_unweighted(index)
 
@@ -554,11 +535,6 @@ class DistributionNegativeLogProbLoss(NegativeLogProbLoss):
   def sample(self, rng: PRNGKey) -> Array:
     return self.dist.sample(seed=rng)  # pytype: disable=bad-return-type
 
-  @property
-  def fisher_factor_inner_shape(self) -> Shape:
-    return jax.eval_shape(
-        lambda: self.sample(rng=jax.random.PRNGKey(0))).shape
-
 
 @jax.tree_util.register_pytree_node_class
 class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
@@ -570,8 +546,6 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   parameter is given by:
 
      F = (1 / variance) * I
-
-  See for example https://www.ii.pwr.edu.pl/~tomczak/PDF/[JMT]Fisher_inf.pdf.
   """
 
   def __init__(
@@ -588,7 +562,7 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
       mean: The mean of the normal distribution.
       targets: Optional targets to use for evaluation.
       variance: The scalar variance of the normal distribution.
-      weight: The relative weight of the loss.
+      weight: The weight of the loss.
       normalize_log_prob: Whether the log prob should include the standard
         normalization constant for Gaussians (which is additive and depends
         on the variance).
@@ -634,6 +608,10 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def params(self) -> tuple[Array]:
     return (self.mean,)
 
+  @property
+  def fisher_factor_inner_shape(self) -> Shape:
+    return self._mean.shape
+
   def _evaluate(self, targets: Array) -> Array:
 
     if self.normalize_log_prob:
@@ -664,14 +642,18 @@ class NormalMeanNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
-      index: Sequence[int],
+      index: tuple[int, ...],
   ) -> tuple[Array]:
-    index = index[0]
-    ones_slice = jnp.ones([self.mean.shape[0]])[..., None]
+
+    ones_slice = jnp.ones([self.mean.shape[0]] + [1] * (self.mean.ndim - 1))
+
     output_slice = ones_slice / jnp.sqrt(self.variance)
-    return (insert_slice_in_zeros(output_slice, 1, self.mean.shape[1], index),)
+
+    return (insert_slice_in_zeros(output_slice, self.mean.shape, (0,) + index),)
 
 
+# TODO(jamesmartens): This class was copied from the TF K-FAC codebase and is
+# untested with probable bugs. Test it?
 @jax.tree_util.register_pytree_node_class
 class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
   """Negative log prob loss for a normal distribution with mean and variance.
@@ -704,7 +686,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
       mean: The mean of the normal distribution.
       variance: The variance of the normal distribution.
       targets: Optional targets to use for evaluation.
-      weight: The relative weight of the loss.
+      weight: The weight of the loss.
     """
     if mean.ndim != 2:
       raise ValueError("Only 2D mean array is supported.")
@@ -779,29 +761,30 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
 
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
-      index: Sequence[int],
+      index: tuple[int, ...],
   ) -> tuple[Array, Array]:
     [index] = index
 
     if index < int(self._mean.shape[-1]):
       # Index corresponds to mean parameter.
       mean_slice = self._fisher_mean_factor[:, index][..., None]
-      mean_output = insert_slice_in_zeros(mean_slice, 1, int(
-          self._mean.shape[1]), index)
+      mean_output = insert_slice_in_zeros(
+          mean_slice, self._mean.shape, [0, index])
       var_output = jnp.zeros_like(mean_output)
+
     else:
       index -= int(self._mean.shape[-1])
       # Index corresponds to variance parameter.
       var_slice = self._fisher_var_factor[:, index][..., None]
-      var_output = insert_slice_in_zeros(var_slice, 1,
-                                         int(self._variance.shape[1]), index)
+      var_output = insert_slice_in_zeros(
+          var_slice, self._variance.shape, [0, index])
       mean_output = jnp.zeros_like(var_output)
 
     return mean_output, var_output
 
   @property
   def fisher_factor_inner_shape(self) -> Shape:
-    return self._mean.shape[:-1] + self._mean.shape[-1:] * 2
+    return self._mean.shape[:-1] + (self._mean.shape[-1] * 2,)
 
   def multiply_ggn_unweighted(
       self,
@@ -822,7 +805,7 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
 
   def multiply_ggn_factor_replicated_one_hot_unweighted(
       self,
-      index: Sequence[int],
+      index: tuple[int, ...],
   ) -> tuple[Array, ...]:
     raise NotImplementedError()
 
@@ -855,7 +838,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     Args:
       logits: The logits of the Bernoulli distribution.
       targets: Optional targets to use for evaluation.
-      weight: The relative weight of the loss.
+      weight: The weight of the loss.
     """
     self._logits = logits
     self._targets = targets
@@ -882,6 +865,10 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def params(self) -> tuple[Array]:
     return (self._logits,)
 
+  @property
+  def fisher_factor_inner_shape(self) -> Shape:
+    return self._logits.shape
+
   def multiply_fisher_unweighted(
       self,
       vector: Sequence[Array]
@@ -903,13 +890,16 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
-      index: Sequence[int],
+      index: tuple[int, ...],
   ) -> tuple[Array]:
-    [index] = index
-    probs_slice = self._probs[:, index][..., None]
+
+    probs_slice = jnp.expand_dims(self._probs[(slice(None),) + index],
+                                  axis=range(1, len(self._probs.shape)))
+
     output_slice = utils.stable_sqrt(probs_slice * (1 - probs_slice))
-    return (insert_slice_in_zeros(
-        output_slice, 1, self._logits.shape[1], index),)
+
+    return (insert_slice_in_zeros(output_slice, self._logits.shape,
+                                  (0,) + index),)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -936,16 +926,15 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     """Initializes the loss instance.
 
     Args:
-      logits: The logits of the Categorical distribution of shape
-        ``(batch_size, output_size)``.
+      logits: The logits of the Categorical distribution.
       targets: Optional targets to use for evaluation, which specify an integer
-        index of the correct class. Must be of shape ``(batch_size,)``.
+        index of the correct class. Must be of shape ``logits.shape[:-1]``.
       mask: Optional mask to apply to losses over the batch. Should be
-        0/1-valued and of shape ``(batch_size,)``. The tensors returned by
+        0/1-valued and of shape ``logits.shape[:-1]``. The tensors returned by
         ``evaluate`` and ``grad_of_evaluate``, as well as the various matrix
         vector products, will be multiplied by mask (with broadcasting to later
         dimensions).
-      weight: The relative weight of the loss.
+      weight: The weight of the loss.
     """
     if (mask is not None and type(mask) is not object and  # pylint: disable=unidiomatic-typecheck
         mask.shape != logits.shape[:-1]):
@@ -1052,26 +1041,29 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   def multiply_fisher_factor_replicated_one_hot_unweighted(
       self,
-      index: Sequence[int],
+      index: tuple[int, ...],
   ) -> tuple[Array]:
 
-    [index] = index
     probs = self._probs
 
-    sqrt_probs_slice = self._sqrt_probs[:, index][..., None]
+    sqrt_probs_slice = jnp.expand_dims(self._sqrt_probs[(slice(None),) + index],
+                                       axis=range(1, len(probs.shape)))
 
-    padded_slice = insert_slice_in_zeros(sqrt_probs_slice, 1, probs.shape[1],
-                                         index)
+    padded_slice = insert_slice_in_zeros(
+        sqrt_probs_slice, probs.shape, (0,) + index)
+
     return (padded_slice - probs * sqrt_probs_slice,)
 
 
 @jax.tree_util.register_pytree_node_class
 class OneHotCategoricalLogitsNegativeLogProbLoss(
     CategoricalLogitsNegativeLogProbLoss):
-  """Neg log prob loss for a categorical distribution with onehot targets.
+  """Neg log prob loss for a categorical distribution with one-hot targets.
 
   Identical to CategoricalLogitsNegativeLogProbLoss except that the underlying
-  distribution is OneHotCategorical as opposed to Categorical.
+  distribution is OneHotCategorical as opposed to Categorical. ``targets`` is
+  vector-encoded instead of integer-encoded, and must have the same shape as
+  ``logits``.
   """
 
   @property
@@ -1081,23 +1073,21 @@ class OneHotCategoricalLogitsNegativeLogProbLoss(
 
 def insert_slice_in_zeros(
     slice_to_insert: Array,
-    dim: int,
-    dim_size: int,
-    position: int,
+    zeros_shape: Sequence[int],
+    position: Sequence[int],
 ) -> Array:
   """Inserts slice into a larger array of zeros.
 
-  Forms a new array which is the same shape as slice_to_insert, except that
-  the dimension given by ``dim`` is expanded to the size given by ``dim_size``.
-  ``position`` determines the position (index) at which to insert the slice
-  within that dimension.
+  Forms a new array of shape ``zeros_shape``, which is zeros everywhere except
+  for the slice given by the ``position`` argument.
 
-  Assumes slice_to_insert.shape[dim] = 1.
+  We assume that slice_to_insert.shape and zeros_shape are the same length, and
+  with ``slice_to_insert.shape[i] == zeros_shape[i]`` or ``1`` for all ``i``.
+  For ``i`` where slice_to_insert.shape[i] == 1, ``position[i]`` must be ``0``.
 
   Args:
     slice_to_insert: The slice to insert.
-    dim: The dimension which to expand with zeros.
-    dim_size: The new size of the ``dim`` dimension.
+    zeros_shape: The shape of the new array.
     position: The position of ``slice_to_insert`` in the new tensor.
 
   Returns:
@@ -1106,16 +1096,21 @@ def insert_slice_in_zeros(
   Raises:
     ValueError: If the slice's shape at the given dim is not 1.
   """
-  slice_shape = slice_to_insert.shape
-  if slice_shape[dim] != 1:
-    raise ValueError(f"Expected slice_to_insert.shape to have {dim} dim of 1,"
-                     f" but was {slice_to_insert.shape[dim]}.")
 
-  before = [0] * len(slice_shape)
-  after = before[:]
-  before[dim] = position
-  after[dim] = dim_size - position - 1
-  return jnp.pad(slice_to_insert, list(zip(before, after)))
+  assert slice_to_insert.ndim == len(zeros_shape)
+  assert slice_to_insert.ndim == len(position)
+
+  pad_width = []
+
+  for i in range(slice_to_insert.ndim):
+    if slice_to_insert.shape[i] == 1:
+      pad_width.append((position[i], zeros_shape[i] - position[i] - 1))
+    else:
+      assert slice_to_insert.shape[i] == zeros_shape[i]
+      assert position[i] == 0
+      pad_width.append((0, 0))
+
+  return jnp.pad(slice_to_insert, pad_width)
 
 
 def register_normal_predictive_distribution(
@@ -1141,12 +1136,13 @@ def register_normal_predictive_distribution(
   appropriate value to ``weight``.
 
   Args:
-    mean: A tensor defining the mean vector of the distribution. The first
+    mean: An ND array defining the mean vector of the distribution. The first
       dimension will usually be the batch size, but doesn't need to be (unless
       using ``estimation_mode='fisher_exact'`` or
       ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
-    targets: (OPTIONAL) The targets for the loss function. Only required if
-      using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
+    targets: (OPTIONAL) The targets for the loss function. Must have the same
+      shape as ``mean``. Only required if using
+      ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
     variance: The variance of the distribution. Must be a constant scalar,
       independent of the network's parameters. Note that the default value of
@@ -1217,12 +1213,13 @@ def register_squared_error_loss(
   Mixing the two up could lead to a silent failure of the curvature estimation.
 
   Args:
-    prediction: The prediction made by the network (i.e. its output). The first
-      dimension will usually be the batch size, but doesn't need to be (unless
-      using ``estimation_mode='fisher_exact'`` or
+    prediction: The prediction made by the network (i.e. its output) as an ND
+      array of floats. The first dimension will usually be the batch size, but
+      doesn't need to be (unless using ``estimation_mode='fisher_exact'`` or
       ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
-    targets: (OPTIONAL) The targets for the loss function. Only required if
-      using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
+    targets: (OPTIONAL) The targets for the loss function. Must have the same
+      shape as ``prediction``. Only required if using
+      ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
     weight: The constant scalar coefficient which this loss is multiplied by.
       Note that this must be constant and independent of the network's
@@ -1262,12 +1259,13 @@ def register_multi_bernoulli_predictive_distribution(
   confused with it.
 
   Args:
-    logits: The logits of the distribution (i.e. its parameters) as a 2D array
+    logits: The logits of the distribution (i.e. its parameters) as a ND array
       of floats. The first dimension will usually be the batch size, but doesn't
       need to be (unless using ``estimation_mode='fisher_exact'`` or
       ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
-    targets: (OPTIONAL) The targets for the loss function.  Only required if
-      using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
+    targets: (OPTIONAL) The targets for the loss function. Must be of the same
+      shape as ``logits``. Only required if using
+      ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
     weight: The constant scalar coefficient that the log prob loss associated
       with this distribution is multiplied by. This is NOT equivalent to
@@ -1319,7 +1317,7 @@ def register_sigmoid_cross_entropy_loss(
   for now.
 
   Args:
-    logits: The input logits of the loss as a 2D array of floats. The first
+    logits: The input logits of the loss as a ND array of floats. The first
       dimension will usually be the batch size, but doesn't need to be (unless
       using ``estimation_mode='fisher_exact'`` or
       ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
@@ -1348,26 +1346,30 @@ def register_categorical_predictive_distribution(
 
   This corresponds to a softmax cross-entropy loss of the form
 
-  ``weight * jnp.sum(softmax_cross_entropy(logits, targets)) / batch_size``.
+  ``weight * jnp.sum(softmax_cross_entropy(logits, targets)) / batch_size``,
+
+  or in other words, the negative log probability of the distribution,
+  multiplied by ``weight``.
 
   NOTE: this is distinct from
   :func:`~register_multi_bernoulli_predictive_distribution` and should not be
   confused with it.
 
   Args:
-    logits: The logits of the distribution (i.e. its parameters) as a 2D array
+    logits: The logits of the distribution (i.e. its parameters) as an ND array
       of floats. The first dimension will usually be the batch size, but doesn't
       need to be (unless using ``estimation_mode='fisher_exact'`` or
-      ``estimation_mode='ggn_exact'`` in the optimizer/estimator). The second
+      ``estimation_mode='ggn_exact'`` in the optimizer/estimator). The final
       dimension is the one over which the softmax is computed.
     targets: (OPTIONAL) The values at which the log probability of this
-      distribution is evaluated (to give the loss).  Must be a 2D array of
-      integers with shape ``(logits.shape[0],)``. Only required if using
+      distribution is evaluated (to give the loss).  Must be a (N-1)D array of
+      integers with shape ``logits.shape[:-1]`` for integer-encoded targets, or
+      ``logits.shape`` for vector-encoded targets. Only required if using
       ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
     mask: (OPTIONAL) Mask to apply to log probabilities generated by the
-      distribution. Should be 0/1-valued and of shape ``(logits.shape[0],)``.
-      Log probablities corresponding to mask values of False will be treated
+      distribution. Should be 0/1-valued and of shape ``logits.shape[:-1]``.
+      Log probabilities corresponding to mask values of 0 will be treated
       as constant and equal to 0. (Default: None)
     weight: The constant scalar coefficient that the log prob loss associated
       with this distribution is multiplied by. This is NOT equivalent to
@@ -1427,18 +1429,19 @@ def register_softmax_cross_entropy_loss(
   probabilistic interpretation. It behaves identically for now.
 
   Args:
-    logits: The input logits of the loss as a 2D array of floats. The first
+    logits: The input logits of the loss as an ND array of floats. The first
       dimension will usually be the batch size, but doesn't need to be (unless
       using ``estimation_mode='fisher_exact'`` or
       ``estimation_mode='ggn_exact'`` in the optimizer/estimator).
-      The second dimension is the one over which the softmax is computed.
-    targets: (OPTIONAL) The targets for the loss function. Must be a 1D array of
-      integers with shape ``(logits.shape[0],)``. Only required if using
-      ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
+      The final dimension is the one over which the softmax is computed.
+    targets: (OPTIONAL) The targets for the loss function. Must be a (N-1)D
+      array of integers with shape ``logits.shape[:-1]`` for integer-encoded
+      targets, or ``logits.shape`` for vector-encoded targets. Only required if
+      using ``estimation_mode='fisher_empirical'`` in the optimizer/estimator.
       (Default: None)
     mask: (OPTIONAL) Mask to apply to losses. Should be 0/1-valued and of shape
-      ``(logits.shape[0],)``. Losses corresponding to mask values of False will
-      be treated as constant and equal to 0. (Default: None)
+      ``logits.shape[:-1]``. Losses corresponding to mask values of 0 will be
+      treated as constant and equal to 0. (Default: None)
     weight: The constant scalar coefficient which this loss is multiplied by.
       Note that this must be constant and independent of the network's
       parameters. (Default: 1.0)
