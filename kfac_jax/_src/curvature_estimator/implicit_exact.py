@@ -72,9 +72,8 @@ class ImplicitExactCurvature:
     """The expected batch size given a list of loss instances."""
     return self._batch_size_extractor(func_args[-1])
 
-  @classmethod
-  def _multiply_loss_fisher(
-      cls,
+  def multiply_loss_fisher(
+      self,
       losses: Sequence[loss_functions.NegativeLogProbLoss],
       loss_vectors: LossFunctionInputsSequence,
   ) -> LossFunctionInputsTuple:
@@ -83,9 +82,8 @@ class ImplicitExactCurvature:
     return tuple(loss.multiply_fisher(vec)
                  for loss, vec in zip(losses, loss_vectors))
 
-  @classmethod
-  def _multiply_loss_ggn(
-      cls,
+  def multiply_loss_ggn(
+      self,
       losses: LossFunctionsSequence,
       loss_vectors: LossFunctionInputsSequence,
   ) -> LossFunctionInputsTuple:
@@ -93,9 +91,8 @@ class ImplicitExactCurvature:
     return tuple(loss.multiply_ggn(vec)
                  for loss, vec in zip(losses, loss_vectors))
 
-  @classmethod
-  def _multiply_loss_fisher_factor(
-      cls,
+  def multiply_loss_fisher_factor(
+      self,
       losses: Sequence[loss_functions.NegativeLogProbLoss],
       loss_inner_vectors: Sequence[Array],
   ) -> LossFunctionInputsTuple:
@@ -114,9 +111,8 @@ class ImplicitExactCurvature:
     return tuple(loss.multiply_fisher_factor(vec)
                  for loss, vec in zip(losses, loss_inner_vectors))
 
-  @classmethod
-  def _multiply_loss_ggn_factor(
-      cls,
+  def multiply_loss_ggn_factor(
+      self,
       losses: Sequence[loss_functions.LossFunction],
       loss_inner_vectors: Sequence[Array],
   ) -> LossFunctionInputsTuple:
@@ -134,9 +130,8 @@ class ImplicitExactCurvature:
     return tuple(loss.multiply_ggn_factor(vec)
                  for loss, vec in zip(losses, loss_inner_vectors))
 
-  @classmethod
-  def _multiply_loss_fisher_factor_transpose(
-      cls,
+  def multiply_loss_fisher_factor_transpose(
+      self,
       losses: Sequence[loss_functions.NegativeLogProbLoss],
       loss_vectors: LossFunctionInputsSequence,
   ) -> tuple[Array, ...]:
@@ -155,9 +150,8 @@ class ImplicitExactCurvature:
     return tuple(loss.multiply_fisher_factor_transpose(vec)
                  for loss, vec in zip(losses, loss_vectors))
 
-  @classmethod
-  def _multiply_loss_ggn_factor_transpose(
-      cls,
+  def multiply_loss_ggn_factor_transpose(
+      self,
       losses: LossFunctionsSequence,
       loss_vectors: LossFunctionInputsSequence,
   ) -> tuple[Array, ...]:
@@ -240,8 +234,10 @@ class ImplicitExactCurvature:
     """
     losses, jacobian_vectors = self._loss_tags_jvp(
         func_args, parameter_structured_vector)
+
     if return_loss_objects:
       return jacobian_vectors, losses
+
     return jacobian_vectors
 
   @utils.auto_scope_method
@@ -266,9 +262,12 @@ class ImplicitExactCurvature:
       given by ``loss_inner_vectors``.
     """
     losses, vjp = self._loss_tags_vjp(func_args)
+
     vector = vjp(loss_input_vectors)
+
     if return_loss_objects:
       return vector, losses
+
     return vector
 
   @utils.auto_scope_method
@@ -288,25 +287,25 @@ class ImplicitExactCurvature:
     Returns:
       The product ``Fv``.
     """
-    losses: Sequence[loss_functions.NegativeLogProbLoss]
     jacobian_vectors, losses = self.multiply_jacobian(
-        func_args, parameter_structured_vector, True)  # pytype: disable=annotation-type-mismatch
+        func_args, parameter_structured_vector, True)
+
+    losses: Sequence[loss_functions.NegativeLogProbLoss]
 
     if any(not isinstance(l, loss_functions.NegativeLogProbLoss)
            for l in losses):
       raise ValueError("To use `multiply_fisher` all registered losses must "
                        "be a subclass of `NegativeLogProbLoss`.")
 
-    loss_fisher_jacobian_vectors = self._multiply_loss_fisher(
-        losses, jacobian_vectors)  # pytype: disable=wrong-arg-types
+    loss_fisher_jacobian_vectors = self.multiply_loss_fisher(
+        losses, jacobian_vectors)
 
     vector = self.multiply_jacobian_transpose(
         func_args, loss_fisher_jacobian_vectors)
-    batch_size = self.batch_size(func_args)
 
     assert utils.abstract_objects_equal(parameter_structured_vector, vector)
 
-    return utils.scalar_div(vector, batch_size)
+    return utils.scalar_div(vector, self.batch_size(func_args))
 
   @utils.auto_scope_method
   def multiply_ggn(
@@ -328,16 +327,15 @@ class ImplicitExactCurvature:
     jacobian_vectors, losses = self.multiply_jacobian(
         func_args, parameter_structured_vector, True)
 
-    loss_ggn_jacobian_vectors = self._multiply_loss_ggn(
+    loss_ggn_jacobian_vectors = self.multiply_loss_ggn(
         losses, jacobian_vectors)
 
     vector = self.multiply_jacobian_transpose(
         func_args, loss_ggn_jacobian_vectors)
-    batch_size = self.batch_size(func_args)
 
     assert utils.abstract_objects_equal(parameter_structured_vector, vector)
 
-    return utils.scalar_div(vector, batch_size)
+    return utils.scalar_div(vector, self.batch_size(func_args))
 
   @utils.auto_scope_method
   def multiply_fisher_factor_transpose(
@@ -359,16 +357,17 @@ class ImplicitExactCurvature:
     jacobian_vectors, losses = self.multiply_jacobian(
         func_args, parameter_structured_vector, True)
 
+    losses: Sequence[loss_functions.NegativeLogProbLoss]
+
     if any(not isinstance(l, loss_functions.NegativeLogProbLoss)
            for l in losses):
       raise ValueError("To use `multiply_fisher` all registered losses must "
                        "be a subclass of `NegativeLogProbLoss`.")
 
-    loss_vectors = self._multiply_loss_fisher_factor_transpose(
-        losses, jacobian_vectors)  # pytype: disable=wrong-arg-types
-    batch_size = self.batch_size(func_args)
+    loss_vectors = self.multiply_loss_fisher_factor_transpose(
+        losses, jacobian_vectors)
 
-    return utils.scalar_div(loss_vectors, jnp.sqrt(batch_size))
+    return utils.scalar_div(loss_vectors, jnp.sqrt(self.batch_size(func_args)))
 
   @utils.auto_scope_method
   def multiply_ggn_factor_transpose(
@@ -390,10 +389,10 @@ class ImplicitExactCurvature:
     jacobian_vectors, losses = self.multiply_jacobian(
         func_args, parameter_structured_vector, True)
 
-    vectors = self._multiply_loss_ggn_factor_transpose(losses, jacobian_vectors)
-    batch_size = self.batch_size(func_args)
+    vectors = self.multiply_loss_ggn_factor_transpose(
+        losses, jacobian_vectors)
 
-    return utils.scalar_div(vectors, jnp.sqrt(batch_size))
+    return utils.scalar_div(vectors, jnp.sqrt(self.batch_size(func_args)))
 
   @utils.auto_scope_method
   def multiply_fisher_factor(
@@ -412,21 +411,20 @@ class ImplicitExactCurvature:
     Returns:
       The product ``Bv``, where ``F = BB^T``.
     """
+    losses, vjp = self._loss_tags_vjp(func_args)
     losses: Sequence[loss_functions.NegativeLogProbLoss]
-    losses, vjp = self._loss_tags_vjp(func_args)  # pytype: disable=annotation-type-mismatch
 
     if any(not isinstance(l, loss_functions.NegativeLogProbLoss)
            for l in losses):
       raise ValueError("To use `multiply_fisher` all registered losses must "
                        "be a subclass of `NegativeLogProbLoss`.")
 
-    fisher_factor_vectors = self._multiply_loss_fisher_factor(
-        losses, loss_inner_vectors)  # pytype: disable=wrong-arg-types
+    fisher_factor_vectors = self.multiply_loss_fisher_factor(
+        losses, loss_inner_vectors)
 
     vectors = vjp(fisher_factor_vectors)
-    batch_size = self.batch_size(func_args)
 
-    return utils.scalar_div(vectors, jnp.sqrt(batch_size))
+    return utils.scalar_div(vectors, jnp.sqrt(self.batch_size(func_args)))
 
   @utils.auto_scope_method
   def multiply_ggn_factor(
@@ -447,14 +445,12 @@ class ImplicitExactCurvature:
     """
     losses, vjp = self._loss_tags_vjp(func_args)
 
-    ggn_factor_vectors = self._multiply_loss_ggn_factor(
+    ggn_factor_vectors = self.multiply_loss_ggn_factor(
         losses, loss_inner_vectors)
 
     vectors = vjp(ggn_factor_vectors)
 
-    batch_size = self.batch_size(func_args)
-
-    return utils.scalar_div(vectors, jnp.sqrt(batch_size))
+    return utils.scalar_div(vectors, jnp.sqrt(self.batch_size(func_args)))
 
   def get_loss_inner_vector_shapes_and_batch_size(
       self,
