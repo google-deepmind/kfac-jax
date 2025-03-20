@@ -94,7 +94,7 @@ def get_config() -> config_dict.ConfigDict:
                       decay=0.9,
                       nesterov=True,
                       learning_rate_schedule=dict(
-                          peak_learning_rate=0.1,
+                          peak_value=0.1,
                           warmup_epochs=5,
                           name="cosine",
                       ),

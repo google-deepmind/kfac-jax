@@ -127,17 +127,15 @@ def kfac_resnet50_schedule(
 #   arguments to the schedule functions.
 
 
-# TODO(jamesmartens,kazukiosawa,botev): change these argument names to be not be
-# specific to learning rates.
 def cosine_schedule(
     global_step: Numeric,
     dataset_size: int,
     train_total_batch_size: int | None,
     total_steps: int | None,
     total_epochs: float | None,
-    peak_learning_rate: float,
-    initial_learning_rate: float = 1e-7,
-    end_learning_rate: float = 0.0,
+    peak_value: float,
+    initial_value: float = 1e-7,
+    end_value: float = 0.0,
     warmup_epochs: float | None = None,
     warmup_steps: int | None = None,
     warmup_fraction: float | None = None,
@@ -190,9 +188,9 @@ def cosine_schedule(
       total_data = total_steps * train_total_batch_size
 
     val = optax.warmup_cosine_decay_schedule(
-        init_value=initial_learning_rate,
-        peak_value=peak_learning_rate,
-        end_value=end_learning_rate,
+        init_value=initial_value,
+        peak_value=peak_value,
+        end_value=end_value,
         warmup_steps=warmup_data,
         decay_steps=total_data,
     )(data_seen)
@@ -203,9 +201,9 @@ def cosine_schedule(
       warmup_steps = warmup_fraction * total_steps
 
     val = optax.warmup_cosine_decay_schedule(
-        init_value=initial_learning_rate,
-        peak_value=peak_learning_rate,
-        end_value=end_learning_rate,
+        init_value=initial_value,
+        peak_value=peak_value,
+        end_value=end_value,
         warmup_steps=warmup_steps,
         decay_steps=total_steps,
     )(global_step)
@@ -214,16 +212,12 @@ def cosine_schedule(
   return val
 
 
-# TODO(jamesmartens,kazukiosawa,botev): change these argument names to be not be
-# specific to learning rates. Also, initial_learning_rate is misnamed since this
-# is value is never actually used, but is just a "base" multiplying for the
-# decay factors.
 def stepwise_schedule(
     global_step: Numeric,
     dataset_size: int,
     train_total_batch_size: int | None,
-    lr_decay_factors: Sequence[float],
-    initial_learning_rate: float,
+    decay_factors: Sequence[float],
+    initial_value: float,
     epoch_boundaries: Sequence[float] | None = None,
     warmup_epochs: float | None = None,
     step_boundaries: Sequence[float] | None = None,
@@ -241,12 +235,12 @@ def stepwise_schedule(
                      "be set.")
 
   num_boundaries = len(epoch_boundaries or step_boundaries)
-  if len(lr_decay_factors) != num_boundaries:
-    raise ValueError(f"len(lr_decay_factors)={len(lr_decay_factors)} must be "
+  if len(decay_factors) != num_boundaries:
+    raise ValueError(f"len(decay_factors)={len(decay_factors)} must be "
                      f"equal to the number of boundaries={num_boundaries}.")
 
   values = jnp.concatenate(
-      [jnp.array([1.0]), jnp.array(lr_decay_factors)]) * initial_learning_rate
+      [jnp.array([1.0]), jnp.array(decay_factors)]) * initial_value
 
   if warmup_epochs is not None or epoch_boundaries is not None:
 
