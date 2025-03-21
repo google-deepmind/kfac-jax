@@ -304,7 +304,7 @@ class Optimizer(utils.WithStagedMethods):
         times updates to the curvature approximation without updating the actual
         parameters. (Default: ``10``)
       estimation_mode: String. The type of estimator to use for the curvature
-        matrix. See the documentation for :class:`~CurvatureEstimator` for a
+        matrix. See the documentation for :class:`~BlockDiagonalCurvature` for a
         detailed description of the possible options. If ``None`` will use
         default estimation_mode mode of the used CurvatureEstimator subclass,
         which is typically "ggn_curvature_prop". (Default: ``None``)
@@ -570,15 +570,13 @@ class Optimizer(utils.WithStagedMethods):
     else:
       return None
 
-  def should_update_damping(self, state: State) -> Array:
+  def should_update_damping(self, step_counter: int) -> bool:
     """Whether at the current step the optimizer should update the damping."""
-    return (state.step_counter + 1) % self._damping_adaptation_interval == 0
+    return (step_counter + 1) % self._damping_adaptation_interval == 0
 
-  def should_update_estimate_curvature(self, state: State) -> Array | bool:
+  def should_update_estimate_curvature(self, step_counter: int) -> bool:
     """Whether at the current step the optimizer should update the curvature estimates."""
-    if self._curvature_update_period == 1:
-      return True
-    return state.step_counter % self._curvature_update_period == 0
+    return step_counter % self._curvature_update_period == 0
 
   def should_update_inverse_cache(self, state: State) -> Array | bool:
     """Whether at the current step the optimizer should update the inverse curvature approximation."""
@@ -620,7 +618,7 @@ class Optimizer(utils.WithStagedMethods):
 
     elif not self._use_adaptive_learning_rate and (
         self._learning_rate_schedule is None and learning_rate is None):
-      raise ValueError("When use_adaptive_learning_rate is set to False and "
+      raise ValueError("When `use_adaptive_learning_rate` is set to False and "
                        "`learning_rate_schedule` is None you must provide a "
                        "value to the step function.")
 
@@ -629,12 +627,12 @@ class Optimizer(utils.WithStagedMethods):
                        "should not pass a value to the step function.")
 
     if self._use_adaptive_momentum and momentum is not None:
-      raise ValueError("When use_adaptive_momentum is set to True you "
+      raise ValueError("When `use_adaptive_momentum` is set to True you "
                        "should not pass a value to the step function.")
 
     elif not self._use_adaptive_momentum and (
         self._momentum_schedule is None and momentum is None):
-      raise ValueError("When use_adaptive_momentum is set to False and "
+      raise ValueError("When `use_adaptive_momentum` is set to False and "
                        "`momentum_schedule` is None you must provide a value to"
                        " the step function.")
 
@@ -643,12 +641,12 @@ class Optimizer(utils.WithStagedMethods):
                        "not pass a value to the step function.")
 
     if self._use_adaptive_damping and damping is not None:
-      raise ValueError("When use_adaptive_damping is set to True you "
+      raise ValueError("When `use_adaptive_damping` is set to True you "
                        "should not pass a value to the step function.")
 
     elif not self._use_adaptive_damping and (
         self._damping_schedule is None and damping is None):
-      raise ValueError("When use_adaptive_damping is set to False and "
+      raise ValueError("When `use_adaptive_damping` is set to False and "
                        "`damping_schedule` is None you must provide a value to "
                        "the step function.")
 
@@ -726,26 +724,6 @@ class Optimizer(utils.WithStagedMethods):
 
     return func_args, rng
 
-  def _maybe_update_estimator_state(
-      self,
-      state: State,
-      should_update: Array | bool,
-      update_func: Callable[..., BlockDiagonalCurvature.State],
-      **update_func_kwargs,
-  ) -> State:
-    """Updates the estimator state if it is the right iteration."""
-
-    # Copy this first since we mutate it later in this function.
-    state = state.copy()
-
-    state.estimator_state = lax.cond(
-        should_update,
-        functools.partial(update_func, **update_func_kwargs),
-        lambda state_: state_,
-        state.estimator_state,
-    )
-    return state
-
   def _update_estimator_curvature(
       self,
       estimator_state: BlockDiagonalCurvature.State,
@@ -776,29 +754,6 @@ class Optimizer(utils.WithStagedMethods):
         state,
     )
 
-  def _maybe_update_estimator_curvature(
-      self,
-      state: State,
-      func_args: FuncArgsVariants,
-      rng: PRNGKey,
-      ema_old: Numeric,
-      ema_new: Numeric,
-      damping: Numeric,
-      sync: Array | bool = True,
-  ) -> State:
-    """Updates the curvature estimates if it is the right iteration."""
-    return self._maybe_update_estimator_state(
-        state,
-        self.should_update_estimate_curvature(state),
-        self._update_estimator_curvature,
-        func_args=func_args,
-        rng=rng,
-        ema_old=ema_old,
-        ema_new=ema_new,
-        damping=damping,
-        sync=sync,
-    )
-
   @utils.auto_scope_method
   def _compute_loss_and_grads(
       self,
@@ -823,16 +778,25 @@ class Optimizer(utils.WithStagedMethods):
   @functools.partial(utils.staged, donate_argnums=0)
   def _maybe_update_inverse_cache(self, state: State, damping: Array) -> State:
     """Updates the estimator state cache if it is the right iteration."""
-    return self._maybe_update_estimator_state(
-        state,
+
+    # Copy this first since we mutate it later in this function.
+    state = state.copy()
+
+    state.estimator_state = lax.cond(
         self.should_update_inverse_cache(state),
-        self.estimator.update_cache,
-        identity_weight=self.l2_reg + damping,
-        exact_powers=self._exact_powers_to_cache,
-        approx_powers=self._approx_powers_to_cache,
-        eigenvalues=False,
-        pmap_axis_name=self.pmap_axis_name,
+        functools.partial(
+            self.estimator.update_cache,
+            identity_weight=self.l2_reg + damping,
+            exact_powers=self._exact_powers_to_cache,
+            approx_powers=self._approx_powers_to_cache,
+            eigenvalues=False,
+            pmap_axis_name=self.pmap_axis_name,
+        ),
+        lambda state_: state_,
+        state.estimator_state,
     )
+
+    return state
 
   @utils.staged
   def _compute_preconditioned_gradient(
@@ -905,6 +869,7 @@ class Optimizer(utils.WithStagedMethods):
       momentum: Numeric | None,
       damping: Numeric,
       func_args: FuncArgsVariants,
+      should_update_damping: bool,
   ) -> tuple[tuple[Numeric, Numeric], Numeric]:
     """The correct update coefficients and corresponding quadratic change."""
 
@@ -930,16 +895,12 @@ class Optimizer(utils.WithStagedMethods):
       assert all(c is not None for c in fixed_coefficients)
       fixed_coefficients: tuple[Numeric, Numeric]
 
-      if self._use_adaptive_damping:
+      if self._use_adaptive_damping and should_update_damping:
 
         delta = self.weighted_sum_of_objects(vectors, fixed_coefficients)
 
-        quad_change = lax.cond(
-            self.should_update_damping(state),
-            lambda args: self._compute_quad_change_for_damping_adapt(*args),
-            lambda args: self._invalid_metric_value,
-            (state, delta, grads, damping, func_args),
-        )
+        quad_change = self._compute_quad_change_for_damping_adapt(
+            state, delta, grads, damping, func_args)
 
       else:
         quad_change = self._invalid_metric_value
@@ -963,25 +924,6 @@ class Optimizer(utils.WithStagedMethods):
       loss += l2_reg_val
 
     return loss
-
-  @utils.auto_scope_method
-  def _update_damping(
-      self,
-      old_damping: Array,
-      old_loss: Array,
-      quad_change: Array,
-      new_func_args: FuncArgsVariants,
-  ) -> tuple[Array, Array, Array]:
-    """Updates the damping parameter."""
-
-    new_loss = self.compute_loss_value(new_func_args)
-    # Sync
-    new_loss = utils.pmean_if_pmap(new_loss, self.pmap_axis_name)
-
-    damping, rho = self._compute_new_damping_and_rho(
-        old_loss, new_loss, quad_change, old_damping)
-
-    return damping, rho, new_loss
 
   @utils.staged
   def _init(
@@ -1108,7 +1050,8 @@ class Optimizer(utils.WithStagedMethods):
 
     return state, func_state
 
-  @functools.partial(utils.staged, donate_argnums=(0, 1, 4))
+  @functools.partial(
+      utils.staged, donate_argnums=(0, 1, 4), static_argnums=(8, 9))
   @utils.auto_scope_method
   def _step(
       self,
@@ -1119,7 +1062,9 @@ class Optimizer(utils.WithStagedMethods):
       func_state: FuncState | None,
       learning_rate: Array | None,
       momentum: Array | None,
-      damping: Array | None
+      damping: Array | None,
+      should_update_estimate_curvature: bool,
+      should_update_damping: bool,
   )-> ReturnEither:
     """A single full step of the optimizer."""
 
@@ -1136,15 +1081,16 @@ class Optimizer(utils.WithStagedMethods):
         params, rng, batch, func_state)
 
     # Update curvature estimate
-    state = self._maybe_update_estimator_curvature(
-        state,
-        func_args,
-        rng,
-        ema_old=self._curvature_ema,
-        ema_new=1.0,
-        damping=damping,
-        sync=self.should_sync_estimator(state),
-    )
+    if should_update_estimate_curvature:
+      state.estimator_state = self._update_estimator_curvature(
+          state.estimator_state,
+          func_args,
+          rng,
+          ema_old=self._curvature_ema,
+          ema_new=1.0,
+          damping=damping,
+          sync=self.should_sync_estimator(state),
+      )
 
     del rng  # should not be used after this point!
 
@@ -1180,7 +1126,9 @@ class Optimizer(utils.WithStagedMethods):
         learning_rate=learning_rate,
         momentum=momentum,
         damping=damping,
-        func_args=func_args)
+        func_args=func_args,
+        should_update_damping=should_update_damping,
+        )
 
     # Compute the parameter update (delta)
     delta = self.weighted_sum_of_objects(vectors, coefficients)
@@ -1188,38 +1136,28 @@ class Optimizer(utils.WithStagedMethods):
     # Update parameters
     new_params = jax.tree_util.tree_map(jnp.add, params, delta)
 
+    if ((self._use_adaptive_damping and should_update_damping)
+        or self._use_step_rejection):
+
+      new_loss = self.compute_loss_value((new_params,) + func_args[1:])
+      # Sync
+      new_loss = utils.pmean_if_pmap(new_loss, self.pmap_axis_name)
+
+    else:
+      new_loss = self._invalid_metric_value
+
     # Optionally compute the reduction ratio and update the damping
-    if self._use_adaptive_damping:
+    if self._use_adaptive_damping and should_update_damping:
 
-      state.damping, rho, new_loss = lax.cond(
-          self.should_update_damping(state),
-          lambda args: self._update_damping(*args),
-          lambda args: (args[0], self._invalid_metric_value,
-                        self._invalid_metric_value),
-          operand=(state.damping, loss, quad_model_change,
-                   (new_params,) + func_args[1:])
-      )
-
-      new_loss_is_valid = self.should_update_damping(state)
+      state.damping, rho = self._compute_new_damping_and_rho(
+          loss, new_loss, quad_model_change, state.damping)
 
     else:
       # If not adjusting the damping we don't compute these here and just set
       # them to self._invalid_metric_value.
       new_loss, rho = self._invalid_metric_value, self._invalid_metric_value
-      new_loss_is_valid = False
 
     if self._use_step_rejection:
-
-      # Don't recompute it if we already have it from before.
-      new_loss = lax.cond(
-          jnp.logical_not(new_loss_is_valid),  # static eval when possible?
-          lambda: self.compute_loss_value((new_params,) + func_args[1:],
-                                          state=state),
-          lambda: new_loss,
-      )
-
-      # Sync (possibly redundant)
-      new_loss = utils.pmean_if_pmap(new_loss, self.pmap_axis_name)
 
       reject_step = jnp.logical_or(jnp.isnan(new_loss), new_loss > loss)
 
@@ -1330,13 +1268,15 @@ class Optimizer(utils.WithStagedMethods):
         of ``data_iterator`` or ``batch``.
       func_state: Any function state that gets passed in and returned.
       learning_rate: Learning rate to use if the optimizer was created with
-        ``use_adaptive_learning_rate=True``, ``None`` otherwise.
+        ``use_adaptive_learning_rate=False`` and
+        ``learning_rate_schedule=None``. Should be ``None`` otherwise.
       momentum: Momentum to use if the optimizer was created with
-        ``use_adaptive_momentum=True``, ``None`` otherwise.
+        ``use_adaptive_momentum=False`` and ``momentum_schedule=None``. Should
+        be ``None`` otherwise.
       damping: Damping to use if the optimizer was created with
-        ``use_adaptive_damping=True``, ``None`` otherwise. See discussion
-        of constructor argument ``initial_damping`` for more information about
-        damping.
+        ``use_adaptive_damping=False`` and ``damping_schedule=None``. Should be
+        ``None`` otherwise. See discussion of constructor argument
+        ``initial_damping`` for more information about damping.
       global_step_int: The global step as a python int. Note that this must
         match the step internal to the optimizer that is part of its state.
 
@@ -1387,8 +1327,14 @@ class Optimizer(utils.WithStagedMethods):
     if data_iterator is not None:
       batch = next(data_iterator)
 
-    return self._step(params, state, rng, batch, func_state,
-                      learning_rate, momentum, damping)
+    should_update_estimate_curvature = self.should_update_estimate_curvature(
+        step_counter_int
+    )
+    should_update_damping = self.should_update_damping(step_counter_int)
+
+    return self._step(
+        params, state, rng, batch, func_state, learning_rate, momentum, damping,
+        should_update_estimate_curvature, should_update_damping)
 
   @utils.auto_scope_method
   def compute_exact_quad_model_filtered(
@@ -1406,7 +1352,7 @@ class Optimizer(utils.WithStagedMethods):
     # zero. If fixed_coefficients is None, we assume that all coefficients are
     # free and compute the full model.
 
-    if fixed_coefficients is None:
+    if fixed_coefficients is None:  # can we get rid of this?
       return self.compute_exact_quad_model(
           vectors, grads, func_args, state=state)
 
@@ -1414,27 +1360,36 @@ class Optimizer(utils.WithStagedMethods):
     assert len(vectors) == 2  # only deal with the two vector case
 
     def if_momentum_coeff_zero():
-      # only pass in the vectors that won't be multiplied by zero
+
+      # Only pass in the vectors that won't be multiplied by zero
       quad_model = self.compute_exact_quad_model(
           vectors[:1], grads, func_args, state=state)
 
-      # repad the quad model with zeroes for the removed entries
-      # this will be handled downstream
+      # Repad the quad model with zeroes for the removed entries
       return tuple(
           jnp.pad(arr, [(0, 1)] * arr.ndim, constant_values=0.0)
           for arr in quad_model
       )
-    # add a check here to save compiling both branches in the static case
+
+    # Add a check here to save compiling both branches in the static case
     if (isinstance(fixed_coefficients[1], float)
         and fixed_coefficients[1] == 0.0):
+
       return if_momentum_coeff_zero()
 
-    return jax.lax.cond(
-        fixed_coefficients[1] == 0.0,
-        if_momentum_coeff_zero,
-        lambda: self.compute_exact_quad_model(
-            vectors, grads, func_args, state=state),
-    )
+    # Due to how XLA cannot share computations across cond boundaries, such as
+    # network forward and backwards passes, we cannot use a cond here and remain
+    # effecicient. If this behavior ever changes we can uncomment the block
+    # below.
+
+    # return jax.lax.cond(
+    #     fixed_coefficients[1] == 0.0,
+    #     if_momentum_coeff_zero,
+    #     lambda: self.compute_exact_quad_model(
+    #         vectors, grads, func_args, state=state),
+    # )
+
+    return self.compute_exact_quad_model(vectors, grads, func_args, state=state)
 
   @utils.auto_scope_method
   def compute_exact_quad_model(
@@ -1531,7 +1486,7 @@ class Optimizer(utils.WithStagedMethods):
       b = V^T g
 
     Args:
-      quad_model_parameters: The computed matrices A, D and vector b.
+      quad_model_parameters: The computed matrices A, D, R, and vector b.
       damping: The damping to use for evaluating the quadratic model.
       fixed_coefficients: A list over the vectors of the fixed numerical values
         to use for their coefficients. For each of these that is None, the
@@ -1626,10 +1581,9 @@ class Optimizer(utils.WithStagedMethods):
     should_decrease = rho_not_nan > self._damping_upper_threshold
     decreased_damping = current_damping * self.damping_decay_factor
 
-    # This is basically an if-else statement
-    damping = (should_decrease * decreased_damping +
-               should_increase * increased_damping +
-               (1 - should_increase - should_decrease) * current_damping)
+    damping = jnp.select([should_decrease, should_increase],
+                         [decreased_damping, increased_damping],
+                         default=current_damping)
 
     return jnp.clip(damping, self._min_damping, self._max_damping), rho
 

@@ -146,6 +146,13 @@ class OptaxPreconditioner:
         compute extra per-block scaling for the damping. See psd_matrix_norm()
         in utils/math.py for the definition of these. (Default: None)
     """
+
+    if curvature_update_period != 1:
+      raise ValueError(
+          "`curvature_update_period` must be 1 until XLA can support sharing "
+          "of computation across cond barriers."
+      )
+
     self._l2_reg = l2_reg
     self._damping = damping
     self._damping_schedule = damping_schedule
@@ -391,6 +398,16 @@ class OptaxPreconditioner:
       **update_func_kwargs,
   ) -> OptaxPreconditionState:
     """Updates the estimator state if it should update."""
+
+    # Because XLA currently doesn't support sharing of computation across cond
+    # barriers, using a cond here isn't a good idea, for any update_func that
+    # does expensive computations that share intermediate results with things
+    # outside the cond. If should_update can be evaluated statically (e.g. if
+    # it is like i % 1 == 0, for type(i) == int), then the cond will be pruned
+    # away by XLA and things will be efficient. This is the case when
+    # curvature_update_period == 1, for example.
+    # TODO(jamesmartens): Redesign this or wait until XLA is
+    # updated.
 
     estimator_state = lax.cond(
         should_update,
