@@ -908,7 +908,10 @@ def train_standalone_supervised(
     stats["time"] = stats.get("time", []) + [elapsed_time]
 
     for k in sorted(scalars):
-      stats.setdefault(k, []).append(jnp.asarray(scalars[k]))
+      s = scalars[k]
+      stats.setdefault(k, []).append(
+          jnp.asarray(s if s is not None else jnp.nan)
+      )
 
     # Logging
     if i % full_config.log_tensors_interval == 0:
