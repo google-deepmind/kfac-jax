@@ -11,367 +11,175 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Utilities for setting up different optimizers."""
+"""Utilities for setting up different optimizers with unified warmup support."""
 
-import functools
 from typing import Callable, Sequence
 
+import jax
 import jax.numpy as jnp
 import kfac_jax
+import numpy as np
 import optax
-
 
 Array = kfac_jax.utils.Array
 Numeric = kfac_jax.utils.Numeric
+PyTree = kfac_jax.utils.PyTree
+
+# Note that there is no specific interpretation of the argument to these
+# schedules, unlike kfac_jax.utils.ScheduleType (return by construct_schedule).
+GenericSchedule = Callable[[Numeric], Numeric]
 
 
-def linear_interpolation(
-    x: Numeric,
-    interpolation_points: tuple[tuple[float, float], ...]
-) -> Array:
-  """Performs linear interpolation between the interpolation points."""
-
-  xs, ys = zip(*interpolation_points)
-  masks = [x < ci for ci in xs[1:]]
-
-  min_iter = jnp.zeros_like(x)
-  max_iter = jnp.zeros_like(x)
-  max_val = jnp.zeros_like(x)
-  min_val = jnp.zeros_like(x)
-  p = jnp.ones_like(x)
-
-  for i in range(len(masks) - 1):
-    pi = p * masks[i]
-
-    min_iter = pi * xs[i] + (1 - pi) * min_iter
-    max_iter = pi * xs[i + 1] + (1 - pi) * max_iter
-    max_val = pi * ys[i] + (1 - pi) * max_val
-    min_val = pi * ys[i + 1] + (1 - pi) * min_val
-
-    p = p * (1 - masks[i])
-
-  min_iter = p * xs[-2] + (1 - p) * min_iter
-  max_iter = p * xs[-1] + (1 - p) * max_iter
-  max_val = p * ys[-2] + (1 - p) * max_val
-  min_val = p * ys[-1] + (1 - p) * min_val
-
-  diff = (min_val - max_val)
-  progress = (x - min_iter) / (max_iter - min_iter - 1)
-
-  return max_val + diff * jnp.minimum(progress, 1.0)
+def _linear_interpolate(start: float, end: float, pct: float):
+  return (end - start) * pct + start
 
 
-def imagenet_sgd_schedule(
-    global_step: Numeric,
-    dataset_size: int,
-    train_total_batch_size: int | None,
-) -> Array:
-  """Standard linear scaling schedule for ImageNet."""
+def _cosine_interpolate(start: float, end: float, pct: float):
+  return end + (start - end) / 2.0 * (jnp.cos(jnp.pi * pct) + 1)
 
-  if train_total_batch_size is None:
-    raise ValueError("Batch size must be known.")
 
-  # Can be found in Section 5.1 of https://arxiv.org/pdf/1706.02677.pdf
-  steps_per_epoch = dataset_size / train_total_batch_size
-  current_epoch = global_step / steps_per_epoch
+def piecewise_interpolated_schedule(
+    count: Numeric,
+    vals: Sequence[Numeric],
+    boundaries: Sequence[Numeric],
+    interpolate_type: str = "linear",
+) -> Numeric:
+  """Piecewise interpolated schedule.
 
-  lr = (0.1 * train_total_batch_size) / 256
-  lr_linear_till = 5
+  Computes a schedule that interpolates between the given values at the given
+  boundaries, with vals[0] being the value at count=0, vals[1] being the value
+  at count=boundaries[0], etc. For counts past the last boundary, vals[-1] is
+  returned.
 
-  boundaries = jnp.array((30, 60, 80)) * steps_per_epoch
-  values = jnp.array([1., 0.1, 0.01, 0.001]) * lr
+  Args:
+    count: The current count.
+    vals: The values to interpolate between.
+    boundaries: The boundaries between the intervals.
+    interpolate_type: The type of interpolation to use. Must be either "linear"
+      or "cosine". (See optax.piecewise_interpolate_schedule() for details.)
 
-  index = jnp.sum(boundaries < global_step)
-  lr = jnp.take(values, index)
+  Returns:
+    The value of the schedule at the current count.
+  """
 
-  return lr * jnp.minimum(1., current_epoch / lr_linear_till)
+  # This is essentially a reimplementation of Optax's
+  # piecewise_interpolate_schedule() since that function has a really weird
+  # signature that takes the values to be a cumulative product of positive
+  # scales.
+
+  if interpolate_type == "linear":
+    interpolate_fn = _linear_interpolate
+  elif interpolate_type == "cosine":
+    interpolate_fn = _cosine_interpolate
+  else:
+    raise ValueError("`interpolate_type` must be either 'cos' or 'linear'")
+
+  if len(vals) != len(boundaries) + 1:
+    raise ValueError("`vals` must have one more element than `boundaries`.")
+
+  bounds = np.stack((0,) + tuple(boundaries))
+  vals = np.array(vals)
+  interval_sizes = bounds[1:] - bounds[:-1]
+
+  indicator = (bounds[:-1] <= count) & (count < bounds[1:])
+  pct = (count - bounds[:-1]) / interval_sizes
+  interp_vals = interpolate_fn(vals[:-1], vals[1:], pct)
+
+  return indicator.dot(interp_vals) + (bounds[-1] <= count) * vals[-1]
 
 
 def fixed_schedule(
-    global_step: Numeric,
+    count: Numeric,
     value: Numeric,
 ) -> Numeric:
   """Fixed/constant schedule."""
-  del global_step
+  del count
   return value
 
 
 def kfac_resnet50_schedule(
-    global_step: Numeric,
-) -> Array:
-  """Custom schedule for KFAC."""
+    count: Numeric,
+) -> Numeric:
+  """Custom schedule for KFAC ResNet50 experiment."""
 
-  return jnp.power(10.0, linear_interpolation(
-      x=global_step,
-      interpolation_points=(
-          (0, -6), (50, -3.1), (5000, -3.1), (11000, -3.23),
-          (20000, -5.0), (200000, -5.7), (1000001, -6))
-  ))
-
-
-# TODO(jamesmartens,timothycnguyen,joeljennings): Some possible future
-# improvements to the schedules code:
-# - Put the logic to calculate "warmup_data" (or "warmup_steps") and
-#   "total_data" (or "total_steps") in a place so that we can apply warmup to
-#   an arbitrary schedule.
-# - Use existing `optax.schedule` operations (e.g. `exponential_decay`,
-#   `piecewise_constant_schedule`) as much as possible to make the kfac_jax
-#   codebase simple and compact.
-# - Optax's `warmup_cosine_decay_schedule` and
-#   `warmup_exponential_decay_schedule` are implemented by simply combining
-#   `polynomial_schedule` and the corresponding schedule. So we can prepare a
-#   general warmup scheduler factory that returns a combination of `polynomial_
-#   schedule` and the given base scheduler based on the arguments e.g. warmup_
-#   steps.
-# - Abstract out the logic to compute data_seen and global_step from the
-#   arguments to the schedule functions.
+  # We linearly interpolate in log space
+  exponent = piecewise_interpolated_schedule(
+      count,
+      vals=[-6.0, -3.1, -3.1, -3.23, -5.0, -5.7, -6.0],
+      boundaries=[50, 5000, 11000, 20000, 200000, 1000001],
+      interpolate_type="linear",
+  )
+  return jnp.power(10.0, exponent)
 
 
 def cosine_schedule(
-    global_step: Numeric,
-    dataset_size: int,
-    train_total_batch_size: int | None,
-    total_steps: int | None,
-    total_epochs: float | None,
+    count: Numeric,
+    total: Numeric,
     peak_value: float,
-    initial_value: float = 1e-7,
     end_value: float = 0.0,
-    warmup_epochs: float | None = None,
-    warmup_steps: int | None = None,
-    warmup_fraction: float | None = None,
-    data_seen: Numeric | None = None,
 ) -> Numeric:
-  """A cosine schedule, similar to Optax."""
+  """Cosine schedule."""
 
-  if (total_steps is None) == (total_epochs is None):
-    raise ValueError("Exactly one of `total_steps` and `total_epochs` must be "
-                     "set.")
-
-  n = sum(x is not None for x in [warmup_epochs, warmup_steps, warmup_fraction])
-
-  if n != 1:
-    raise ValueError(f"Exactly one of warmup_steps={warmup_steps}, "
-                     f"warmup_epochs={warmup_epochs} and warmup_fraction="
-                     f"{warmup_fraction} must be set.")
-
-  if warmup_epochs is not None or total_epochs is not None:
-
-    if data_seen is None:
-
-      if train_total_batch_size is not None:
-        data_seen = global_step * train_total_batch_size
-
-      else:
-        raise ValueError("One of 'train_total_batch_size' or 'data_seen' must "
-                         "passed when 'total_epochs' or 'warmup_epochs' are "
-                         "passed.")
-
-    if ((warmup_epochs is None or total_epochs is None)
-        and train_total_batch_size is None):
-
-      raise ValueError("'train_total_batch_size' must be passed if only one of "
-                       "'total_epochs' or 'warmup_epochs' are passed.")
-
-    if warmup_epochs is not None:
-      warmup_data = warmup_epochs * dataset_size
-
-    elif warmup_fraction is not None:
-      warmup_data = warmup_fraction * total_epochs * dataset_size
-
-    else:
-      warmup_data = warmup_steps * train_total_batch_size
-
-    if total_epochs is not None:
-      total_data = total_epochs * dataset_size
-
-    else:
-      total_data = total_steps * train_total_batch_size
-
-    val = optax.warmup_cosine_decay_schedule(
-        init_value=initial_value,
-        peak_value=peak_value,
-        end_value=end_value,
-        warmup_steps=warmup_data,
-        decay_steps=total_data,
-    )(data_seen)
-
-  else:
-
-    if warmup_fraction is not None:
-      warmup_steps = warmup_fraction * total_steps
-
-    val = optax.warmup_cosine_decay_schedule(
-        init_value=initial_value,
-        peak_value=peak_value,
-        end_value=end_value,
-        warmup_steps=warmup_steps,
-        decay_steps=total_steps,
-    )(global_step)
+  val = optax.cosine_decay_schedule(
+      init_value=peak_value,
+      decay_steps=total,
+      alpha=end_value / peak_value if peak_value != 0 else 0.0,
+  )(count)
 
   assert isinstance(val, Numeric)
   return val
 
 
 def stepwise_schedule(
-    global_step: Numeric,
-    dataset_size: int,
-    train_total_batch_size: int | None,
+    count: Numeric,
+    boundaries: Array,
     decay_factors: Sequence[float],
-    initial_value: float,
-    epoch_boundaries: Sequence[float] | None = None,
-    warmup_epochs: float | None = None,
-    step_boundaries: Sequence[float] | None = None,
-    warmup_steps: int | None = None,
-    data_seen: Numeric | None = None,
+    init_value: float,
 ) -> Numeric:
-  """A basic stepwise schedule."""
+  """A basic stepwise schedule.
 
-  if (epoch_boundaries is None) == (step_boundaries is None):
-    raise ValueError("Exactly one of 'epoch_boundaries' and 'step_boundaries' "
-                     "can must be passed.")
+  Returns init_value until boundaries[0], init_value * decay_factors[0]
+  until boundaries[1], init_value * decay_factors[2] until boundaries[2], etc.
+  After boundaries[-1], returns init_value * decay_factors[-1].
 
-  if (warmup_epochs is None) == (warmup_steps is None):
-    raise ValueError("Exactly one of 'warmup_epochs' and 'warmup_steps' must "
-                     "be set.")
+  Args:
+    count: The current count.
+    boundaries: The boundaries between the intervals.
+    decay_factors: The decay factors for each interval.
+    init_value: The initial value of the schedule.
 
-  num_boundaries = len(epoch_boundaries or step_boundaries)
-  if len(decay_factors) != num_boundaries:
-    raise ValueError(f"len(decay_factors)={len(decay_factors)} must be "
-                     f"equal to the number of boundaries={num_boundaries}.")
+  Returns:
+    The value of the schedule at the current count.
+  """
+
+  if len(boundaries) != len(decay_factors):
+    raise ValueError("`boundaries` and `decay_factors` must have the same "
+                     "length.")
 
   values = jnp.concatenate(
-      [jnp.array([1.0]), jnp.array(decay_factors)]) * initial_value
+      [jnp.array([1.0]), jnp.array(decay_factors)]) * init_value
 
-  if warmup_epochs is not None or epoch_boundaries is not None:
+  index = jnp.sum(boundaries <= count)
 
-    if data_seen is None:
-
-      if train_total_batch_size is not None:
-        data_seen = global_step * train_total_batch_size
-
-      else:
-        raise ValueError("One of 'train_total_batch_size' or 'data_seen' must "
-                         "passed when 'epoch_boundaries' or 'warmup_epochs' "
-                         "are passed.")
-
-    if ((warmup_epochs is None or epoch_boundaries is None)
-        and train_total_batch_size is None):
-
-      raise ValueError("'train_total_batch_size' must be passed if only one of "
-                       "'epoch_boundaries' or 'warmup_epochs' are passed.")
-
-    if warmup_epochs is not None:
-      warmup_data = warmup_epochs * dataset_size
-
-    else:
-      warmup_data = warmup_steps * train_total_batch_size
-
-    if epoch_boundaries is not None:
-      data_boundaries = jnp.array(epoch_boundaries) * dataset_size
-
-    else:
-      data_boundaries = jnp.array(step_boundaries) * train_total_batch_size
-
-    index = jnp.sum(data_boundaries <= data_seen)
-    value = jnp.take(values, index)
-
-    if warmup_data > 0.0:
-      return value * jnp.minimum(1., data_seen / warmup_data)
-    else:
-      return value
-
-  else:
-
-    step_boundaries = jnp.array(step_boundaries)
-
-    index = jnp.sum(step_boundaries <= global_step)
-    value = jnp.take(values, index)
-
-    if warmup_steps > 0.0:
-      return value * jnp.minimum(1., global_step / warmup_steps)
-    else:
-      return value
+  return jnp.take(values, index)
 
 
 def exponential_decay_schedule(
-    global_step: int,
-    dataset_size: int,
-    train_total_batch_size: int | None,
-    total_steps: int | None,
-    total_epochs: float | None,
+    count: int,
+    start: Numeric,
+    total: Numeric,
     init_value: float,
     end_value: float,
-    start_epochs: float | None = None,
-    start_steps: int | None = None,
-    start_fraction: float | None = None,
-    data_seen: Numeric | None = None,
 ) -> Numeric:
   """Exponential decay schedule, similar to Optax."""
 
-  if (total_steps is None) == (total_epochs is None):
-    raise ValueError("Exactly one of 'total_steps' and 'total_epochs' must be "
-                     "set.")
-
-  n = sum(x is not None for x in [start_epochs, start_steps, start_fraction])
-
-  if n != 1:
-    raise ValueError(f"Exactly one of start_steps={start_steps}, "
-                     f"start_epochs={start_epochs} and start_fraction="
-                     f"{start_fraction} must be set.")
-
-  if start_epochs is not None or total_epochs is not None:
-
-    if data_seen is None:
-
-      if train_total_batch_size is not None:
-        data_seen = global_step * train_total_batch_size
-
-      else:
-        raise ValueError("One of 'train_total_batch_size' or 'data_seen' must "
-                         "passed when 'total_epochs' or 'start_epochs' are "
-                         "passed.")
-
-    if ((start_epochs is None or total_epochs is None)
-        and train_total_batch_size is None):
-
-      raise ValueError("'train_total_batch_size' must be passed if only one of "
-                       "'total_epochs' or 'start_epochs' are passed.")
-
-    if start_epochs is not None:
-      start_data = start_epochs * dataset_size
-
-    elif start_fraction is not None:
-      start_data = start_fraction * total_epochs * dataset_size
-
-    else:
-      start_data = start_steps * train_total_batch_size
-
-    if total_epochs is not None:
-      total_data = total_epochs * dataset_size
-
-    else:
-      total_data = total_steps * train_total_batch_size
-
-    val = optax.exponential_decay(
-        init_value=init_value,
-        end_value=end_value,
-        decay_rate=end_value / init_value,
-        transition_begin=start_data,
-        transition_steps=total_data - start_data,
-    )(data_seen)
-
-  else:
-
-    if start_fraction is not None:
-      start_steps = start_fraction * total_steps
-
-    val = optax.exponential_decay(
-        init_value=init_value,
-        end_value=end_value,
-        decay_rate=end_value / init_value,
-        transition_begin=start_steps,
-        transition_steps=total_steps - start_steps,
-    )(global_step)
+  val = optax.exponential_decay(
+      init_value=init_value,
+      end_value=end_value,
+      decay_rate=end_value / init_value if init_value != 0 else 0.0,
+      transition_begin=start,
+      transition_steps=total - start,
+  )(count)
 
   assert isinstance(val, Numeric)
   return val
@@ -379,15 +187,12 @@ def exponential_decay_schedule(
 
 def _custom_polynomial_schedule(
     init_value: Numeric,
-    end_value: Numeric,
+    end_value: float,
     power: Numeric,
     transition_steps: int,
     transition_begin: int = 0
-) -> Callable[[Numeric], Numeric]:
-  """A polynomial schedule similar to Optax that works even when init_value < end_value."""
-
-  # See the Optax docstring for polynomial_schedule for more information about
-  # what this computation is doing.
+) -> GenericSchedule:
+  """Polynomial schedule similar to Optax, but works even when init_value < end_value."""
 
   def schedule(count):
 
@@ -395,126 +200,258 @@ def _custom_polynomial_schedule(
 
     if init_value >= end_value:
       frac = 1.0 - count / transition_steps
-      return (init_value - end_value) * (frac**power) + end_value
+      return (init_value - end_value) * (frac ** power) + end_value
     else:
       frac = count / transition_steps
-      return (end_value - init_value) * (frac**power) + init_value
+      return (end_value - init_value) * (frac ** power) + init_value
 
   return schedule
 
 
 def polynomial_schedule(
-    global_step: int,
-    dataset_size: int,
-    train_total_batch_size: int | None,
-    total_steps: int | None,
-    total_epochs: float | None,
+    count: int,
+    start: int,
+    total: int,
     init_value: float,
     end_value: float,
     power: Numeric = 1,
-    start_epochs: float | None = None,
-    start_steps: int | None = None,
-    start_fraction: float | None = None,
-    data_seen: Numeric | None = None,
-):
+) -> Numeric:
   """Polynomial schedule (defaults to linear), similar to Optax."""
 
-  if (total_steps is None) == (total_epochs is None):
-    raise ValueError("Exactly one of 'total_steps' and 'total_epochs' must be "
-                     "set.")
-
-  n = sum(x is not None for x in [start_epochs, start_steps, start_fraction])
-
-  if n != 1:
-    raise ValueError(f"Exactly one of start_steps={start_steps}, "
-                     f"start_epochs={start_epochs} and start_fraction="
-                     f"{start_fraction} must be set.")
-
-  if start_epochs is not None or total_epochs is not None:
-
-    if data_seen is None:
-
-      if train_total_batch_size is not None:
-        data_seen = global_step * train_total_batch_size
-
-      else:
-        raise ValueError("One of 'train_total_batch_size' or 'data_seen' must "
-                         "passed when 'total_epochs' or 'start_epochs' are "
-                         "passed.")
-
-    if ((start_epochs is None or total_epochs is None)
-        and train_total_batch_size is None):
-
-      raise ValueError("'train_total_batch_size' must be passed if only one of "
-                       "'total_epochs' or 'start_epochs' are passed.")
-
-    if start_epochs is not None:
-      start_data = start_epochs * dataset_size
-
-    elif start_fraction is not None:
-      start_data = start_fraction * total_epochs * dataset_size
-
-    else:
-      start_data = start_steps * train_total_batch_size
-
-    if total_epochs is not None:
-      total_data = total_epochs * dataset_size
-
-    else:
-      total_data = total_steps * train_total_batch_size
-
-    val = _custom_polynomial_schedule(
-        init_value=init_value,
-        end_value=end_value,
-        power=power,
-        transition_begin=start_data,
-        transition_steps=total_data - start_data,
-    )(data_seen)
-
-  else:
-
-    if start_fraction is not None:
-      start_steps = start_fraction * total_steps
-
-    val = _custom_polynomial_schedule(
-        init_value=init_value,
-        end_value=end_value,
-        power=power,
-        transition_begin=start_steps,
-        transition_steps=total_steps - start_steps,
-    )(global_step)
+  val = _custom_polynomial_schedule(
+      init_value=init_value,
+      end_value=end_value,
+      power=power,
+      transition_begin=start,
+      transition_steps=total - start,
+  )(count)
 
   assert isinstance(val, Numeric)
   return val
 
 
+# For each schedule we specify:
+#  - "params_to_convert": list of parameters to convert (excluding
+#     warmup-related ones)
+#  - "include_total": whether a total duration should be injected
+#  - "warmup_end_value_key": the key whose value represents the schedule’s
+#     regular starting value, which becomes the peak value reached at the end of
+#     warmup (if warmup is used).
+SCHEDULE_METADATA = {
+    "fixed": {
+        "ctor": fixed_schedule,
+        "params_to_convert": [],
+        "include_total": False,
+        "warmup_end_value_key": "value",
+    },
+    "kfac_resnet50": {
+        "ctor": kfac_resnet50_schedule,
+        "params_to_convert": [],
+        "include_total": False,
+        "warmup_end_value_key": "value",
+    },
+    "cosine": {
+        "ctor": cosine_schedule,
+        "params_to_convert": [],
+        "include_total": True,
+        "warmup_end_value_key": "peak_value",
+    },
+    "stepwise": {
+        "ctor": stepwise_schedule,
+        "params_to_convert": ["boundaries"],
+        "include_total": False,
+        "warmup_end_value_key": "init_value",
+    },
+    "exponential_decay": {
+        "ctor": exponential_decay_schedule,
+        "params_to_convert": ["start"],
+        "include_total": True,
+        "warmup_end_value_key": "init_value",
+    },
+    "polynomial": {
+        "ctor": polynomial_schedule,
+        "params_to_convert": ["start"],
+        "include_total": True,
+        "warmup_end_value_key": "init_value",
+    },
+    "piecewise_interpolated": {
+        "ctor": piecewise_interpolated_schedule,
+        "params_to_convert": ["boundaries"],
+        "include_total": False,
+        "warmup_end_value_key": "vals",
+    },
+}
+
+
+def with_warmup(
+    base_schedule_fn: GenericSchedule,
+    warmup_duration: Numeric,
+    warmup_start_value: float,
+    warmup_end_value: float
+) -> GenericSchedule:
+  """Wraps a base schedule with a linear warmup phase."""
+
+  warmup_sched = optax.linear_schedule(
+      init_value=warmup_start_value,
+      end_value=warmup_end_value,
+      transition_steps=warmup_duration,
+  )
+
+  return optax.join_schedules([warmup_sched, base_schedule_fn],  # pytype: disable=bad-return-type
+                              [warmup_duration])
+
+
 def construct_schedule(
     name: str,
     dataset_size: int,
-    train_total_batch_size: int,
+    train_total_batch_size: int | None,
     total_steps: int | None,
     total_epochs: float | None,
+    mode: str = "steps",
     **kwargs,
-) -> Callable[[Numeric], Numeric]:
-  """Constructs the actual schedule from its name and extra kwargs."""
+) -> kfac_jax.utils.ScheduleType:
+  """Constructs the schedule from its name and extra kwargs.
 
-  name_to_ctor = {
-      "fixed": fixed_schedule,
-      "imagenet_sgd": imagenet_sgd_schedule,
-      "kfac_resnet50": kfac_resnet50_schedule,
-      "cosine": cosine_schedule,
-      "stepwise": stepwise_schedule,
-      "exponential_decay": exponential_decay_schedule,
-      "polynomial": polynomial_schedule,
-  }
+  The `mode` argument (one of 'epochs', 'steps', or 'fraction') indicates how
+  certain parameters (given in PARAM_CONVERSION and also warmup_duration) are
+  interpreted:
+    - 'epochs': values (e.g. boundaries, start) are in epochs.
+    - 'fraction': values are fractions of total epochs.
+    - 'steps': values are in optimizer steps.
 
-  if name not in name_to_ctor:
-    raise NotImplementedError(name)
+  This function will also add linear warmup into the schedule if the 'warmup'
+  argument is provided in kwargs. In that case, the starting value of the
+  warmup phase is specified by 'warmup_start_value' if it's passed, and
+  defaults to 0.0 otherwise. The schedule’s regular starting value (specified
+  by the key defined in PARAM_CONVERSION as "warmup_peak_key") is taken as the
+  peak value reached at the end of warmup. Note that all of the schedule's
+  parameters (e.g. boundaries) are then interpretered relative to the end of the
+  warmup phase.
 
-  return lambda *a, **kw: kfac_jax.utils.call_func_with_conditional_kwargs(
-      functools.partial(name_to_ctor[name], *a, **(kw | kwargs)),
-      dataset_size=dataset_size,
-      train_total_batch_size=train_total_batch_size,
-      total_steps=total_steps,
-      total_epochs=total_epochs,
-      )
+  Args:
+    name: The name of the schedule to construct.
+    dataset_size: The size of the dataset.
+    train_total_batch_size: The total batch size used for training. Must be set
+      if mode is 'epochs' or 'fraction' in cases where data_seen is not
+      passed to the schedule.
+    total_steps: The total number of optimizer steps. Must be set if mode is
+      'steps'. Must be None if total_epochs is set.
+    total_epochs: The total number of epochs. Must be set if mode is 'epochs' or
+      'fraction'. Must be None if total_steps is set.
+    mode: The mode of the schedule (see above).
+    **kwargs: Extra keyword arguments to pass to the schedule constructor.
+
+  Returns:
+    The constructed schedule function, which maps global_step and possibly
+    data_seen (i.e. the total amount of training data seen so far) to the
+    current value of the schedule.
+  """
+
+  if total_steps is not None and total_epochs is not None:
+    raise ValueError("Only one of total_steps and total_epochs can be set.")
+
+  if name not in SCHEDULE_METADATA:
+    raise ValueError(f"Schedule '{name}' is not valid.")
+
+  if mode in ("epochs", "fraction"):
+
+    if mode == "epochs":
+      conversion_fn = lambda x: x * dataset_size
+    else:
+      if total_epochs is None:
+        raise ValueError("total_epochs must be set when mode is 'fraction'.")
+      conversion_fn = lambda x: x * total_epochs * dataset_size
+
+  elif mode == "steps":
+
+    conversion_fn = lambda x: x
+
+  else:
+    raise ValueError("mode must be one of 'epochs', 'steps', or 'fraction'.")
+
+  # Convert all FieldReferences to their values. This is supposed to happen
+  # automatically when the config is finalized, but doesn't work recursively for
+  # list/tuple fields that contain FieldReferences for some reason.
+  # new_kwargs = _convert_fieldreferences(kwargs)  # this also makes a copy
+  new_kwargs = kwargs.copy()
+
+  for param in SCHEDULE_METADATA[name]["params_to_convert"]:
+
+    if param not in new_kwargs:
+      raise ValueError(f"Parameter '{param}' is required for schedule "
+                       f"'{name}'.")
+
+    new_kwargs[param] = jax.tree.map(conversion_fn, new_kwargs.pop(param))
+
+  if SCHEDULE_METADATA[name]["include_total"]:
+
+    if mode in ("epochs", "fraction"):
+
+      if total_epochs is None:
+        raise ValueError("total_epochs must be set when mode is 'epochs' or "
+                         f"'fraction' for schedule '{name}'.")
+
+      new_kwargs["total"] = total_epochs * dataset_size
+
+    elif mode == "steps":
+
+      if total_steps is None:
+        raise ValueError("total_steps must be set when mode is 'steps' for "
+                         f"schedule '{name}'.")
+
+      new_kwargs["total"] = total_steps
+
+  # Create the base schedule (which does not include warmup).
+  base_schedule = lambda count: SCHEDULE_METADATA[name]["ctor"](count,
+                                                                **new_kwargs)
+
+  # If a warmup is asked for, wrap the base schedule with it.
+  if "warmup_duration" in kwargs:
+
+    warmup_duration = conversion_fn(new_kwargs.pop("warmup_duration"))
+
+    if SCHEDULE_METADATA[name]["include_total"]:
+      new_kwargs["total"] -= warmup_duration
+
+    if "warmup_start_value" in new_kwargs:
+      warmup_start_value = new_kwargs.pop("warmup_start_value")
+    else:
+      warmup_start_value = 0.0
+
+    warmup_end_value_key = SCHEDULE_METADATA[name]["warmup_end_value_key"]
+
+    if warmup_end_value_key not in new_kwargs:
+      raise ValueError(
+          f"When 'warmup_duration' is provided, '{warmup_end_value_key}' "
+          f"must be provided for schedule '{name}'.")
+
+    warmup_end_value = new_kwargs[warmup_end_value_key]
+    if isinstance(warmup_end_value, (list, tuple)):
+      warmup_end_value = warmup_end_value[0]
+
+    schedule = with_warmup(base_schedule, warmup_duration, warmup_start_value,
+                           warmup_end_value)
+
+  else:
+    schedule = base_schedule
+
+  # Convert the input to use data_seen for 'epochs' and 'fraction' modes.
+  def schedule_with_input_conversion(global_step, data_seen=None):
+
+    if mode in ("epochs", "fraction"):
+
+      if data_seen is None:
+
+        if train_total_batch_size is not None:
+          data_seen = global_step * train_total_batch_size
+        else:
+          raise ValueError("One of 'train_total_batch_size' or 'data_seen' "
+                           "must passed when mode is 'epochs' or 'fraction'.")
+
+      return schedule(data_seen)
+
+    else:
+
+      return schedule(global_step)
+
+  return schedule_with_input_conversion

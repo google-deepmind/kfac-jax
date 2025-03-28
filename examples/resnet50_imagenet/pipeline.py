@@ -38,6 +38,8 @@ def get_config() -> config_dict.ConfigDict:
   config.checkpoint_dir = "/tmp/kfac_jax_jaxline/"
   config.train_checkpoint_all_hosts = False
 
+  train_total_batch_size = 1024
+
   # Experiment config.
   config.experiment_kwargs = config_dict.ConfigDict(
       dict(
@@ -57,7 +59,7 @@ def get_config() -> config_dict.ConfigDict:
               ),
               batch_size=dict(
                   train=dict(
-                      total=1024,
+                      total=train_total_batch_size,
                       per_device=-1,
                   ),
                   eval=dict(
@@ -87,7 +89,16 @@ def get_config() -> config_dict.ConfigDict:
                   sgd=dict(
                       decay=0.9,
                       nesterov=True,
-                      learning_rate_schedule=dict(name="imagenet_sgd")
+                      learning_rate_schedule=dict(
+                          # Can be found in Section 5.1 of
+                          # https://arxiv.org/pdf/1706.02677.pdf
+                          mode="epochs",
+                          name="stepwise",
+                          boundaries=[25, 55, 75],
+                          decay_factors=[0.1, 0.01, 0.001],
+                          init_value=(0.1 * train_total_batch_size) / 256,
+                          warmup_duration=5,
+                          )
                   ),
               )
           )
