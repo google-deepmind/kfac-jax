@@ -26,7 +26,8 @@ Numeric = kfac_jax.utils.Numeric
 PyTree = kfac_jax.utils.PyTree
 
 # Note that there is no specific interpretation of the argument to these
-# schedules, unlike kfac_jax.utils.ScheduleType (return by construct_schedule).
+# schedules, unlike kfac_jax.utils.ScheduleType (returned by
+# construct_schedule).
 GenericSchedule = Callable[[Numeric], Numeric]
 
 
@@ -330,10 +331,11 @@ def construct_schedule(
 
   Args:
     name: The name of the schedule to construct.
-    dataset_size: The size of the dataset.
+    dataset_size: The size of the dataset. Only used for 'epochs' and 'fraction'
+      modes.
     train_total_batch_size: The total batch size used for training. Must be set
-      if mode is 'epochs' or 'fraction' in cases where data_seen is not
-      passed to the schedule.
+      if mode is 'epochs' or 'fraction' in cases where data_seen is not passed
+      to the schedule.
     total_steps: The total number of optimizer steps. Must be set if mode is
       'steps'. Must be None if total_epochs is set.
     total_epochs: The total number of epochs. Must be set if mode is 'epochs' or
@@ -350,24 +352,27 @@ def construct_schedule(
   if total_steps is not None and total_epochs is not None:
     raise ValueError("Only one of total_steps and total_epochs can be set.")
 
+  if mode == "fraction" and total_epochs is None and total_steps is None:
+    raise ValueError(
+        "One of total_steps or total_epochs must be set when mode is"
+        f" 'fraction' for schedule '{name}'."
+    )
+
   if name not in SCHEDULE_METADATA:
     raise ValueError(f"Schedule '{name}' is not valid.")
 
-  if mode in ("epochs", "fraction"):
+  if mode not in ("epochs", "steps", "fraction"):
+    raise ValueError("Mode must be one of 'epochs', 'steps', or 'fraction'.")
 
-    if mode == "epochs":
-      conversion_fn = lambda x: x * dataset_size
-    else:
-      if total_epochs is None:
-        raise ValueError("total_epochs must be set when mode is 'fraction'.")
-      conversion_fn = lambda x: x * total_epochs * dataset_size
-
+  if mode == "epochs":
+    conversion_fn = lambda x: x * dataset_size
   elif mode == "steps":
-
     conversion_fn = lambda x: x
-
-  else:
-    raise ValueError("mode must be one of 'epochs', 'steps', or 'fraction'.")
+  elif mode == "fraction":
+    if total_epochs is not None:
+      conversion_fn = lambda x: x * total_epochs * dataset_size
+    else:
+      conversion_fn = lambda x: x * total_steps * train_total_batch_size
 
   # Convert all FieldReferences to their values. This is supposed to happen
   # automatically when the config is finalized, but doesn't work recursively for
@@ -385,21 +390,34 @@ def construct_schedule(
 
   if SCHEDULE_METADATA[name]["include_total"]:
 
-    if mode in ("epochs", "fraction"):
-
-      if total_epochs is None:
-        raise ValueError("total_epochs must be set when mode is 'epochs' or "
-                         f"'fraction' for schedule '{name}'.")
-
-      new_kwargs["total"] = total_epochs * dataset_size
-
-    elif mode == "steps":
+    if mode == "steps":
 
       if total_steps is None:
-        raise ValueError("total_steps must be set when mode is 'steps' for "
-                         f"schedule '{name}'.")
+        raise ValueError(
+            "total_steps must be set when mode is 'steps' for "
+            f"schedule '{name}'."
+        )
 
       new_kwargs["total"] = total_steps
+
+    elif mode == "epochs":
+
+      if total_epochs is None:
+        raise ValueError(
+            "total_epochs must be set when mode is 'epochs' for schedule"
+            " '{name}'."
+        )
+
+      # Convert to data seen in this case
+      new_kwargs["total"] = total_epochs * dataset_size
+
+    elif mode == "fraction":
+
+      # Convert to data seen in this case
+      if total_steps:
+        new_kwargs["total"] = total_steps * train_total_batch_size
+      else:
+        new_kwargs["total"] = total_epochs * dataset_size
 
   # Create the base schedule (which does not include warmup).
   base_schedule = lambda count: SCHEDULE_METADATA[name]["ctor"](count,
@@ -435,7 +453,9 @@ def construct_schedule(
   else:
     schedule = base_schedule
 
-  # Convert the input to use data_seen for 'epochs' and 'fraction' modes.
+  # Convert the input to schedule to use data_seen for 'epochs' and 'fraction'
+  # modes. In these cases, the 'total' argument of the schedule is the total
+  # data seen at end of training.
   def schedule_with_input_conversion(global_step, data_seen=None):
 
     if mode in ("epochs", "fraction"):
