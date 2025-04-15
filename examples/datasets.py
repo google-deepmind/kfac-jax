@@ -166,6 +166,9 @@ def imagenet_dataset(
     extra_preprocessing_func: (
         Callable[[Array, Array], tuple[Array, Array]] | None
         ) = None,
+    enable_augmentations: bool = True,
+    skip: int | None = None,
+    take: int | None = None,
 ) -> Iterator[Batch]:
   """Standard ImageNet dataset pipeline.
 
@@ -186,6 +189,11 @@ def imagenet_dataset(
       if desired. Should take arguments `image` and `label` consisting of the
       image and its label (without batch dimension), and return a tuple
       consisting of the processed version of these two.
+    enable_augmentations: Whether to enable the default data augmentations (of
+      random cropping and left-right flipping) on the train split.
+    skip: If specified, will skip the first `skip` examples.
+    take: If specified, will take the first `take` examples after skipping
+      `skip` examples.
 
   Returns:
     The ImageNet dataset as a tensorflow dataset.
@@ -226,6 +234,10 @@ def imagenet_dataset(
       data_dir=data_dir,
       read_config=read_config,
   )
+  if skip:
+    ds = ds.skip(skip)
+  if take:
+    ds = ds.take(take)
 
   if is_training:
 
@@ -268,7 +280,7 @@ def imagenet_dataset(
     image = _imagenet_preprocess_image(
         image_bytes=example["image"],
         seed=seed_,
-        is_training=is_training,
+        is_training=is_training and enable_augmentations,
         image_size=image_size
     )
     label = tf.cast(example["label"], tf.int32)
