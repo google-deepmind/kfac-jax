@@ -68,9 +68,9 @@ tests = [  # these should be version pinned?
   "immutabledict>=2.2.1",
   "numpy>=1.22",
   "distrax>=0.1.3",
-  "jax>=0.4.27",
+  "jax>=0.6.0",
   "jaxlib>=0.4.27",
-  "dm-haiku>=0.0.9",
+  "dm-haiku @ git+https://github.com/deepmind/dm-haiku@ffd905e113b47d24ce6060fa1fb9f14d3808baf7",
   "dm-tree>=0.1.7",
   "optax>=0.1.4",
 ]
