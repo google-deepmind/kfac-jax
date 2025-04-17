@@ -15,7 +15,7 @@
 
 """
 import types
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Optional
 
 import jax
 import jax.numpy as jnp
@@ -53,6 +53,8 @@ def mnist_dataset(
     multi_device: bool = True,
     reshuffle_each_iteration: bool = True,
     dtype: str = "float32",
+    take: Optional[int] = None,
+    skip: Optional[int] = None,
 ) -> Iterator[Batch]:
   """Standard MNIST dataset pipeline.
 
@@ -72,6 +74,9 @@ def mnist_dataset(
     reshuffle_each_iteration: Whether to reshuffle the dataset in a new order
       after each iteration.
     dtype: The returned data type of the images.
+    take: If specified, will take the first `take` examples after skipping
+      `skip` examples.
+    skip: If specified, will skip the first `skip` examples.
 
   Returns:
     The MNIST dataset as a tensorflow dataset.
@@ -109,6 +114,12 @@ def mnist_dataset(
       return dict(images=images)
 
   ds = tfds.load(name="mnist", split=split, as_supervised=True)
+
+  if skip is not None:
+    ds = ds.skip(skip)
+
+  if take is not None:
+    ds = ds.take(take)
 
   ds = ds.shard(jax.process_count(), jax.process_index())
 
