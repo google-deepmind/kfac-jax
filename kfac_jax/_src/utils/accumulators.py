@@ -52,17 +52,17 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
   @property
   def ndim(self) -> int:
     assert self.value is not None
-    return self.value.ndim
+    return self.value.ndim  # pytype: disable=attribute-error
 
   @property
   def shape(self) -> Shape:
     assert self.value is not None
-    return self.value.shape
+    return self.value.shape  # pytype: disable=attribute-error
 
   @property
   def dtype(self) -> DType:
     assert self.value is not None
-    return self.value.dtype
+    return self.value.dtype  # pytype: disable=attribute-error
 
   def update(
       self,

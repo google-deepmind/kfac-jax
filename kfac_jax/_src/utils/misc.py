@@ -240,7 +240,7 @@ def serialize_state_tree(instance: StateTree) -> ArrayTree:
     return {k: serialize_state_tree(v) for k, v in instance.items()}
 
   else:
-    return instance
+    return instance  # pytype: disable=bad-return-type
 
 
 def deserialize_state_tree(representation: ArrayTree) -> StateTree:
