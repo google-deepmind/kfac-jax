@@ -572,7 +572,9 @@ class Optimizer(utils.WithStagedMethods):
 
   def should_update_damping(self, step_counter: int) -> bool:
     """Whether at the current step the optimizer should update the damping."""
-    return (step_counter + 1) % self._damping_adaptation_interval == 0
+    return ((step_counter + 1) % self._damping_adaptation_interval == 0) and (
+        self._use_adaptive_damping
+    )
 
   def should_update_estimate_curvature(self, step_counter: int) -> bool:
     """Whether at the current step the optimizer should update the curvature estimates."""
@@ -895,7 +897,7 @@ class Optimizer(utils.WithStagedMethods):
       assert all(c is not None for c in fixed_coefficients)
       fixed_coefficients: tuple[Numeric, Numeric]
 
-      if self._use_adaptive_damping and should_update_damping:
+      if should_update_damping:
 
         delta = self.weighted_sum_of_objects(vectors, fixed_coefficients)
 
@@ -1136,8 +1138,7 @@ class Optimizer(utils.WithStagedMethods):
     # Update parameters
     new_params = jax.tree_util.tree_map(jnp.add, params, delta)
 
-    if ((self._use_adaptive_damping and should_update_damping)
-        or self._use_step_rejection):
+    if should_update_damping or self._use_step_rejection:
 
       new_loss = self.compute_loss_value((new_params,) + func_args[1:])
       # Sync
@@ -1147,7 +1148,7 @@ class Optimizer(utils.WithStagedMethods):
       new_loss = self._invalid_metric_value
 
     # Optionally compute the reduction ratio and update the damping
-    if self._use_adaptive_damping and should_update_damping:
+    if should_update_damping:
 
       state.damping, rho = self._compute_new_damping_and_rho(
           loss, new_loss, quad_model_change, state.damping)
