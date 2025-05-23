@@ -124,7 +124,9 @@ def create_optimizer(
         "Schedule Free is only supported for optax optimizers."
     )
 
-  value_and_grad_func = jax.value_and_grad(train_model_func, has_aux=has_aux)
+  value_and_grad_func = jax.value_and_grad(
+      train_model_func, has_aux=has_aux or has_func_state
+  )
 
   kwargs = dict(**config[name])
 
