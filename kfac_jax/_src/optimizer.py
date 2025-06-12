@@ -107,6 +107,7 @@ class Optimizer(utils.WithStagedMethods):
       use_adaptive_damping: bool = False,
       damping_schedule: ScheduleType | None = None,
       initial_damping: Numeric | None = None,
+      use_initial_damping_calibration: bool = False,
       min_damping: Numeric = 1e-8,
       max_damping: Numeric = jnp.inf,
       include_damping_in_quad_change: bool = False,
@@ -116,6 +117,7 @@ class Optimizer(utils.WithStagedMethods):
       damping_upper_threshold: Numeric = 0.75,
       always_use_exact_qmodel_for_damping_adjustment: bool = False,
       precon_damping_mult: Numeric = 1.0,
+      precon_damping_schedule: ScheduleType | None = None,
       use_step_rejection: bool = False,
       reject_damping_increase_factor: float = 1.0,
       norm_constraint: Numeric | None = None,
@@ -255,6 +257,14 @@ class Optimizer(utils.WithStagedMethods):
       initial_damping: Scalar or None. This specifies the initial value of the
         damping that the optimizer will use when using automatic damping
         adaptation. (Default: ``None``)
+      use_initial_damping_calibration: Boolean. If ``True``, the initial damping
+        value, used to initialize the adaptive damping method, will be first
+        calibrated (after any burnin steps to estimate the preconditioner) so
+        that its value wouldn't be changed after the first step of optimization.
+        This calibration is done by essentially running the step function
+        multiple times without actually updating the parameters or sampling a
+        new mini-batch. ``num_burnin_steps`` must be greater than 0 to use this
+        option. (Default: ``False``)
       min_damping: Scalar. Minimum value the damping parameter can take when
         using automatic damping adaptation. Note that the default value of 1e-8
         is quite arbitrary, and you may have to adjust this up or down for your
@@ -285,9 +295,13 @@ class Optimizer(utils.WithStagedMethods):
         which is what this argument controls. When True, the exact curvature
         matrix will be used, which is more expensive, but could possibly produce
         a better damping schedule. (Default: ``False``)
-      precon_damping_mult: Scalar. Multiplies the damping used in the
-        preconditioner (vs the exact quadratic model) by this value.
-        (Default: 1.0)
+      precon_damping_mult: Scalar. When ``precon_damping_schedule`` is unset,
+        the regular damping is used for the preconditioner damping, multiplied
+        by this value. (Default: ``1.0``)
+      precon_damping_schedule: Similar to ``damping_schedule``, but for the
+        preconditioner only. If ``None``, the preconditioner will use the
+        regular damping, multiplied by ``precon_damping_mult``.
+        (Default: ``None``)
       use_step_rejection: Whether or not to reject the step whenever the loss
         on the current batch goes up after the update. This option offers
         robustness at the cost of doing more work per step (unless adaptive
@@ -429,6 +443,10 @@ class Optimizer(utils.WithStagedMethods):
       raise ValueError("If you are using adaptive damping then "
                        "`damping_schedule` should be None.")
 
+    if num_burnin_steps <= 0 and use_initial_damping_calibration:
+      raise ValueError("num_burnin_steps must be > 0 if "
+                       "use_initial_damping_calibration is True.")
+
     self._value_and_grad_func = value_and_grad_func
     self._value_func_has_aux = value_func_has_aux
     self._value_func_has_state = value_func_has_state
@@ -448,6 +466,7 @@ class Optimizer(utils.WithStagedMethods):
     self._use_adaptive_damping = use_adaptive_damping
     self._damping_schedule = damping_schedule
     self._initial_damping = initial_damping
+    self._use_initial_damping_calibration = use_initial_damping_calibration
     self._min_damping = min_damping
     self._max_damping = max_damping
     self._include_damping_in_quad_change = include_damping_in_quad_change
@@ -458,6 +477,7 @@ class Optimizer(utils.WithStagedMethods):
     self._always_use_exact_qmodel_for_damping_adjustment = (
         always_use_exact_qmodel_for_damping_adjustment)
     self._precon_damping_mult = precon_damping_mult
+    self._precon_damping_schedule = precon_damping_schedule
 
     self._use_step_rejection = use_step_rejection
     self._reject_damping_increase_factor = reject_damping_increase_factor
@@ -657,10 +677,7 @@ class Optimizer(utils.WithStagedMethods):
                        "not pass a value to the step function.")
 
     if global_step_int is None:
-      if self.multi_device:
-        return int(utils.get_first(step_counter))
-      else:
-        return int(step_counter)
+      return int(self.get_first(step_counter))
 
     return global_step_int
 
@@ -672,7 +689,7 @@ class Optimizer(utils.WithStagedMethods):
       damping: Array | None,
       step_counter: Array,
       data_seen: Array,
-  ) -> tuple[Numeric | None, Numeric | None, Numeric]:
+  ) -> tuple[Numeric | None, Numeric | None, Numeric, Numeric]:
     """Helper function for setting up learning rate, momentum and damping."""
 
     # Compute schedules if applicable
@@ -695,7 +712,13 @@ class Optimizer(utils.WithStagedMethods):
     else:
       assert damping is not None
 
-    return learning_rate, momentum, damping
+    if self._precon_damping_schedule is not None:
+      precon_damping = utils.call_func_with_conditional_kwargs(
+          self._precon_damping_schedule, step_counter, data_seen=data_seen)
+    else:
+      precon_damping = damping * self._precon_damping_mult
+
+    return learning_rate, momentum, damping, precon_damping
 
   def _setup_func_args_and_rng(
       self,
@@ -733,7 +756,7 @@ class Optimizer(utils.WithStagedMethods):
       rng: PRNGKey,
       ema_old: Numeric,
       ema_new: Numeric,
-      damping: Numeric,
+      precon_damping: Numeric,
       sync: Array | bool = True
   ) -> BlockDiagonalCurvature.State:
     """Updates the curvature estimator state."""
@@ -742,7 +765,7 @@ class Optimizer(utils.WithStagedMethods):
         state=estimator_state,
         ema_old=ema_old,
         ema_new=ema_new,
-        identity_weight=damping,
+        identity_weight=self.l2_reg + precon_damping,
         # Note that the batch is always the last entry of FuncArgsVariantsdef
         batch_size=self._batch_size_extractor(func_args[-1]),
         rng=rng,
@@ -778,7 +801,11 @@ class Optimizer(utils.WithStagedMethods):
     return loss, grads, func_state, aux
 
   @functools.partial(utils.staged, donate_argnums=0)
-  def _maybe_update_inverse_cache(self, state: State, damping: Array) -> State:
+  def _maybe_update_inverse_cache(
+      self,
+      state: State,
+      precon_damping: Array
+  ) -> State:
     """Updates the estimator state cache if it is the right iteration."""
 
     # Copy this first since we mutate it later in this function.
@@ -788,7 +815,7 @@ class Optimizer(utils.WithStagedMethods):
         self.should_update_inverse_cache(state),
         functools.partial(
             self.estimator.update_cache,
-            identity_weight=self.l2_reg + damping,
+            identity_weight=self.l2_reg + precon_damping,
             exact_powers=self._exact_powers_to_cache,
             approx_powers=self._approx_powers_to_cache,
             eigenvalues=False,
@@ -805,14 +832,14 @@ class Optimizer(utils.WithStagedMethods):
       self,
       state: State,
       grads: Params,
-      damping: Array,
+      precon_damping: Array,
   ) -> Params:
     """Computes the preconditioned gradient."""
 
     return self.estimator.multiply_matpower(
         state=state.estimator_state,
         parameter_structured_vector=grads,
-        identity_weight=(self.l2_reg + damping) * self._precon_damping_mult,
+        identity_weight=self.l2_reg + precon_damping,
         power=self._precon_power,
         exact_power=self._use_exact_inverses,
         use_cached=self._use_cached_inverses,
@@ -984,17 +1011,16 @@ class Optimizer(utils.WithStagedMethods):
       rng: Array,
       batch: Batch,
       func_state: FuncState | None,
+      damping: Array | None,
       accumulator: utils.MultiChunkAccumulator,
       sync: Array | bool,
   ) -> tuple[State, utils.MultiChunkAccumulator]:
     """A single burnin step, updating only the curvature estimate."""
 
-    if self._damping_schedule is None:
-      assert state.damping is not None
-      damping = state.damping
-    else:
-      damping = utils.call_func_with_conditional_kwargs(
-          self._damping_schedule, 0, data_seen=0)
+    _, _, _, precon_damping = self._setup_state_and_schedules(
+        None, None,
+        state.damping if self._use_adaptive_damping else damping,
+        state.step_counter, state.data_seen)
 
     # Copy this first since we mutate it later in this function.
     accumulator = accumulator.copy()
@@ -1009,7 +1035,7 @@ class Optimizer(utils.WithStagedMethods):
         rng,
         ema_old=1.0,
         ema_new=1.0,
-        damping=damping,
+        precon_damping=precon_damping,
         sync=sync,
     )
 
@@ -1031,6 +1057,7 @@ class Optimizer(utils.WithStagedMethods):
       rng: PRNGKey,
       data_iterator: Iterator[Batch],
       func_state: FuncState | None = None,
+      damping: Array | None = None,
   ) -> tuple[State, FuncState | None]:
     """Runs all burnin steps required."""
 
@@ -1045,7 +1072,7 @@ class Optimizer(utils.WithStagedMethods):
         batch = next(data_iterator)
 
         state, accumulator = self._burnin(
-            params, state, rng_i, batch, func_state, accumulator,
+            params, state, rng_i, batch, func_state, damping, accumulator,
             i == num_steps - 1)
 
       func_state = accumulator.value_and_clear()
@@ -1074,10 +1101,11 @@ class Optimizer(utils.WithStagedMethods):
     state = state.copy()
 
     # Setup arguments
-    learning_rate, momentum, damping = self._setup_state_and_schedules(
-        learning_rate, momentum,
-        state.damping if self._use_adaptive_damping else damping,
-        state.step_counter, state.data_seen)
+    (learning_rate, momentum, damping,
+     precon_damping) = self._setup_state_and_schedules(
+         learning_rate, momentum,
+         state.damping if self._use_adaptive_damping else damping,
+         state.step_counter, state.data_seen)
 
     func_args, rng = self._setup_func_args_and_rng(
         params, rng, batch, func_state)
@@ -1090,7 +1118,7 @@ class Optimizer(utils.WithStagedMethods):
           rng,
           ema_old=self._curvature_ema,
           ema_new=1.0,
-          damping=damping,
+          precon_damping=precon_damping,
           sync=self.should_sync_estimator(state),
       )
 
@@ -1104,11 +1132,11 @@ class Optimizer(utils.WithStagedMethods):
     loss, grads = utils.pmean_if_pmap((loss, grads), self.pmap_axis_name)
 
     # Update the inverse curvature
-    state = self._maybe_update_inverse_cache(state, damping)
+    state = self._maybe_update_inverse_cache(state, precon_damping)
 
     # Compute proposed directions
     preconditioned_gradient = self._compute_preconditioned_gradient(
-        state, grads, damping
+        state, grads, precon_damping
     )
 
     # constrain the norms
@@ -1199,6 +1227,7 @@ class Optimizer(utils.WithStagedMethods):
         learning_rate=-coefficients[0],
         momentum=coefficients[1],
         damping=damping,
+        precon_damping=precon_damping,
         rho=rho,
         quad_model_change=quad_model_change,
         scaled_grad_norm_sq=scaled_grad_norm_sq,
@@ -1323,10 +1352,19 @@ class Optimizer(utils.WithStagedMethods):
             rng=burnin_rng,
             data_iterator=data_iterator,
             func_state=func_state,
+            damping=damping,
         )
 
     if data_iterator is not None:
       batch = next(data_iterator)
+
+    if (step_counter_int == 0 and self._use_adaptive_damping
+        and self._use_initial_damping_calibration):
+
+      assert self.num_burnin_steps > 0
+
+      state = self.calibrate_initial_damping(
+          params, state, rng, batch, func_state, learning_rate, momentum)
 
     should_update_estimate_curvature = self.should_update_estimate_curvature(
         step_counter_int
@@ -1336,6 +1374,50 @@ class Optimizer(utils.WithStagedMethods):
     return self._step(
         params, state, rng, batch, func_state, learning_rate, momentum, damping,
         should_update_estimate_curvature, should_update_damping)
+
+  def calibrate_initial_damping(
+      self,
+      params: Params,
+      state: State,
+      rng: PRNGKey,
+      batch: Batch,
+      func_state: FuncState | None = None,
+      learning_rate: Array | None = None,
+      momentum: Array | None = None,
+  ) -> State:
+    """Calibrates the initial damping parameter."""
+
+    # Instead of writing a custom compiled function to compute rho and update
+    # the damping, we're going to be lazy and just call the step function
+    # repeatedly, throwing out the new optimizer state, params, and stats, while
+    # keeping the rng and batch the same at each call. This is a bit hacky and
+    # somewhat wasteful, both in terms of a few extra (minor) computations done
+    # in step() that are pointless, as well as the extra memory required to
+    # store temporary copies of the optimizer state and model params.
+
+    # TODO(jamesmartens): Improve the implementation if this feature is commonly
+    # used?
+
+    while True:
+
+      prev_damping = float(self.get_first(state.damping))
+
+      # Note that we need to copy params and func_state since _step() will
+      # donate them. A bette option might be to recompile _step() to not donate
+      # these arguments.
+      ret = self._step(
+          self.copy_obj(params), self.copy_obj(state), rng, batch,
+          self.copy_obj(func_state), learning_rate, momentum, None, False, True)
+
+      new_state = ret[1]
+
+      new_damping = float(self.get_first(new_state.damping))
+      state.damping = new_state.damping
+
+      del new_state
+
+      if prev_damping == new_damping:
+        return state
 
   @utils.auto_scope_method
   def compute_exact_quad_model_filtered(
