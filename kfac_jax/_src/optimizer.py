@@ -1288,11 +1288,16 @@ class Optimizer(utils.WithStagedMethods):
     as this can lead to errors. Compilation is handled internally by the
     optimizer.
 
+    NOTE: the JAX array arguments given below should all be replicated across
+    devices. ``batch`` and ``rng`` should be different for each device, whereas
+    the rest should be identical across devices. Passing them any other way
+    will result in undefined behavior.
+
     Args:
       params: The current parameters of the model.
       state: The current state of the optimizer.
-      rng: A Jax PRNG key. Should be different for each iteration and
-        each Jax process/host.
+      rng: A Jax PRNG key. Should be different for each iteration (and
+        each Jax device and process/host).
       data_iterator: A data iterator to use (if not passing ``batch``).
       batch: A single batch used to compute the update. Should only pass one
         of ``data_iterator`` or ``batch``.
