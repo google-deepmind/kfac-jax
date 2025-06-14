@@ -154,15 +154,38 @@ def stepwise_schedule(
   """
 
   if len(boundaries) != len(decay_factors):
-    raise ValueError("`boundaries` and `decay_factors` must have the same "
-                     "length.")
+    raise ValueError(
+        "`boundaries` and `decay_factors` must have the same length."
+    )
 
-  values = jnp.concatenate(
-      [jnp.array([1.0]), jnp.array(decay_factors)]) * init_value
+  values = (
+      jnp.concatenate([jnp.array([1.0]), jnp.array(decay_factors)]) * init_value
+  )
 
   index = jnp.sum(boundaries <= count)
 
   return jnp.take(values, index)
+
+
+def fixed_with_warmdown_schedule(
+    count: Numeric,
+    total: Numeric,
+    value: Numeric,
+    warmdown_start_after: Numeric,
+    warmdown_end_value: float,
+) -> Numeric:
+  """Fixed schedule with a linear warmdown phase."""
+  warmdown_sched = optax.linear_schedule(
+      init_value=value,
+      end_value=warmdown_end_value,
+      transition_steps=total - warmdown_start_after,
+  )
+
+  return jnp.where(
+      count < warmdown_start_after,
+      value,
+      warmdown_sched(count - warmdown_start_after),
+  )
 
 
 def exponential_decay_schedule(
@@ -191,7 +214,7 @@ def _custom_polynomial_schedule(
     end_value: float,
     power: Numeric,
     transition_steps: int,
-    transition_begin: int = 0
+    transition_begin: int = 0,
 ) -> GenericSchedule:
   """Polynomial schedule similar to Optax, but works even when init_value < end_value."""
 
@@ -201,10 +224,10 @@ def _custom_polynomial_schedule(
 
     if init_value >= end_value:
       frac = 1.0 - count / transition_steps
-      return (init_value - end_value) * (frac ** power) + end_value
+      return (init_value - end_value) * (frac**power) + end_value
     else:
       frac = count / transition_steps
-      return (end_value - init_value) * (frac ** power) + init_value
+      return (end_value - init_value) * (frac**power) + init_value
 
   return schedule
 
@@ -281,6 +304,12 @@ SCHEDULE_METADATA = {
         "include_total": False,
         "warmup_end_value_key": "vals",
     },
+    "fixed_with_warmdown": {
+        "ctor": fixed_with_warmdown_schedule,
+        "params_to_convert": ["warmdown_start_after"],
+        "include_total": True,
+        "warmup_end_value_key": "value",
+    },
 }
 
 
@@ -288,7 +317,7 @@ def with_warmup(
     base_schedule_fn: GenericSchedule,
     warmup_duration: Numeric,
     warmup_start_value: float,
-    warmup_end_value: float
+    warmup_end_value: float,
 ) -> GenericSchedule:
   """Wraps a base schedule with a linear warmup phase."""
 
@@ -298,8 +327,10 @@ def with_warmup(
       transition_steps=warmup_duration,
   )
 
-  return optax.join_schedules([warmup_sched, base_schedule_fn],  # pytype: disable=bad-return-type
-                              [warmup_duration])
+  return optax.join_schedules(
+      [warmup_sched, base_schedule_fn],  # pytype: disable=bad-return-type
+      [warmup_duration],
+  )
 
 
 def construct_schedule(
@@ -383,8 +414,9 @@ def construct_schedule(
   for param in SCHEDULE_METADATA[name]["params_to_convert"]:
 
     if param not in new_kwargs:
-      raise ValueError(f"Parameter '{param}' is required for schedule "
-                       f"'{name}'.")
+      raise ValueError(
+          f"Parameter '{param}' is required for schedule '{name}'."
+      )
 
     new_kwargs[param] = jax.tree.map(conversion_fn, new_kwargs.pop(param))
 
@@ -420,8 +452,9 @@ def construct_schedule(
         new_kwargs["total"] = total_epochs * dataset_size
 
   # Create the base schedule (which does not include warmup).
-  base_schedule = lambda count: SCHEDULE_METADATA[name]["ctor"](count,
-                                                                **new_kwargs)
+  base_schedule = lambda count: SCHEDULE_METADATA[name]["ctor"](
+      count, **new_kwargs
+  )
 
   # If a warmup is asked for, wrap the base schedule with it.
   if "warmup_duration" in kwargs:
@@ -441,14 +474,16 @@ def construct_schedule(
     if warmup_end_value_key not in new_kwargs:
       raise ValueError(
           f"When 'warmup_duration' is provided, '{warmup_end_value_key}' "
-          f"must be provided for schedule '{name}'.")
+          f"must be provided for schedule '{name}'."
+      )
 
     warmup_end_value = new_kwargs[warmup_end_value_key]
     if isinstance(warmup_end_value, (list, tuple)):
       warmup_end_value = warmup_end_value[0]
 
-    schedule = with_warmup(base_schedule, warmup_duration, warmup_start_value,
-                           warmup_end_value)
+    schedule = with_warmup(
+        base_schedule, warmup_duration, warmup_start_value, warmup_end_value
+    )
 
   else:
     schedule = base_schedule
@@ -465,8 +500,10 @@ def construct_schedule(
         if train_total_batch_size is not None:
           data_seen = global_step * train_total_batch_size
         else:
-          raise ValueError("One of 'train_total_batch_size' or 'data_seen' "
-                           "must passed when mode is 'epochs' or 'fraction'.")
+          raise ValueError(
+              "One of 'train_total_batch_size' or 'data_seen' "
+              "must passed when mode is 'epochs' or 'fraction'."
+          )
 
       return schedule(data_seen)
 
