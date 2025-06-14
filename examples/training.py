@@ -580,6 +580,8 @@ class SupervisedExperiment(abc.ABC):
         )
 
         assert aux_polyak is not None
+        if "activations" in aux_polyak:
+          aux_polyak.pop("activations")
         stats["loss_polyak"] = loss_polyak
         stats.update({k + "_polyak": v for k, v in aux_polyak.items()})
 
