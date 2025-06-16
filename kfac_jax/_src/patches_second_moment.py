@@ -673,7 +673,7 @@ def patches_moments_explicit(
                jnp.zeros(matrix_target_shape, dtype=inputs.dtype),
                jnp.zeros(vector_target_shape, dtype=inputs.dtype))
 
-  return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]
+  return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]  # pytype: disable=bad-return-type  # lax-types
 
 
 @functools.partial(jax.jit, static_argnums=list(range(1, 12)),
@@ -913,4 +913,4 @@ def patches_moments(
     vector_init = jnp.zeros(vector_shape, dtype=inputs.dtype)
     init_vals = (0, padded_image, matrix_init, vector_init)
 
-    return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]
+    return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]  # pytype: disable=bad-return-type  # lax-types
