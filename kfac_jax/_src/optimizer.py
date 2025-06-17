@@ -996,7 +996,29 @@ class Optimizer(utils.WithStagedMethods):
       batch: Batch,
       func_state: FuncState | None = None,
   ) -> State:
-    """Initializes the optimizer and returns the appropriate optimizer state."""
+    """Initializes the optimizer and returns the appropriate optimizer state.
+
+    NOTE: please do not jit/pmap or otherwise compile this function with JAX,
+    as this can lead to errors. Compilation is handled internally by the
+    optimizer.
+
+    NOTE: when ``multi_device`` is ``True``, all of the JAX array arguments to
+    this function (including arrays inside of trees), should have an extra
+    leading axis the size of the number of local devices.
+
+    Args:
+      params: Example models parameters (used for tracing and shape info).
+      rng: A Jax PRNG key. Unlike the ``rng`` in the step function, should be
+        the same for each host and for each slice in the leading axis (i.e.
+        corresponding to devices) when ``multi_device`` is ``True``.
+      batch: An example batch of the same size as the one passed to ``step``
+        (or returned from the ``data_iterator``). Used for tracing and shape
+        info.
+      func_state: Example function state (used for tracing and shape info).
+
+    Returns:
+      The initialized optimizer state.
+    """
 
     if not self.finalized:
       self.finalize(params, rng, batch, func_state)
@@ -1288,11 +1310,19 @@ class Optimizer(utils.WithStagedMethods):
     as this can lead to errors. Compilation is handled internally by the
     optimizer.
 
+    NOTE: when ``multi_device`` is ``True``, all of the JAX array arguments to
+    this function (including arrays inside of trees), should have an extra
+    leading axis the size of the number of local devices. Slices of ``batch``
+    and ``rng`` should be different for each device, whereas the other arugments
+    should be identical for each slice. Passing the arguments any other way will
+    result in an exception, or possibly undefined behavior.
+
     Args:
       params: The current parameters of the model.
       state: The current state of the optimizer.
-      rng: A Jax PRNG key. Should be different for each iteration and
-        each Jax process/host.
+      rng: A Jax PRNG key. Should be different for each iteration, each host,
+        and for each slice in the leading axis (i.e. corresponding to devices)
+        when ``multi_device`` is ``True``.
       data_iterator: A data iterator to use (if not passing ``batch``).
       batch: A single batch used to compute the update. Should only pass one
         of ``data_iterator`` or ``batch``.
