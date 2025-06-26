@@ -581,7 +581,11 @@ class SupervisedExperiment(abc.ABC):
 
         assert aux_polyak is not None
         stats["loss_polyak"] = loss_polyak
-        stats.update({k + "_polyak": v for k, v in aux_polyak.items()})
+        stats.update({
+            k + "_polyak": v
+            for k, v in aux_polyak.items()
+            if isinstance(v, jnp.ndarray) and v.ndim == 1
+        })
 
       self._params_polyak = self._update_polyak_average_pmap(
           self._params_polyak, self._params,
