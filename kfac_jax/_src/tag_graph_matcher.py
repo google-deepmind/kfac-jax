@@ -1882,7 +1882,7 @@ def _auto_register_tags(
     # Update the jaxpr parameter in the equation
     eqn_params = dict(**eqn.params)
     if eqn_name == "cond":
-      eqn_params["branches"] = final_jaxprs
+      eqn_params["branches"] = tuple(final_jaxprs)
     elif eqn_name == "while":
       [eqn_params["body_jaxpr"]] = final_jaxprs  # pylint:disable=unbalanced-tuple-unpacking
     elif eqn_name in ("scan", "pjit"):
