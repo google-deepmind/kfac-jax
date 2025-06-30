@@ -18,6 +18,7 @@ import collections
 from collections.abc import Mapping
 import copy
 import functools
+import itertools
 import os
 import time
 from typing import Any, Callable, Iterator
@@ -283,6 +284,14 @@ class SupervisedExperiment(abc.ABC):
     self.optimizer = self.create_optimizer()
 
   @property
+  def train_iterator_size(self) -> int:
+    """The number of data points in the training iterator."""
+    if self.config.training.get("num_batches", -1) > 0:
+      return self.batch_size.train.total * self.config.training.num_batches
+    else:
+      return self.dataset_size
+
+  @property
   @abc.abstractmethod
   def dataset_size(self) -> int:
     """The number of data points in the training set."""
@@ -303,19 +312,35 @@ class SupervisedExperiment(abc.ABC):
 
       logging.info("Initializing training data iterator.")
 
-      # By folding in the step here we ensure that the training data iterator
-      # is rerandomized after a preemption. This is not a perfect solution, but
-      # it's better than restarting the old iterator from scratch.
-      seed_rng = jax.random.fold_in(self.seed_rng, self._python_step)
+      if self.config.training.get("fix_dataset_seed", False):
+
+        seed_rng = self.seed_rng
+      else:
+        # By folding in the step here we ensure that the training data iterator
+        # is rerandomized after a preemption. This is not a perfect solution,
+        # but it's better than restarting the old iterator from scratch.
+        seed_rng = jax.random.fold_in(self.seed_rng, self._python_step)
+
+      logging.info("Using seed rng %s to build train input.", seed_rng)
 
       self._train_input = pipe_utils.py_prefetch(
           functools.partial(
               self._build_train_input,
               split="train",
               seed=int(seed_rng[0]),
-              device_batch_size=self.batch_size.train.per_device,
+              device_batch_size=self.batch_size.train.per_device_chunk_size,
+              index=0,
           )
       )
+
+      if self.config.training.get("num_batches", -1) > 0:
+        # Creates infinite cycle from specified number of batches. (This will
+        # cache the dataset.) Training will halt as measured by progress.
+        self._train_input = itertools.cycle(
+            itertools.islice(
+                self._train_input, self.config.training.num_batches
+            )
+        )
 
       self._train_input = more_itertools.peekable(self._train_input)
 
@@ -405,7 +430,7 @@ class SupervisedExperiment(abc.ABC):
 
     else:
       data_seen = self.batch_size.train.total * global_step
-      total_data = self.dataset_size * self.config.training.epochs
+      total_data = self.train_iterator_size * self.config.training.epochs
 
       return data_seen / total_data
 
@@ -434,7 +459,7 @@ class SupervisedExperiment(abc.ABC):
         model_func_for_estimator=functools.partial(
             self.model_func_for_estimator, is_training=True
         ) if self.model_func_for_estimator is not None else None,
-        dataset_size=self.dataset_size,
+        dataset_size=self.train_iterator_size,
         train_total_batch_size=self.batch_size.train.total,
         total_steps=self.config.training.steps,
         total_epochs=self.config.training.epochs,
