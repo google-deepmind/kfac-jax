@@ -135,6 +135,7 @@ def make_different_rng_key_on_all_devices(rng: PRNGKey) -> PRNGKey:
 
 
 p_split = jax.pmap(lambda key: tuple(jax.random.split(key)))
+
 p_split_num = jax.pmap(lambda key, num: tuple(jax.random.split(key, num)),
                        static_broadcasted_argnums=1)
 

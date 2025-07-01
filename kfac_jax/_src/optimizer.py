@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""K-FAC optimizer."""
+"""The kfac_jax optimizer (supporting K-FAC and other methods)."""
 
 import functools
 from typing import Callable, Iterator, Sequence, Any, Generic
@@ -62,7 +62,7 @@ QuadModelParams = tuple[Array, Array, Array, Array]
 
 
 class Optimizer(utils.WithStagedMethods):
-  """The K-FAC optimizer."""
+  """The kfac_jax optimizer (supporting K-FAC and other methods)."""
 
   @utils.register_state_class
   class State(Generic[Params], utils.State):
@@ -964,7 +964,7 @@ class Optimizer(utils.WithStagedMethods):
   ) -> State:
     """A staged function to initialize the optimizer state ."""
 
-    # Note that we can reuse the ng in the func_args construction below, as
+    # Note that we can reuse the rng in the func_args construction below, as
     # these are just dummy values used to perform the tracing.
 
     return Optimizer.State(

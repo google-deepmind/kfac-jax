@@ -373,6 +373,8 @@ def construct_schedule(
       conversion_fn = lambda x: x * total_epochs * dataset_size
     else:
       conversion_fn = lambda x: x * total_steps * train_total_batch_size
+  else:
+    raise ValueError("Mode must be one of 'epochs', 'steps', or 'fraction'.")
 
   # Convert all FieldReferences to their values. This is supposed to happen
   # automatically when the config is finalized, but doesn't work recursively for

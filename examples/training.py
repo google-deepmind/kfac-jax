@@ -473,9 +473,9 @@ class SupervisedExperiment(abc.ABC):
       return
 
     init_rng = kfac_jax.utils.replicate_all_local_devices(self.init_rng)
+    params_rng, optimizer_rng = kfac_jax.utils.p_split(init_rng)
 
     # Initialize parameters and optional state
-    params_rng, optimizer_rng = kfac_jax.utils.p_split(init_rng)
     logging.info("Initializing parameters.")
     if self.has_func_state:
       self._params, self._state = self.params_init(params_rng, self.init_batch)
