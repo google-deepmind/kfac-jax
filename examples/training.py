@@ -341,6 +341,9 @@ class SupervisedExperiment(abc.ABC):
                 self._train_input, self.config.training.num_batches
             )
         )
+        # Ensures deterministic training by resuming at the correct batch.
+        skip = self._python_step % self.config.training.num_batches
+        self._train_input = itertools.islice(self._train_input, skip, None)
 
       self._train_input = more_itertools.peekable(self._train_input)
 
