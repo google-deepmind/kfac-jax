@@ -45,7 +45,7 @@ def in_pmap(axis_name: str | None) -> bool:
   try:
     # The only way to know if we are under `jax.pmap` is to check if the
     # function call below raises a `NameError` or not.
-    core.axis_frame(axis_name)
+    core.axis_frame(axis_name)  # pytype: disable=module-attr
 
     return True
 
