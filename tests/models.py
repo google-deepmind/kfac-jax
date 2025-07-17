@@ -213,7 +213,7 @@ class _VanillaRNN(hk.VanillaRNN):
     self.activation = activation
     self.explicit_tagging = explicit_tagging
 
-  def __call__(
+  def __call__(  # pytype: disable=signature-mismatch  # jax-nn-types
       self,
       inputs: LayerInputs,
       prev_state: Array,
