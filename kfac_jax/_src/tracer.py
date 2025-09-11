@@ -225,7 +225,11 @@ class ProcessedJaxpr(utils.Finalizable):
     self.consts = consts
     self.in_tree = in_tree
     self.params_index = params_index
-    self.layer_tags, self.loss_tags = extract_tags(jaxpr)
+    # clean jaxpr of layer tags at this point
+    closed_jaxpr = jex.core.ClosedJaxpr(jaxpr=self.jaxpr, consts=self.consts)
+    self.jaxpr, self.layer_tags = tgm.clean_layer_tags_jaxpr(closed_jaxpr)
+    self.jaxpr = self.jaxpr.jaxpr
+    _, self.loss_tags = extract_tags(self.jaxpr)
     name_layer_tags(self.layer_tags)
     self.layer_tags, self.layer_indices = order_layer_tags(
         params_vars_flat=self.params_vars_flat,
@@ -579,7 +583,7 @@ def _loss_tags_vjp(
     p_jaxpr: ProcessedJaxpr,
     primal_func_args: FuncArgs,
 ) -> LossTagsVjp:
-  """Computes a (backward-mode) vector-Jacobian product w.r.t. all loss tags.
+  """Computes a (backward-mode) vector-Jacobian product for the vector of losses given by the loss tags.
 
   The function has similar interface to :func:`jax.vjp`. It takes as inputs the
   concrete values of the primals at which the Jacobian will be evaluated. It
@@ -651,7 +655,7 @@ def _loss_tags_jvp(
     primal_func_args: FuncArgs,
     params_tangents: Params,
 ) -> LossTagsJvp:
-  """Computes a (forward-mode) Jacobian-vector product w.r.t. all loss tags.
+  """Computes a (forward-mode) Jacobian-vector product for the losses given by the loss tags.
 
   The function has similar interface to :func:`jax.jvp`. It takes as inputs the
   concrete values of the primals at which the Jacobian will be evaluated at and
@@ -795,7 +799,7 @@ def _layer_tag_vjp(
   Args:
     processed_jaxpr: The :class:`~ProcessedJaxpr` representing the model
       function. This must include at least one loss tag.
-    primal_func_args: The primals at which to evaluate the Hessian.
+    primal_func_args: The primals at which to evaluate the Jacobian.
 
   Returns:
     The computed ``losses`` and ``vjp_func`` pair.
@@ -824,14 +828,12 @@ def _layer_tag_vjp(
     # Loop through equations and evaluate them
     num_losses_passed = 0
     for eqn in processed_jaxpr.jaxpr.eqns:
-
-      write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
-
       if isinstance(eqn.primitive, tags.LossTag):
         num_losses_passed += 1
         if num_losses_passed == len(processed_jaxpr.loss_tags):
           break
-
+      else:
+        write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 
     return tuple(read(layer_input_vars))
@@ -884,7 +886,6 @@ def _layer_tag_vjp(
     for eqn in processed_jaxpr.jaxpr.eqns:
 
       input_values = read(eqn.invars)
-      write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, input_values))
 
       if isinstance(eqn.primitive, tags.LossTag):
         loss: LossFunction = tags.loss_eqn_construct_loss(eqn, *input_values)
@@ -896,6 +897,8 @@ def _layer_tag_vjp(
 
         if num_losses_passed == len(processed_jaxpr.loss_tags):
           break
+      else:
+        write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, input_values))
 
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 

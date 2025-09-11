@@ -1055,6 +1055,69 @@ def clean_jaxpr(
   return to_jaxpr_or_closed_jaxpr(closed_jaxpr, jaxpr)
 
 
+def clean_layer_tags_jaxpr(
+    jaxpr: J,
+    only_remove_auto_tags: bool = False,
+) -> tuple[J, tuple[tags.LayerTagEqn | JaxprEqn, ...]]:
+  """Removes layer tags from a Jaxpr."""
+
+  closed_jaxpr = to_closed_jaxpr(jaxpr)
+  eqns = []
+  layer_tag_eqns = []
+  var_map = {}
+
+  for eqn in closed_jaxpr.jaxpr.eqns:
+    if isinstance(eqn.primitive, tags.LayerTag) and (
+        not only_remove_auto_tags
+        or (
+            eqn.params["meta"].name is not None
+            and "Auto" in eqn.params["meta"].name
+        )
+    ):
+      for ind1, ind2 in enumerate(eqn.params["meta"].outputs_index):
+        var_map[eqn.outvars[ind1]] = eqn.invars[ind2]
+    else:
+      eqns.append(eqn)
+    if isinstance(eqn.primitive, tags.LayerTag):
+      layer_tag_eqns.append(eqn)
+
+  def remap_input_vars(
+      eqns: list[JaxprEqn], var_map: dict[jex.core.Var, jex.core.Var]
+  ) -> list[JaxprEqn]:
+    """Remaps the input variables of a JaxprEqn.
+
+    Args:
+      eqns: The list of JaxprEqns to remap.
+      var_map: A mapping from variables to new variables.
+
+    Returns:
+      A new list of JaxprEqns with remapped input variables.
+    """
+    eqns_new = []
+    for eqn in eqns:
+      new_invars = []
+      for var in eqn.invars:
+        if not isinstance(var, jex.core.Literal) and var in var_map.keys():
+          new_invars.append(var_map[var])
+        else:
+          new_invars.append(var)
+      eqns_new.append(eqn.replace(invars=new_invars))
+    return eqns_new
+
+  eqns_new = remap_input_vars(eqns, var_map)
+  layer_tag_eqns_new = remap_input_vars(layer_tag_eqns, var_map)
+
+  closed_jaxpr = ClosedJaxpr(
+      jaxpr=closed_jaxpr.jaxpr.replace(eqns=eqns_new),
+      consts=closed_jaxpr.consts,
+  )
+
+  return (
+      to_jaxpr_or_closed_jaxpr(closed_jaxpr, jaxpr),
+      tuple(layer_tag_eqns_new),
+  )
+
+
 # Prototype for clean_jaxpr using JAX's dce_jaxpr. Doesn't work because
 # dce_jaxpr will remove any equations with no used outputs, regardless of the
 # dce_rule for that equation's primitive. Adding an "effect" to loss/layer
