@@ -142,7 +142,7 @@ class WithStagedMethods(misc.Finalizable):
       func: Callable[..., TArrayTree],
   ) -> Callable[..., TArrayTree]:
     """Wraps a function to perform a pmean if `multi_device`."""
-    if self.multi_device:
+    if self.multi_device and not self.debug:
       return lambda *args, **kwargs: lax.pmean(
           func(*args, **kwargs), self.pmap_axis_name
       )
