@@ -78,8 +78,11 @@ class _Linear(hk.Linear):
     super().__init__(*args, **kwargs)
 
   def __call__(self, inputs: LayerInputs, *_) -> LayerInputs:  # pytype: disable=signature-mismatch  # overriding-parameter-name-checks
+
     x, layer_values, aux = inputs
+
     y = super().__call__(x, precision=jax.lax.Precision.HIGHEST)
+
     if aux is not None:
       y, aux = y + aux[0], aux[1:]
 
@@ -96,6 +99,7 @@ class _Linear(hk.Linear):
           preferred_element_type=preferred_element_type,
           out_sharding=None,
       )
+
     layer_values.append((x, y))
 
     return y, layer_values, aux
@@ -144,6 +148,7 @@ class _Conv2D(hk.Conv2D):
           preferred_element_type=None,
           rhs_dilation=(1, 1),
           window_strides=self.stride,
+          out_sharding=None,
       )
     return y, layer_values, aux
 
