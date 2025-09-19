@@ -202,15 +202,9 @@ class SupervisedExperiment(abc.ABC):
     self.has_rng = has_rng
     self.has_func_state = has_func_state
     self.eval_splits = eval_splits
+    self._batch_size_calculator_ctor = batch_size_calculator_ctor
 
-    self.batch_size = ExperimentBatchSizes(
-        train=batch_size_calculator_ctor(
-            mode="train", **self.config.batch_size.train
-        ),
-        eval=batch_size_calculator_ctor(
-            mode="eval", **self.config.batch_size.eval
-        ),
-    )
+    self._batch_size: ExperimentBatchSizes | None = None
 
     self.params_init = jax.pmap(init_parameters_func, axis_name="kfac_axis")
     self.model_loss_func = model_loss_func
@@ -387,6 +381,22 @@ class SupervisedExperiment(abc.ABC):
         self._init_batch = next(self.eval_input["train"]())
 
     return self._init_batch
+
+  @property
+  def batch_size(self) -> ExperimentBatchSizes:
+    """A fake batch size used to initialize the model parameters and state."""
+
+    if self._batch_size is None:
+      self._batch_size = ExperimentBatchSizes(
+          train=self._batch_size_calculator_ctor(
+              mode="train", **self.config.batch_size.train
+          ),
+          eval=self._batch_size_calculator_ctor(
+              mode="eval", **self.config.batch_size.eval
+          ),
+      )
+
+    return self._batch_size
 
   def _polyak_weight(
       self,
