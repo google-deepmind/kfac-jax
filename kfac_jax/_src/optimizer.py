@@ -430,18 +430,23 @@ class Optimizer(utils.WithStagedMethods):
         excluded_attribute_names=modifiable_attribute_exceptions,
     )
 
-    if use_adaptive_damping and initial_damping is None:
-      raise ValueError("When use_adaptive_damping is True you must provide a "
-                       "value for initial_damping.")
     if use_adaptive_learning_rate and learning_rate_schedule is not None:
       raise ValueError("If you are using adaptive learning rate then "
                        "`learning_rate_schedule` should be None.")
     if use_adaptive_momentum and momentum_schedule is not None:
       raise ValueError("If you are using adaptive momentum then "
                        "`momentum_schedule` should be None.")
-    if use_adaptive_damping and damping_schedule is not None:
-      raise ValueError("If you are using adaptive damping then "
-                       "`damping_schedule` should be None.")
+    if use_adaptive_learning_rate:
+      if use_adaptive_damping and initial_damping is None:
+        raise ValueError(
+            "When use_adaptive_damping is True you must provide a "
+            "value for initial_damping."
+        )
+      if use_adaptive_damping and damping_schedule is not None:
+        raise ValueError(
+            "If you are using adaptive damping then "
+            "`damping_schedule` should be None."
+        )
 
     if num_burnin_steps <= 0 and use_initial_damping_calibration:
       raise ValueError("num_burnin_steps must be > 0 if "
