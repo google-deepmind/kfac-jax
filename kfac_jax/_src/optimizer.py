@@ -79,7 +79,7 @@ class Optimizer(utils.WithStagedMethods):
     """
     velocities: Params
     estimator_state: BlockDiagonalCurvature.State
-    damping: Array | None
+    damping: Array
     data_seen: Numeric
     step_counter: Numeric
 
@@ -737,6 +737,7 @@ class Optimizer(utils.WithStagedMethods):
       rng, func_rng = jax.random.split(rng)
     else:
       func_rng = None
+
     # Make the function args
     func_args = make_func_args(
         params=params,
@@ -983,8 +984,9 @@ class Optimizer(utils.WithStagedMethods):
             approx_powers_to_cache=self._approx_powers_to_cache,
             cache_eigenvalues=False
         ),
-        damping=(jnp.array(self._initial_damping, dtype=float)
-                 if self._use_adaptive_damping else None),
+        damping=jnp.array(
+            (self._initial_damping if self._initial_damping is not None
+             else -1e10), dtype=float),
         data_seen=jnp.array(0, dtype=int),
         step_counter=jnp.array(0, dtype=int)
     )
@@ -1457,6 +1459,7 @@ class Optimizer(utils.WithStagedMethods):
       func_args: FuncArgsVariants,
       state: State | None = None,
       fixed_coefficients: Sequence[Numeric | None] | None = None,
+      **kwargs,
   ) -> QuadModelParams:
     """Computes the components of the exact quadratic model."""
 
@@ -1467,7 +1470,7 @@ class Optimizer(utils.WithStagedMethods):
 
     if fixed_coefficients is None:  # can we get rid of this?
       return self.compute_exact_quad_model(
-          vectors, grads, func_args, state=state)
+          vectors, grads, func_args, state=state, **kwargs)
 
     assert len(vectors) == len(fixed_coefficients)
     assert len(vectors) == 2  # only deal with the two vector case
@@ -1476,7 +1479,7 @@ class Optimizer(utils.WithStagedMethods):
 
       # Only pass in the vectors that won't be multiplied by zero
       quad_model = self.compute_exact_quad_model(
-          vectors[:1], grads, func_args, state=state)
+          vectors[:1], grads, func_args, state=state, **kwargs)
 
       # Repad the quad model with zeroes for the removed entries
       return tuple(
@@ -1492,8 +1495,7 @@ class Optimizer(utils.WithStagedMethods):
 
     # Due to how XLA cannot share computations across cond boundaries, such as
     # network forward and backwards passes, we cannot use a cond here and remain
-    # effecicient. If this behavior ever changes we can uncomment the block
-    # below.
+    # efficient. If this behavior ever changes we can uncomment the block below.
 
     # return jax.lax.cond(
     #     fixed_coefficients[1] == 0.0,
@@ -1502,7 +1504,8 @@ class Optimizer(utils.WithStagedMethods):
     #         vectors, grads, func_args, state=state),
     # )
 
-    return self.compute_exact_quad_model(vectors, grads, func_args, state=state)
+    return self.compute_exact_quad_model(vectors, grads, func_args, state=state,
+                                         **kwargs)
 
   @utils.auto_scope_method
   def compute_exact_quad_model(

@@ -309,6 +309,7 @@ def construct_schedule(
     total_steps: int | None,
     total_epochs: float | None,
     mode: str = "steps",
+    output_transform: Callable[[Numeric], Numeric] | None = None,
     **kwargs,
 ) -> kfac_jax.utils.ScheduleType:
   """Constructs the schedule from its name and extra kwargs.
@@ -341,6 +342,7 @@ def construct_schedule(
     total_epochs: The total number of epochs. Must be set if mode is 'epochs' or
       'fraction'. Must be None if total_steps is set.
     mode: The mode of the schedule (see above).
+    output_transform: A function to transform the output of the schedule.
     **kwargs: Extra keyword arguments to pass to the schedule constructor.
 
   Returns:
@@ -475,5 +477,8 @@ def construct_schedule(
     else:
 
       return schedule(global_step)
+
+  if output_transform is not None:
+    return lambda x: output_transform(schedule_with_input_conversion(x))
 
   return schedule_with_input_conversion

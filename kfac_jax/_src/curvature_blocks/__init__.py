@@ -48,4 +48,5 @@ set_default_eigen_decomposition_threshold = (
     utils.set_default_eigen_decomposition_threshold)
 get_default_eigen_decomposition_threshold = (
     utils.get_default_eigen_decomposition_threshold)
+to_real_set = utils.to_real_set
 

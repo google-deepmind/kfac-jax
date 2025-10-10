@@ -298,6 +298,8 @@ class Finalizable(abc.ABC):
     """
     self._finalized = False
     self._forbid_setting_attributes = forbid_setting_attributes_after_finalize
+    excluded_attribute_names = set(excluded_attribute_names)
+    excluded_attribute_names.add("_forbid_setting_attributes")
     self._excluded_attribute_names = frozenset(excluded_attribute_names)
     super().__init__(**parent_kwargs)
 
@@ -318,12 +320,29 @@ class Finalizable(abc.ABC):
   def _finalize(self, *args: Any, **kwargs: Any):
     """Any logic that a child class needs to do during the finalization."""
 
+  def unlock_attributes(self):
+    self._forbid_setting_attributes = False
+
+  def lock_attributes(self):
+    self._forbid_setting_attributes = True
+
   def __setattr__(self, name: str, value: Any):
 
-    if (not getattr(self, "_finalized", False) or
-        not getattr(self, "_forbid_setting_attributes", True) or
-        name in getattr(self, "_excluded_attribute_names", ())):
+    # We have to use default values here because __setattr__ will be called
+    # before the attributes are initialized. i.e. the constructor will call this
+    # function as it initializes _finalized etc.
+    is_finalized = getattr(self, "_finalized", False)
+    has_name_attr = hasattr(self, name)
+    set_attribute_forbidden = getattr(self, "_forbid_setting_attributes", True)
+    name_is_excluded = name in getattr(self, "_excluded_attribute_names", ())
 
+    if is_finalized and not has_name_attr:
+      raise AttributeError(
+          "Can't create new attributes after finalization. Attempted to create "
+          f"{name}."
+      )
+
+    elif not is_finalized or not set_attribute_forbidden or name_is_excluded:
       super().__setattr__(name, value)
 
     else:
