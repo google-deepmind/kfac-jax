@@ -15,7 +15,8 @@
 """The kfac_jax optimizer (supporting K-FAC and other methods)."""
 
 import functools
-from typing import Callable, Iterator, Sequence, Any, Generic
+from typing import Any, Callable, Generic, Iterator, Sequence
+from absl import logging
 
 import jax
 from jax import lax
@@ -57,8 +58,36 @@ ReturnEither = (
     tuple[Params, "Optimizer.State", dict[str, Numeric]]
 )
 
-# See Optimizer._solve_quad_model for a description of these parameters.
 QuadModelParams = tuple[Array, Array, Array, Array]
+# The quadratic model is given as
+#   Q(w) = w^T V^T (C + damping * I + reg * L) V w / 2.0 + w^T V^T g
+# where (n - number of vectors, d - dimensions of each vector):
+#   damping - the damping value at the current iteration
+#   reg - the L2 regularization coefficient
+#   w (n,) - the vector of free weights (learning rate and momentum)
+#   V (d, n) - the matrix of proposed vectors for each weight
+#   C (d, d) - the curvature matrix (GGN/Fisher/Hessian)
+#   L (d, d) - the L2 regularization matrix. L is diagonal, with 1 on diagonal
+#              if the corresponding parameter is L2 regularised, and 0
+#              otherwise.
+#   g (d,) - the true gradient
+# In QuadModelParams, we have the tuple (A,D,R,b) where:
+#   A = V^T C V
+#   D = V^T I V  (for damping)
+#   R = V^T L V  (for L2 regularization)
+#   b = V^T g
+# See Optimizer._solve_quad_model for how these are used, and
+# Optimizer.compute_exact_quad_model for how they are computed.
+
+
+# Various lists of parameters that are biases and norms, to be
+# used for registering parameters that are excluded from l2 regularization
+# in Optimizer.
+# "b" and "bias" for biases, "scale" for RMSNorm and LayerNorm, and
+# "offset" for LayerNorm.
+
+HAIKU_BIASES = "b,bias"
+HAIKU_BIASES_AND_NORMS = "b,bias,scale,offset"
 
 
 class Optimizer(utils.WithStagedMethods):
@@ -96,6 +125,7 @@ class Optimizer(utils.WithStagedMethods):
       self,
       value_and_grad_func: ValueAndGradFunc,
       l2_reg: Numeric,
+      regularized_parameters_path_exclusions: str = "",
       value_func_has_aux: bool = False,
       value_func_has_state: bool = False,
       value_func_has_rng: bool = False,
@@ -210,6 +240,11 @@ class Optimizer(utils.WithStagedMethods):
         an additional diagonal term to the curvature and hence will affect the
         quadratic model when using adaptive damping. Note that the user is still
         responsible for adding regularization to the loss.
+      regularized_parameters_path_exclusions: str. A comma-separated list
+        specifying the names of parameters that should not be regularized.
+        A number of convenience examples are given in this module, e.g.
+        HAIKU_BIASES_AND_NORMS, which is ``"b,bias,scale,offset"``.
+        (Default: ``""``)
       value_func_has_aux: Boolean. Specifies whether the provided callable
         ``value_and_grad_func`` returns auxiliary data. (Default: ``False``)
       value_func_has_state: Boolean. Specifies whether the provided callable
@@ -457,6 +492,8 @@ class Optimizer(utils.WithStagedMethods):
     )
 
     self._l2_reg = l2_reg
+    self._regularized_parameters_path_exclusions = (
+        regularized_parameters_path_exclusions.split(","))
 
     self._use_adaptive_learning_rate = use_adaptive_learning_rate
     self._learning_rate_schedule = learning_rate_schedule
@@ -1025,6 +1062,9 @@ class Optimizer(utils.WithStagedMethods):
     if not self.finalized:
       self.finalize(params, rng, batch, func_state)
 
+    # Check that mask_out_unregularized_params works as intended.
+    _ = self._maybe_mask_out_unregularized_parameters(params, log_paths=True)
+
     return self._init(params, rng, batch, func_state)
 
   @functools.partial(utils.staged, donate_argnums=[1, 3, 5])
@@ -1507,6 +1547,41 @@ class Optimizer(utils.WithStagedMethods):
     return self.compute_exact_quad_model(vectors, grads, func_args, state=state,
                                          **kwargs)
 
+  def _maybe_mask_out_unregularized_parameters(
+      self, params: Params, log_paths: bool = False) -> Params:
+    """Mask out parameters that are not l2 regularized."""
+
+    if log_paths:
+      logging.info("Unregularized parameters masking info (for curvature "
+                   "calculations and L2 regularization)")
+
+    def maybe_mask_out_single_param(
+        path: tuple[Any, ...],
+        param: Array
+    ) -> Array:
+      """Zero out a single parameter."""
+      str_path = []
+      for p in path:
+        if isinstance(p, jax.tree_util.DictKey):
+          str_path.append(p.key)
+        elif isinstance(p, jax.tree_util.GetAttrKey):
+          str_path.append(p.name)
+
+      should_mask = any(
+          p in str_path
+          for p in self._regularized_parameters_path_exclusions
+      )
+
+      if log_paths:
+        log_message = "Masking" if should_mask else "Not masking"
+        logging.info("  %s out %s", log_message, path)
+
+      return jnp.zeros_like(param) if should_mask else param
+
+    return jax.tree.map_with_path(
+        maybe_mask_out_single_param, params
+    )
+
   @utils.auto_scope_method
   def compute_exact_quad_model(
       self,
@@ -1515,7 +1590,19 @@ class Optimizer(utils.WithStagedMethods):
       func_args: FuncArgsVariants,
       state: State | None = None,
   ) -> QuadModelParams:
-    """Computes the components of the exact quadratic model."""
+    """Computes the components of the exact quadratic model.
+
+    See comments of QuadModelParams for a description of the returned tuple.
+
+    Args:
+      vectors: sequence of update vectors `V`.
+      grads: The gradient `g` of the loss function.
+      func_args: The arguments to the model's value function.
+      state: The current optimizer state.
+
+    Returns:
+      A `QuadModelParams` tuple (A, D, R, b).
+    """
 
     del state
 
@@ -1529,9 +1616,11 @@ class Optimizer(utils.WithStagedMethods):
       raise ValueError(f"Unrecognized estimator.mat_type="
                        f"{self.estimator.default_mat_type}.")
 
+    masked_vectors = tuple(self._maybe_mask_out_unregularized_parameters(vi)
+                           for vi in vectors)
     return (utils.matrix_of_inner_products(c_factor_v),
             utils.matrix_of_inner_products(vectors),
-            utils.matrix_of_inner_products(vectors),
+            utils.matrix_of_inner_products(masked_vectors),
             utils.vector_of_inner_products(grads, vectors))
 
   @functools.partial(utils.staged, donate_argnums=2)
@@ -1583,23 +1672,9 @@ class Optimizer(utils.WithStagedMethods):
       quad_model_parameters: QuadModelParams,
       damping: Array,
       fixed_coefficients: Sequence[Numeric | None],
+      reg_coeff: Numeric | None = None,
   ) -> tuple[tuple[Numeric, ...], Array]:
     """Solves for the optimal learning rate and momentum of the quadratic model.
-
-    The quadratic model is represented as:
-      Q(w) = w^T V^T (C + damping * I + l2_reg * I) V w / 2.0 + w^T V^T g
-    where (n - number of vectors, d - dimensions of each vector):
-      w (n,) - the vector of free weights (learning rate and momentum)
-      V (d, n) - the matrix of proposed vectors for each weight
-      C (d, d) - the true curvature matrix (GGN/Fisher/Hessian)
-      g (d,) - the true gradient
-      damping - the damping value at the current iteration
-
-    In the implementation we have:
-      A = V^T C V
-      D = V^T V  (for damping)
-      R = V^T V  (for L2 regularization)
-      b = V^T g
 
     Args:
       quad_model_parameters: The computed matrices A, D, R, and vector b.
@@ -1607,6 +1682,8 @@ class Optimizer(utils.WithStagedMethods):
       fixed_coefficients: A list over the vectors of the fixed numerical values
         to use for their coefficients. For each of these that is None, the
         quadratic model is minimized to compute the 'optimal' coefficient value.
+      reg_coeff: The L2 regularization parameter to use. If None, the default
+        value from the optimizer is used.
     Returns:
      A list of coefficients which are the solution (and include any values that
      are not None from fixed_weights) and the value of the quadratic model
@@ -1616,12 +1693,13 @@ class Optimizer(utils.WithStagedMethods):
       provide more, it will raise a ``NotImplementedError``.
     """
 
-    # TODO(jamesmartens): should revise the above docstring and move most of it
-    # to compute_exact_quad_model.
+    if reg_coeff is None:
+      # use default l2 regularisation value.
+      reg_coeff = self.l2_reg
 
     # pylint: disable=invalid-name
     A_no_diag, D, R, b = quad_model_parameters
-    A = A_no_diag + self.l2_reg * R
+    A = A_no_diag + reg_coeff * R
     A_damped = A + damping * D
 
     # Sync.

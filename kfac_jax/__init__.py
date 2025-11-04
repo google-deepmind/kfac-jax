@@ -118,6 +118,8 @@ OptaxPreconditionState = curvature_estimator.OptaxPreconditionState
 # Optimizers
 Optimizer = optimizer.Optimizer
 
+HAIKU_BIASES = optimizer.HAIKU_BIASES
+HAIKU_BIASES_AND_NORMS = optimizer.HAIKU_BIASES_AND_NORMS
 
 __all__ = (
     # Modules
