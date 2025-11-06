@@ -420,7 +420,7 @@ def make_jax_graph(
     closed_jaxpr = merge_broadcasts_jaxpr(closed_jaxpr)
     closed_jaxpr = clean_jaxpr(closed_jaxpr)
 
-  in_vars = jax.tree_util.tree_unflatten(in_tree, closed_jaxpr.jaxpr.invars)
+  in_vars = jax.tree_util.tree_unflatten(in_tree, closed_jaxpr.jaxpr.invars)  # pytype:disable=attribute-error
 
   if isinstance(params_index, int):
     params_vars = in_vars[params_index]
