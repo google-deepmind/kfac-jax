@@ -1067,7 +1067,7 @@ class Optimizer(utils.WithStagedMethods):
 
     return self._init(params, rng, batch, func_state)
 
-  @functools.partial(utils.staged, donate_argnums=[1, 3, 5])
+  @functools.partial(utils.staged, donate_argnums=[1, 3, 5])  # pytype: disable=wrong-arg-types
   def _burnin(
       self,
       params: Params,

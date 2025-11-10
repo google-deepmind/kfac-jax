@@ -961,7 +961,7 @@ def _layer_tag_vjp(
 
     for tag in processed_jaxpr.layer_tags:
 
-      primals = read_primals(tag.invars)
+      primals = read_primals(tag.invars)  # pytype: disable=wrong-arg-types
       # Due to the ability to preprocess inputs for tags the input gradients
       # could be potentially wrong (e.g. zero) so we don't include them.
       tangents = read_tangents(tag.invars)
