@@ -397,23 +397,17 @@ def construct_schedule(
     if mode == "steps":
 
       if total_steps is None:
-        raise ValueError(
-            "total_steps must be set when mode is 'steps' for "
-            f"schedule '{name}'."
-        )
+        total_steps = int(total_epochs * dataset_size / train_total_batch_size)
 
       new_kwargs["total"] = total_steps
 
     elif mode == "epochs":
 
-      if total_epochs is None:
-        raise ValueError(
-            "total_epochs must be set when mode is 'epochs' for schedule"
-            " '{name}'."
-        )
-
       # Convert to data seen in this case
-      new_kwargs["total"] = total_epochs * dataset_size
+      if total_epochs is None:
+        new_kwargs["total"] = total_steps * train_total_batch_size
+      else:
+        new_kwargs["total"] = total_epochs * dataset_size
 
     elif mode == "fraction":
 
