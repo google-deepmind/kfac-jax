@@ -25,6 +25,12 @@ from kfac_jax._src import curvature_estimator
 from kfac_jax._src import utils
 from typing_extensions import Self
 
+# For now we are opting out of JAX's new pmap simulation in favor using the old
+# pmap implementation. This is because the new simulation currently leads to
+# a compute performance regression in some experiments.
+if "jax_pmap_shmap_merge" in jax.config.values:
+  jax.config.update("jax_pmap_shmap_merge", False)
+
 
 # Types for annotation
 Array = utils.Array
