@@ -66,24 +66,26 @@ ReturnEither = (
 
 QuadModelParams = tuple[Array, Array, Array, Array]
 # The quadratic model is given as
-#   Q(w) = w^T V^T (C + damping * I + reg * L) V w / 2.0 + w^T V^T g
-# where (n - number of vectors, d - dimensions of each vector):
-#   damping - the damping value at the current iteration
-#   reg - the L2 regularization coefficient
-#   w (n,) - the vector of free weights (learning rate and momentum)
+#  Q(w) = w^T V^T (C + damping * I + reg * L) V w / 2.0 + w^T V^T g
+#  where (n - number of vectors, d - dimensions of each vector):
+#   damping  - the damping value at the current iteration
+#   reg      - the L2 regularization coefficient
+#   w (n,)   - the vector of free weights (learning rate and momentum)
 #   V (d, n) - the matrix of proposed vectors for each weight
 #   C (d, d) - the curvature matrix (GGN/Fisher/Hessian)
 #   L (d, d) - the L2 regularization matrix. L is diagonal, with 1 on diagonal
 #              if the corresponding parameter is L2 regularised, and 0
 #              otherwise.
-#   g (d,) - the true gradient
-# In QuadModelParams, we have the tuple (A,D,R,b) where:
+#   g (d,)   - the gradient
+#
+# In QuadModelParams, we have the tuple (A, D, R, b) where:
 #   A = V^T C V
 #   D = V^T I V  (for damping)
 #   R = V^T L V  (for L2 regularization)
 #   b = V^T g
+#
 # See Optimizer._solve_quad_model for how these are used, and
-# Optimizer.compute_exact_quad_model for how they are computed.
+# Optimizer._compute_exact_quad_model for how they are computed.
 
 
 # Various lists of parameters that are biases and norms, to be
@@ -545,7 +547,7 @@ class Optimizer(utils.WithStagedMethods):
     self._include_registered_loss_in_stats = include_registered_loss_in_stats
     self._batch_size_extractor = batch_size_extractor
 
-    self._invalid_metric_value = invalid_metric_value
+    self.__invalid_metric_value = invalid_metric_value
 
     self._use_cached_inverses = (self._inverse_update_period != 1)
     self._use_exact_inverses = use_exact_inverses
@@ -600,22 +602,11 @@ class Optimizer(utils.WithStagedMethods):
       self.finalize()
 
   @property
-  def num_burnin_steps(self) -> int:
-    """The number of burnin steps to run before the first parameter update."""
-    return self._num_burnin_steps
+  def _invalid_metric_value(self) -> Array:
+    return jnp.array(self.__invalid_metric_value, dtype=float)
 
   @property
-  def l2_reg(self) -> Numeric:
-    """The weight of the additional diagonal term added to the curvature."""
-    return self._l2_reg
-
-  @property
-  def estimator(self) -> BlockDiagonalCurvature:
-    """The underlying curvature estimator used by the optimizer."""
-    return self._estimator
-
-  @property
-  def damping_decay_factor(self) -> Numeric:
+  def _damping_decay_factor(self) -> Numeric:
     """How fast to decay the damping, when using damping adaptation."""
     return self._damping_adaptation_decay ** self._damping_adaptation_interval
 
@@ -633,26 +624,26 @@ class Optimizer(utils.WithStagedMethods):
     else:
       return None
 
-  def should_update_damping(self, step_counter: int) -> bool:
+  def _should_update_damping(self, step_counter: int) -> bool:
     """Whether at the current step the optimizer should update the damping."""
     return ((step_counter + 1) % self._damping_adaptation_interval == 0) and (
         self._use_adaptive_damping
     )
 
-  def should_update_estimate_curvature(self, step_counter: int) -> bool:
+  def _should_update_estimate_curvature(self, step_counter: int) -> bool:
     """Whether at the current step the optimizer should update the curvature estimates."""
     return step_counter % self._curvature_update_period == 0
 
-  def should_update_inverse_cache(self, state: State) -> Array | bool:
+  def _should_update_inverse_cache(self, state: State) -> Array | bool:
     """Whether at the current step the optimizer should update the inverse curvature approximation."""
     return self._use_cached_inverses and (
         state.step_counter % self._inverse_update_period == 0)
 
-  def should_sync_estimator(self, state: State) -> Array | bool:
+  def _should_sync_estimator(self, state: State) -> Array | bool:
     """Whether at the current step the optimizer should update the inverse curvature approximation."""
 
     if self._use_cached_inverses:
-      return self.should_update_inverse_cache(state)
+      return self._should_update_inverse_cache(state)
 
     return True
 
@@ -662,11 +653,11 @@ class Optimizer(utils.WithStagedMethods):
     return tuple(jax.random.split(rng, num))
 
   @utils.auto_scope_method
-  def compute_loss_value(self, func_args: FuncArgsVariants) -> Array:
+  def _compute_loss_value(self, func_args: FuncArgsVariants) -> Array:
     """Computes the value of the loss function being optimized."""
     return self._value_func(*func_args)
 
-  def verify_args_and_get_step_counter(
+  def _verify_args_and_get_step_counter(
       self,
       step_counter: Array,
       learning_rate: Array | None = None,
@@ -805,11 +796,11 @@ class Optimizer(utils.WithStagedMethods):
   ) -> BlockDiagonalCurvature.State:
     """Updates the curvature estimator state."""
 
-    state = self.estimator.update_curvature_matrix_estimate(
+    state = self._estimator.update_curvature_matrix_estimate(
         state=estimator_state,
         ema_old=ema_old,
         ema_new=ema_new,
-        identity_weight=self.l2_reg + precon_damping,
+        identity_weight=self._l2_reg + precon_damping,
         # Note that the batch is always the last entry of FuncArgsVariantsdef
         batch_size=self._batch_size_extractor(func_args[-1]),
         rng=rng,
@@ -817,7 +808,7 @@ class Optimizer(utils.WithStagedMethods):
     )
     return jax.lax.cond(
         sync,
-        functools.partial(self.estimator.sync,
+        functools.partial(self._estimator.sync,
                           pmap_axis_name=self.pmap_axis_name),
         lambda state_: state_,
         state,
@@ -840,7 +831,7 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._include_registered_loss_in_stats:
       aux = aux or {}
-      aux["loss_registered"] = self.compute_loss_from_registrations(func_args)
+      aux["loss_registered"] = self._compute_loss_from_registrations(func_args)
 
     return loss, grads, func_state, aux
 
@@ -856,10 +847,10 @@ class Optimizer(utils.WithStagedMethods):
     state = state.copy()
 
     state.estimator_state = lax.cond(
-        self.should_update_inverse_cache(state),
+        self._should_update_inverse_cache(state),
         functools.partial(
-            self.estimator.update_cache,
-            identity_weight=self.l2_reg + precon_damping,
+            self._estimator.update_cache,
+            identity_weight=self._l2_reg + precon_damping,
             exact_powers=self._exact_powers_to_cache,
             approx_powers=self._approx_powers_to_cache,
             eigenvalues=False,
@@ -871,23 +862,24 @@ class Optimizer(utils.WithStagedMethods):
 
     return state
 
-  @utils.staged
+  @functools.partial(utils.staged, static_argnums=3)
   def _compute_preconditioned_gradient(
       self,
       state: State,
       grads: Params,
       precon_damping: Array,
+      can_distribute: bool = True,
   ) -> Params:
     """Computes the preconditioned gradient."""
 
-    return self.estimator.multiply_matpower(
+    return self._estimator.multiply_matpower(
         state=state.estimator_state,
         parameter_structured_vector=grads,
-        identity_weight=self.l2_reg + precon_damping,
+        identity_weight=self._l2_reg + precon_damping,
         power=self._precon_power,
         exact_power=self._use_exact_inverses,
         use_cached=self._use_cached_inverses,
-        pmap_axis_name=self.pmap_axis_name,
+        pmap_axis_name=self.pmap_axis_name if can_distribute else None,
         norm_to_scale_identity_weight_per_block=self._norm_to_scale_identity_weight_per_block,
     )
 
@@ -925,10 +917,10 @@ class Optimizer(utils.WithStagedMethods):
     assert not (self._use_adaptive_learning_rate or self._use_adaptive_momentum)
 
     if self._always_use_exact_qmodel_for_damping_adjustment:
-      quad_model = self.compute_exact_quad_model_filtered(
+      quad_model = self._compute_exact_quad_model_filtered(
           [delta], grads, func_args, state=state)
     else:
-      quad_model = self.compute_approx_quad_model(state, [delta], grads)
+      quad_model = self._compute_approx_quad_model(state, [delta], grads)
 
     w = jnp.ones([])
     return self._solve_quad_model(quad_model, damping, [w])[1]
@@ -957,7 +949,7 @@ class Optimizer(utils.WithStagedMethods):
 
       assert fixed_coefficients[0] is None or fixed_coefficients[1] is None
 
-      quad_model = self.compute_exact_quad_model_filtered(
+      quad_model = self._compute_exact_quad_model_filtered(
           vectors, grads, func_args, state=state,
           fixed_coefficients=fixed_coefficients)
 
@@ -970,7 +962,7 @@ class Optimizer(utils.WithStagedMethods):
 
       if should_update_damping:
 
-        delta = self.weighted_sum_of_objects(vectors, fixed_coefficients)
+        delta = self._weighted_sum_of_objects(vectors, fixed_coefficients)
 
         quad_change = self._compute_quad_change_for_damping_adapt(
             state, delta, grads, damping, func_args)
@@ -981,17 +973,17 @@ class Optimizer(utils.WithStagedMethods):
       return fixed_coefficients, quad_change
 
   @utils.staged
-  def compute_loss_from_registrations(
+  def _compute_loss_from_registrations(
       self,
       func_args: FuncArgsVariants
   ) -> Array:
 
-    loss = self.estimator.compute_func_from_registered(
+    loss = self._estimator.compute_func_from_registered(
         func_args, self._batch_size_extractor(func_args[-1]))
 
-    if self.l2_reg > 0.0:
+    if self._l2_reg > 0.0:
 
-      l2_reg_val = self.l2_reg / 2 * utils.squared_norm(
+      l2_reg_val = self._l2_reg / 2 * utils.squared_norm(
           func_args[self._params_index])
 
       loss += l2_reg_val
@@ -1013,7 +1005,7 @@ class Optimizer(utils.WithStagedMethods):
 
     return Optimizer.State(
         velocities=jax.tree_util.tree_map(jnp.zeros_like, params),
-        estimator_state=self.estimator.init(
+        estimator_state=self._estimator.init(
             rng=rng,
             func_args=make_func_args(
                 params=params,
@@ -1119,7 +1111,7 @@ class Optimizer(utils.WithStagedMethods):
 
     return state, accumulator
 
-  def burnin(
+  def _burnin_phase(
       self,
       num_steps: int,
       params: Params,
@@ -1189,7 +1181,7 @@ class Optimizer(utils.WithStagedMethods):
           ema_old=self._curvature_ema,
           ema_new=1.0,
           precon_damping=precon_damping,
-          sync=self.should_sync_estimator(state),
+          sync=self._should_sync_estimator(state),
       )
 
     del rng  # should not be used after this point!
@@ -1231,14 +1223,14 @@ class Optimizer(utils.WithStagedMethods):
         )
 
     # Compute the parameter update (delta)
-    delta = self.weighted_sum_of_objects(vectors, coefficients)
+    delta = self._weighted_sum_of_objects(vectors, coefficients)
 
     # Update parameters
     new_params = jax.tree_util.tree_map(jnp.add, params, delta)
 
     if should_update_damping or self._use_step_rejection:
 
-      new_loss = self.compute_loss_value((new_params,) + func_args[1:])
+      new_loss = self._compute_loss_value((new_params,) + func_args[1:])
       # Sync
       new_loss = utils.pmean_if_pmap(new_loss, self.pmap_axis_name)
 
@@ -1405,7 +1397,7 @@ class Optimizer(utils.WithStagedMethods):
       raise ValueError("Exactly one of the arguments ``data_iterator`` and "
                        "``batch`` must be provided.")
 
-    step_counter_int = self.verify_args_and_get_step_counter(
+    step_counter_int = self._verify_args_and_get_step_counter(
         step_counter=state.step_counter,
         learning_rate=learning_rate,
         momentum=momentum,
@@ -1415,7 +1407,7 @@ class Optimizer(utils.WithStagedMethods):
 
     if step_counter_int == 0:
 
-      if self.num_burnin_steps > 0:
+      if self._num_burnin_steps > 0:
 
         if data_iterator is None:
           raise ValueError("If num_burnin_steps > 0, data_iterator must be "
@@ -1423,8 +1415,8 @@ class Optimizer(utils.WithStagedMethods):
 
         rng, burnin_rng = self._rng_split(rng, 2)
 
-        state, func_state = self.burnin(
-            num_steps=self.num_burnin_steps,
+        state, func_state = self._burnin_phase(
+            num_steps=self._num_burnin_steps,
             params=params,
             state=state,
             rng=burnin_rng,
@@ -1439,21 +1431,21 @@ class Optimizer(utils.WithStagedMethods):
     if (step_counter_int == 0 and self._use_adaptive_damping
         and self._use_initial_damping_calibration):
 
-      assert self.num_burnin_steps > 0
+      assert self._num_burnin_steps > 0
 
-      state = self.calibrate_initial_damping(
+      state = self._calibrate_initial_damping(
           params, state, rng, batch, func_state, learning_rate, momentum)
 
-    should_update_estimate_curvature = self.should_update_estimate_curvature(
+    should_update_estimate_curvature = self._should_update_estimate_curvature(
         step_counter_int
     )
-    should_update_damping = self.should_update_damping(step_counter_int)
+    should_update_damping = self._should_update_damping(step_counter_int)
 
     return self._step(
         params, state, rng, batch, func_state, learning_rate, momentum, damping,
         should_update_estimate_curvature, should_update_damping)
 
-  def calibrate_initial_damping(
+  def _calibrate_initial_damping(
       self,
       params: Params,
       state: State,
@@ -1498,7 +1490,7 @@ class Optimizer(utils.WithStagedMethods):
         return state
 
   @utils.auto_scope_method
-  def compute_exact_quad_model_filtered(
+  def _compute_exact_quad_model_filtered(
       self,
       vectors: Sequence[Params],
       grads: Params,
@@ -1515,7 +1507,7 @@ class Optimizer(utils.WithStagedMethods):
     # free and compute the full model.
 
     if fixed_coefficients is None:  # can we get rid of this?
-      return self.compute_exact_quad_model(
+      return self._compute_exact_quad_model(
           vectors, grads, func_args, state=state, **kwargs)
 
     assert len(vectors) == len(fixed_coefficients)
@@ -1524,7 +1516,7 @@ class Optimizer(utils.WithStagedMethods):
     def if_momentum_coeff_zero():
 
       # Only pass in the vectors that won't be multiplied by zero
-      quad_model = self.compute_exact_quad_model(
+      quad_model = self._compute_exact_quad_model(
           vectors[:1], grads, func_args, state=state, **kwargs)
 
       # Repad the quad model with zeroes for the removed entries
@@ -1533,7 +1525,7 @@ class Optimizer(utils.WithStagedMethods):
           for arr in quad_model
       )
 
-    # Add a check here to save compiling both branches in the static case
+    # This saves compiling both branches in the static case
     if (isinstance(fixed_coefficients[1], float)
         and fixed_coefficients[1] == 0.0):
 
@@ -1546,12 +1538,12 @@ class Optimizer(utils.WithStagedMethods):
     # return jax.lax.cond(
     #     fixed_coefficients[1] == 0.0,
     #     if_momentum_coeff_zero,
-    #     lambda: self.compute_exact_quad_model(
+    #     lambda: self._compute_exact_quad_model(
     #         vectors, grads, func_args, state=state),
     # )
 
-    return self.compute_exact_quad_model(vectors, grads, func_args, state=state,
-                                         **kwargs)
+    return self._compute_exact_quad_model(
+        vectors, grads, func_args, state=state, **kwargs)
 
   def _maybe_mask_out_unregularized_parameters(
       self, params: Params, log_paths: bool = False) -> Params:
@@ -1589,7 +1581,7 @@ class Optimizer(utils.WithStagedMethods):
     )
 
   @utils.auto_scope_method
-  def compute_exact_quad_model(
+  def _compute_exact_quad_model(
       self,
       vectors: Sequence[Params],
       grads: Params,
@@ -1612,26 +1604,33 @@ class Optimizer(utils.WithStagedMethods):
 
     del state
 
-    if self.estimator.default_mat_type == "fisher":
+    if self._estimator.default_mat_type == "fisher":
       c_factor_v = tuple(self._implicit.multiply_fisher_factor_transpose
                          (func_args, vi) for vi in vectors)
-    elif self.estimator.default_mat_type == "ggn":
+    elif self._estimator.default_mat_type == "ggn":
       c_factor_v = tuple(self._implicit.multiply_ggn_factor_transpose
                          (func_args, vi) for vi in vectors)
     else:
       raise ValueError(f"Unrecognized estimator.mat_type="
-                       f"{self.estimator.default_mat_type}.")
+                       f"{self._estimator.default_mat_type}.")
 
     masked_vectors = tuple(self._maybe_mask_out_unregularized_parameters(vi)
                            for vi in vectors)
-    return (utils.matrix_of_inner_products(c_factor_v),
-            utils.matrix_of_inner_products(vectors),
-            utils.matrix_of_inner_products(masked_vectors),
-            utils.vector_of_inner_products(grads, vectors))
+
+    # pylint: disable=invalid-name
+    A = utils.matrix_of_inner_products(c_factor_v)
+    D = utils.matrix_of_inner_products(vectors)
+    R = utils.matrix_of_inner_products(masked_vectors)
+    b = utils.vector_of_inner_products(grads, vectors)
+    # pylint: enable=invalid-name
+
+    quad_model_params = (A, D, R, b)
+
+    return utils.pmean_if_pmap(quad_model_params, self.pmap_axis_name)
 
   @functools.partial(utils.staged, donate_argnums=2)
   @utils.auto_scope_method
-  def compute_approx_quad_model(
+  def _compute_approx_quad_model(
       self,
       state: State,
       vectors: Sequence[Params],
@@ -1641,7 +1640,7 @@ class Optimizer(utils.WithStagedMethods):
 
     # v_i^T C v_j
     def c_times_v(v):
-      return self.estimator.multiply(
+      return self._estimator.multiply(
           state=state.estimator_state,
           parameter_structured_vector=v,
           identity_weight=0.0,
@@ -1658,8 +1657,7 @@ class Optimizer(utils.WithStagedMethods):
             utils.matrix_of_inner_products(vectors),
             utils.vector_of_inner_products(grads, vectors))
 
-  @utils.staged
-  def compute_quadratic_model_value(
+  def _evaluate_quadratic_model(
       self,
       a: Array,
       a_damped: Array,
@@ -1690,10 +1688,12 @@ class Optimizer(utils.WithStagedMethods):
         quadratic model is minimized to compute the 'optimal' coefficient value.
       reg_coeff: The L2 regularization parameter to use. If None, the default
         value from the optimizer is used.
+
     Returns:
-     A list of coefficients which are the solution (and include any values that
-     are not None from fixed_weights) and the value of the quadratic model
+     A tuple of coefficients which are the solution (and include any values that
+     are not None from fixed_weights), and the value of the quadratic model
      function for this solution (as a scalar).
+
     Raises:
       The function currently supports only up to two vectors, hence if you
       provide more, it will raise a ``NotImplementedError``.
@@ -1701,22 +1701,12 @@ class Optimizer(utils.WithStagedMethods):
 
     if reg_coeff is None:
       # use default l2 regularisation value.
-      reg_coeff = self.l2_reg
+      reg_coeff = self._l2_reg
 
     # pylint: disable=invalid-name
     A_no_diag, D, R, b = quad_model_parameters
     A = A_no_diag + reg_coeff * R
     A_damped = A + damping * D
-
-    # Sync.
-    # TODO(jamesmartens): we should perform this earlier since it's
-    # dangerous to have the convention of doing it right before use (especially
-    # since the convention everywhere else is to sync quantities immediately
-    # after they are first computed).
-    A, A_damped, b = utils.pmean_if_pmap((A, A_damped, b), self.pmap_axis_name)
-
-    # This needs explicit annotation
-    A_damped: Array
 
     if all(c is None for c in fixed_coefficients):
       # Adapt all coefficients
@@ -1725,10 +1715,10 @@ class Optimizer(utils.WithStagedMethods):
         # This special case arises at the first iteration, because all
         # velocities are zeros.
         special_case = jnp.logical_and(A_damped[0, 0] == 0, b[0] == 0)
-        w = - lax.cond(special_case, lambda: b, lambda: b / A_damped[0])
+        w = -lax.cond(special_case, lambda: b, lambda: b / A_damped[0])
 
       elif len(fixed_coefficients) == 2:
-        w = - utils.psd_solve_maybe_zero_last_idx(A_damped, b)
+        w = -utils.psd_solve_maybe_zero_last_idx(A_damped, b)
 
       else:
         raise NotImplementedError()
@@ -1756,7 +1746,7 @@ class Optimizer(utils.WithStagedMethods):
     w = tuple(w)
     w: tuple[Numeric, ...]
 
-    quad_model_change = self.compute_quadratic_model_value(
+    quad_model_change = self._evaluate_quadratic_model(
         A, A_damped, b, jnp.array(w))
 
     return w, quad_model_change
@@ -1777,9 +1767,9 @@ class Optimizer(utils.WithStagedMethods):
 
     # Update damping
     should_increase = rho_not_nan < self._damping_lower_threshold
-    increased_damping = current_damping / self.damping_decay_factor
+    increased_damping = current_damping / self._damping_decay_factor
     should_decrease = rho_not_nan > self._damping_upper_threshold
-    decreased_damping = current_damping * self.damping_decay_factor
+    decreased_damping = current_damping * self._damping_decay_factor
 
     damping = jnp.select([should_decrease, should_increase],
                          [decreased_damping, increased_damping],
@@ -1788,7 +1778,7 @@ class Optimizer(utils.WithStagedMethods):
     return jnp.clip(damping, self._min_damping, self._max_damping), rho
 
   @utils.staged
-  def weighted_sum_of_objects(
+  def _weighted_sum_of_objects(
       self,
       objects: Sequence[utils.PyTree],
       coefficients: Sequence[Numeric],

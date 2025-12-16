@@ -110,6 +110,7 @@ sum_of_objects = math.sum_objects
 pytree_size = math.pytree_size
 inner_product = math.inner_product
 symmetric_matrix_inner_products = math.symmetric_matrix_inner_products
+asymmetric_matrix_inner_products = math.asymmetric_matrix_inner_products
 matrix_of_inner_products = math.matrix_of_inner_products
 vector_of_inner_products = math.vector_of_inner_products
 block_permuted = math.block_permuted

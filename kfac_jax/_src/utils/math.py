@@ -230,6 +230,11 @@ def symmetric_matrix_inner_products(
 ) -> Array:
   """Computes a matrix of the inner products between the two sequences.
 
+  Note that this function assumes that the output matrix is symmetric (up to
+  numerical precision), and if this happens not to be the case, it won't
+  actually compute the matrix of inner products in the expected way. If the
+  output matrix is not symmetric, use `asymmetric_matrix_inner_products`instead.
+
   Args:
     vectors1: A sequence of identically structured PyTrees, each one
       representing a single vector.
@@ -252,6 +257,39 @@ def symmetric_matrix_inner_products(
         m[i].append(m[j][i])
       else:
         m[i].append(ip_function(v_i, v_j))
+
+  return jnp.asarray(m)
+
+
+def asymmetric_matrix_inner_products(
+    vectors1: Sequence[ArrayTree],
+    vectors2: Sequence[ArrayTree],
+    ip_function: Callable[[ArrayTree, ArrayTree], Array] = inner_product,
+) -> Array:
+  """Computes a matrix of the inner products between the two sequences.
+
+  Unlike `symmetric_matrix_inner_products`, this function doesn't assume that
+  the output matrix is symmetric, and therefore can be slower when it is indeed
+  symmetric.
+
+  Args:
+    vectors1: A sequence of identically structured PyTrees, each one
+      representing a single vector.
+    vectors2: A sequence of identically structured PyTrees, each one
+      representing a single vector.
+    ip_function: A callable which computes the inner product between PyTrees.
+      Defaults to the standard dot-product.
+
+  Returns:
+    A matrix `m` with elements `m[i, j]`.
+  """
+  if len(vectors1) != len(vectors2):
+    raise ValueError("The two sequences should have the same length.")
+
+  m = [[] for _ in vectors1]
+  for i, v_i in enumerate(vectors1):
+    for v_j in vectors2:
+      m[i].append(ip_function(v_i, v_j))
 
   return jnp.asarray(m)
 
