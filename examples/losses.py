@@ -49,7 +49,7 @@ def l2_regularizer(
 def sigmoid_cross_entropy(
     logits: Array,
     labels: Array,
-    weight: float = 1.0,
+    weight: Numeric = 1.0,
     register_loss: bool = True,
     extra_registration_kwargs: dict[str, Any] | None = None,
     registration_module: types.ModuleType = kfac_jax,
@@ -93,10 +93,6 @@ def softmax_cross_entropy(
   extra_registration_kwargs = extra_registration_kwargs or {}
 
   if register_loss:
-
-    if not isinstance(weight, float):
-      raise NotImplementedError("Non-constant loss weights are not currently "
-                                "supported.")
 
     registration_module.register_softmax_cross_entropy_loss(
         logits,
@@ -147,7 +143,7 @@ def softmax_cross_entropy(
 def squared_error(
     prediction: Array,
     targets: Array,
-    weight: float = 1.0,
+    weight: Numeric = 1.0,
     register_loss: bool = True,
     mask: Array | None = None,
     extra_registration_kwargs: dict[str, Any] | None = None,
