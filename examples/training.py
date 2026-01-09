@@ -520,7 +520,8 @@ class SupervisedExperiment(abc.ABC):
     logging.info("%s %s %s", "=" * 20, "Parameters", "=" * 20)
     for path, var in jax.tree_util.tree_flatten_with_path(self._params)[0]:
       # Because of pmap
-      var = var[0]
+      var = kfac_jax.utils.get_first(var)
+      assert isinstance(var, Array)  # params are always arrays
       logging.info(
           "%s - %s, %s",
           "-".join(format_path_entry(p) for p in path),
@@ -541,7 +542,8 @@ class SupervisedExperiment(abc.ABC):
         # For __class__ entries
         continue
       # Because of pmap
-      var = var[0]
+      var = kfac_jax.utils.get_first(var)
+      assert isinstance(var, Array)  # optimizer state entries are always arrays
       logging.info(
           "%s - %s, %s",
           "/".join(format_path_entry(p) for p in path),
@@ -671,7 +673,10 @@ class SupervisedExperiment(abc.ABC):
       for i in range(gathered_stat.shape[0]):
         stats[f"{name}_{i}"] = jnp.array([gathered_stat[i]])
 
-    stats = jax.tree_util.tree_map(functools.partial(jnp.mean, axis=0), stats)
+    if jax.config.jax_pmap_shmap_merge:
+      stats = kfac_jax.utils.get_first(stats)
+    else:
+      stats = jax.tree_util.tree_map(functools.partial(jnp.mean, axis=0), stats)
 
     self._python_step += 1
     stats["progress"] = self.progress(self._python_step)

@@ -82,24 +82,27 @@ pmap_mean = jax.pmap(lambda x: lax.pmean(x, "i"), axis_name="i")
 pmap_sum = jax.pmap(lambda x: lax.psum(x, "i"), axis_name="i")
 
 
-def index_if_not_scalar(value: Numeric, index: int = 0) -> Numeric:
-  """Index `value` at axis 0 if it is not a scalar, otherwise return it."""
-
-  if isinstance(value, Array):
-
-    if value.ndim > 0:
-      return value[index]
-    else:
-      return value
-
-  elif isinstance(value, (float, int)):
-    return value
-  raise ValueError("The input should be an instance of `Numeric`.")
-
-
 def get_first(obj: TArrayTree) -> TArrayTree:
   """Index the PyTree leaves `x` of `obj` by `x[0]` if they are not scalars."""
-  return jax.tree_util.tree_map(index_if_not_scalar, obj)
+
+  def _get_first(value: Numeric) -> Numeric:
+    if isinstance(value, Array):
+
+      if value.ndim > 0:
+        if jax.config.jax_pmap_shmap_merge:
+          shard_data = value.addressable_shards[0].data
+          if not value.sharding.is_fully_replicated:
+            return shard_data.squeeze(0)
+          return shard_data
+        return value[0]
+      else:
+        return value
+
+    elif isinstance(value, (float, int)):
+      return value
+    raise ValueError("The input should be an instance of `Numeric`.")
+
+  return jax.tree_util.tree_map(_get_first, obj)
 
 
 def get_mean(obj: TArrayTree) -> TArrayTree:
