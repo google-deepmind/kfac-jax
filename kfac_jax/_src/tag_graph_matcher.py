@@ -1784,12 +1784,11 @@ class TaggedFunction:
     labels = ["|".join(self._param_labels.get(p, ["Orphan"]))
               for p in self._func_graph.params_vars]
     logging.info("=" * 50)
-    logging.info(
-        "Graph parameter registrations:\n%s",
-        pprint.pformat(jax.tree_util.tree_unflatten(
-            self._func_graph.params_tree, labels,
-        ))
-    )
+    logging.info("Graph parameter registrations:")
+    for line in pprint.pformat(jax.tree_util.tree_unflatten(
+        self._func_graph.params_tree, labels,
+    )).split("\n"):
+      logging.info(line)
     logging.info("=" * 50)
 
   def check_multiple_registrations(self):
