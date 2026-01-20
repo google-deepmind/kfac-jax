@@ -704,7 +704,7 @@ class SupervisedExperiment(abc.ABC):
       global_step: Array,
       params: Params,
       func_state: FuncState | None,
-      opt_state: kfac_jax.Optimizer.State | optimizers.OptaxState,
+      opt_state: kfac_jax.Optimizer.State | optimizers.OptaxState | None,
       rng: PRNGKey | None,
       batch: Batch,
   ) -> dict[str, Array]:
@@ -725,7 +725,7 @@ class SupervisedExperiment(abc.ABC):
 
     stats["loss"] = loss
 
-    if hasattr(opt_state, "data_seen"):
+    if opt_state is not None and hasattr(opt_state, "data_seen"):
       stats["data_seen"] = opt_state.data_seen
 
     return stats
@@ -868,12 +868,16 @@ class SupervisedExperiment(abc.ABC):
 class JaxlineExperiment(SupervisedExperiment, experiment.AbstractExperiment):
   """A Jaxline supervised experiment."""
 
-  CHECKPOINT_ATTRS = {
-      "_params": "params",
-      "_params_polyak": "params_polyak",
-      "_state": "state",
-      "_opt_state": "opt_state",
-  }
+  @property
+  def CHECKPOINT_ATTRS(self) -> dict[str, str]:
+    attrs = {
+        "_params": "params",
+        "_params_polyak": "params_polyak",
+        "_state": "state",
+    }
+    if self.mode != "eval" or self._schedule_free_enabled:
+      attrs["_opt_state"] = "opt_state"
+    return attrs
 
   NON_BROADCAST_CHECKPOINT_ATTRS = {"_python_step": "python_step"}
 
