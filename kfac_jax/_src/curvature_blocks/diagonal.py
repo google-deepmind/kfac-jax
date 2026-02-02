@@ -286,6 +286,7 @@ class Conv2DDiagonal(Diagonal):
       identity_weight: Numeric,
       batch_size: Numeric,
   ) -> Diagonal.State:
+
     del identity_weight
 
     # Copy this first since we mutate it later in this function.
@@ -334,6 +335,7 @@ class ScaleAndShiftDiagonal(Diagonal):
       identity_weight: Numeric,
       batch_size: Numeric,
   ) -> Diagonal.State:
+
     del identity_weight
 
     # Copy this first since we mutate it later in this function.
