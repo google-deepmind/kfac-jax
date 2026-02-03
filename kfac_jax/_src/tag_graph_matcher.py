@@ -565,21 +565,22 @@ class GraphMatch:
   def param_graph_variables(self) -> Vars:
     return [self.variables_map[p] for p in self.pattern.graph.params_vars]
 
-  def create_eqn(
+  def create_eqns_and_update_env(
       self,
       env: dict[Var, Var],
       make_var_func: MakeVarFunc,
   ) -> JaxprEqns:
-    """Creates a new ``JaxprEqn`` for this match."""
+    """Creates a new equations for this match and inserts output vars in the environment."""
 
     in_vars = [self.variables_map[k] for k in self.pattern.graph.jaxpr.invars]
-    in_vars = [env.get(v, v) for v in in_vars]
-    out_vars = [self.variables_map[k]
-                for k in self.pattern.graph.jaxpr.outvars]
+    in_vars = [env.get(v, v) if isinstance(v, Var) else v for v in in_vars]
+
+    out_vars = [self.variables_map[k] for k in self.pattern.graph.jaxpr.outvars]
     out_vars = [env.get(v, v) for v in out_vars]
 
     eqns = self.pattern.tag_ctor(
         in_vars, out_vars, self.graph_eqns, make_var_func)
+
     assert len(out_vars) == len(eqns[-1].outvars)
 
     # Reinsert the output in the environment
@@ -1059,7 +1060,7 @@ def clean_layer_tags_jaxpr(
     jaxpr: J,
     only_remove_auto_tags: bool = False,
 ) -> tuple[J, tuple[tags.LayerTagEqn | JaxprEqn, ...]]:
-  """Removes layer tags from a Jaxpr."""
+  """Returns a Jaxpr with layer tags removed, and the layer tags (which properly refer to variables in the returned Jaxpr)."""
 
   closed_jaxpr = to_closed_jaxpr(jaxpr)
   eqns = []
@@ -1067,22 +1068,24 @@ def clean_layer_tags_jaxpr(
   var_map = {}
 
   for eqn in closed_jaxpr.jaxpr.eqns:
-    if isinstance(eqn.primitive, tags.LayerTag) and (
-        not only_remove_auto_tags
-        or (
-            eqn.params["meta"].name is not None
-            and "Auto" in eqn.params["meta"].name
-        )
-    ):
+
+    if (isinstance(eqn.primitive, tags.LayerTag)
+        and (not only_remove_auto_tags or (eqn.params["meta"].name is not None
+                                           and "Auto" in eqn.params["meta"].name
+                                           )
+            )
+        ):
       for ind1, ind2 in enumerate(eqn.params["meta"].outputs_index):
         var_map[eqn.outvars[ind1]] = eqn.invars[ind2]
+
     else:
       eqns.append(eqn)
+
     if isinstance(eqn.primitive, tags.LayerTag):
       layer_tag_eqns.append(eqn)
 
   def remap_input_vars(
-      eqns: list[JaxprEqn], var_map: dict[jex.core.Var, jex.core.Var]
+      eqns: Sequence[JaxprEqn], var_map: Mapping[jex.core.Var, jex.core.Var]
   ) -> list[JaxprEqn]:
     """Remaps the input variables of a JaxprEqn.
 
@@ -1093,15 +1096,20 @@ def clean_layer_tags_jaxpr(
     Returns:
       A new list of JaxprEqns with remapped input variables.
     """
+
     eqns_new = []
+
     for eqn in eqns:
+
       new_invars = []
       for var in eqn.invars:
         if not isinstance(var, jex.core.Literal) and var in var_map.keys():
           new_invars.append(var_map[var])
         else:
           new_invars.append(var)
+
       eqns_new.append(eqn.replace(invars=new_invars))
+
     return eqns_new
 
   eqns_new = remap_input_vars(eqns, var_map)
@@ -1411,7 +1419,7 @@ def _scale_and_shift_parameter_extractor(
     reversed_eqns: Sequence[JaxprEqn],
     variant: str = "scale_and_shift",
 ) -> Mapping[str, Any]:
-  """Extracts all parameters from the `conv_general_dilated` operator."""
+  """Extracts all parameters from the scale and shift operator."""
 
   has_scale = False
 
@@ -1781,14 +1789,17 @@ class TaggedFunction:
   def print_parameter_tags(self):
     """Prints all the parameter registrations."""
     # Print all tag parameter registrations
+
     labels = ["|".join(self._param_labels.get(p, ["Orphan"]))
               for p in self._func_graph.params_vars]
     logging.info("=" * 50)
     logging.info("Graph parameter registrations:")
+
     for line in pprint.pformat(jax.tree_util.tree_unflatten(
         self._func_graph.params_tree, labels,
     )).split("\n"):
-      logging.info(line)
+      logging.info("%s", line)
+
     logging.info("=" * 50)
 
   def check_multiple_registrations(self):
@@ -2067,7 +2078,8 @@ def _auto_register_tags(
 
       if match is not None:
 
-        for additional_eqn in match.create_eqn(env, make_var_func):
+        for additional_eqn in match.create_eqns_and_update_env(env,
+                                                               make_var_func):
           eqns.append(additional_eqn)
 
         # Mark automatic registration

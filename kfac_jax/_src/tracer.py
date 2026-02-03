@@ -220,22 +220,28 @@ class ProcessedJaxpr(utils.Finalizable):
       allow_left_out_params: Whether to raise an error if any of the parameter
         variables is not included in any layer tag.
     """
+
     super().__init__()
+
     self.jaxpr = jaxpr
     self.consts = consts
     self.in_tree = in_tree
     self.params_index = params_index
-    # clean jaxpr of layer tags at this point
+
     closed_jaxpr = jex.core.ClosedJaxpr(jaxpr=self.jaxpr, consts=self.consts)
     self.jaxpr, self.layer_tags = tgm.clean_layer_tags_jaxpr(closed_jaxpr)
     self.jaxpr = self.jaxpr.jaxpr
+
     _, self.loss_tags = extract_tags(self.jaxpr)
+
     name_layer_tags(self.layer_tags)
+
     self.layer_tags, self.layer_indices = order_layer_tags(
         params_vars_flat=self.params_vars_flat,
         layer_tags=self.layer_tags,
         allow_left_out_params=allow_left_out_params,
     )
+
     self.finalize()
 
   @property
@@ -322,6 +328,7 @@ class ProcessedJaxpr(utils.Finalizable):
     Returns:
       A :class:`~ProcessedJaxpr` representing the model function.
     """
+
     func_args = tuple(func_args)
 
     if auto_register_tags:
@@ -426,7 +433,9 @@ def cached_transformation(
     evaluates the transformation of ``func`` at ``func_args``. The extra
     ``args`` are any additional array arguments passed to the transformation,
     while the last flag indicates whether to just return the
-    :class:`~ProcessedJaxpr` instead of the transformation output.
+    :class:`~ProcessedJaxpr` instead of the transformation output. Also returns
+    a function that returns the processed Jaxpr of `func` for a given set of
+    function arguments.
   """
   cache = {}
 
@@ -435,6 +444,7 @@ def cached_transformation(
     key = make_cache_key(func_args)
 
     if key not in cache:
+
       # Process the function
       processed_jaxpr = ProcessedJaxpr.make_from_func(
           func=func,
@@ -786,15 +796,16 @@ def _layer_tag_vjp(
 ) -> LayerTagVjp:
   """Computes primal values and tangents w.r.t. all layer tags.
 
-  The function has similar interface to :func:`jax.vjp`. It takes as inputs the
-  concrete values of the primals at which the Jacobian will be evaluated. It
-  returns a pair of ``(losses, vjp_func)``, where losses is a tuple of
-  :class:`~LossFunction` objects and ``vjp_func`` is a function
-  taking as inputs the concrete values of the tangents of the inputs for each
-  loss tag (corresponding to a loss object in ``losses``) and returns a list of
+  The returned function has similar interface to :func:`jax.vjp`. It takes as
+  inputs the concrete values of the primals at which the Jacobian will be
+  evaluated. It returns a pair of ``(losses, vjp_func)``, where losses is a
+  tuple of :class:`~LossFunction` objects and ``vjp_func`` is a function taking
+  as inputs the concrete values of the tangents of the inputs for each loss tag
+  (corresponding to a loss object in ``losses``) and returns a list of
   quantities computed for each layer tag in ``processed_jaxpr``. Each entry of
-  the list is a dictionary with the following self-explanatory keys:
-  ``inputs, outputs, params, outputs_tangents, params_tangents``.
+  the list is a :class:`~LayerVjpData` with the keys ``"primals", "tangents"``
+  mapping to LayerData objects that each separate the primals (or tangents) into
+  inputs, outputs, and parameters.
 
   Args:
     processed_jaxpr: The :class:`~ProcessedJaxpr` representing the model
@@ -804,10 +815,17 @@ def _layer_tag_vjp(
   Returns:
     The computed ``losses`` and ``vjp_func`` pair.
   """
-  layer_vars_flat = jax.tree_util.tree_leaves(
+  layer_tag_invars = jax.tree_util.tree_leaves(
       [tag.invars for tag in processed_jaxpr.layer_tags]
   )
-  layer_input_vars = list(set(layer_vars_flat))
+  # We exclude literals because they are not hashable. Their values will be read
+  # properly for the primals due to the special handling in tgm.read_env. For
+  # the tangents they won't matter, since only layer inputs (which together with
+  # the layer outputs and params form the layer tag invars) can be literals, and
+  # we explicitly exclude the inputs from the tangents (since their computation
+  # isn't generally correct anyway).
+  layer_tag_invars = list(set(v for v in layer_tag_invars
+                              if not isinstance(v, jex.core.Literal)))
 
   def forward() -> tuple[Array, ...]:
     """Computes the values of all inputs to all **layer** tags."""
@@ -834,9 +852,10 @@ def _layer_tag_vjp(
           break
       else:
         write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
+
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 
-    return tuple(read(layer_input_vars))
+    return tuple(read(layer_tag_invars))
 
   def forward_aux(
       aux: dict[Var, Array],
@@ -863,8 +882,7 @@ def _layer_tag_vjp(
     read = functools.partial(tgm.read_env, env)
 
     def write(variables: list[jex.core.Var], values: list[Array]) -> None:
-      # if not isinstance(variables, list):
-      #   variables = [variables]
+
       tgm.write_env(env, variables, values)
 
       for v in variables:
@@ -888,6 +906,7 @@ def _layer_tag_vjp(
       input_values = read(eqn.invars)
 
       if isinstance(eqn.primitive, tags.LossTag):
+
         loss: LossFunction = tags.loss_eqn_construct_loss(eqn, *input_values)
 
         losses_p_dependants.append(loss.parameter_dependants)
@@ -897,6 +916,7 @@ def _layer_tag_vjp(
 
         if num_losses_passed == len(processed_jaxpr.loss_tags):
           break
+
       else:
         write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, input_values))
 
@@ -907,7 +927,7 @@ def _layer_tag_vjp(
 
   # First compute the primal values for the inputs to all layer tags
   layer_input_values = forward()
-  primals = zip(layer_input_vars, layer_input_values)
+  primals = zip(layer_tag_invars, layer_input_values)
 
   # Update with the values of all parameters, which are inputs to the function
   primals = itertools.chain(
@@ -924,7 +944,7 @@ def _layer_tag_vjp(
   aux_values = jax.tree_util.tree_map(jnp.zeros_like, layer_input_values)
 
   # Create a mapping from all layer tag inputs to the zero values
-  aux_dict = VarMap.create(zip(layer_input_vars, aux_values))
+  aux_dict = VarMap.create(zip(layer_tag_invars, aux_values))
 
   # These values would now allow us to compute gradients wrt the layer tags
   # inputs, which are intermediate expressions in the Jaxpr.
@@ -950,10 +970,7 @@ def _layer_tag_vjp(
       all **layer** tags. The values are provided as a dictionary with keys:
       ``inputs, outputs, params, outputs_tangent, params_tangent``.
     """
-    all_tangents = aux_vjp(tangents)
-    tangents_dict, inputs_tangents = all_tangents[0], all_tangents[1:]
-    inputs_tangents = jax.tree_util.tree_leaves(inputs_tangents)
-    tangents_dict.update(zip(processed_jaxpr.jaxpr.invars, inputs_tangents))
+    [tangents_dict] = aux_vjp(tangents)
 
     read_primals = functools.partial(tgm.read_env, primals_dict)
     read_tangents = functools.partial(tgm.read_env, tangents_dict)
@@ -962,13 +979,19 @@ def _layer_tag_vjp(
     for tag in processed_jaxpr.layer_tags:
 
       primals = read_primals(tag.invars)  # pytype: disable=wrong-arg-types
-      # Due to the ability to preprocess inputs for tags the input gradients
-      # could be potentially wrong (e.g. zero) so we don't include them.
       tangents = read_tangents(tag.invars)
 
+      # The input tangents could be potentially wrong, so we don't include them.
+      # This is because the one of the invars could be a Literal, which breaks
+      # the above logic, or one of the invars could be shared with another
+      # layer, so that both layers would get the sum of the input tangents for
+      # that variable. There is also the possibility of "input preprocessing",
+      # which affects the tag inputs but not the corresponding layer in the
+      # graph.
       layers_info.append(LayerVjpData(
           primals=tag.primitive.layer_data(primals, tag.params),
-          tangents=tag.primitive.layer_data(tangents, tag.params),
+          tangents=tag.primitive.layer_data(tangents, tag.params,
+                                            exclude_inputs=True),
       ))
 
     return tuple(layers_info)
@@ -992,8 +1015,9 @@ def compute_all_losses(
       parameters.
 
   Returns:
-    A function that computes the Jacobian-vector product with signature
-    `Callable[[FuncArgs], tuple[LossFunction, ...]]`.
+    A function that computes all loss objects with signature
+    `Callable[[FuncArgs], tuple[LossFunction, ...]]`, and a function that
+    returns the processed Jaxpr of `func` for a given set of function arguments.
   """
   # Note that this function is independent of any layer tags, hence we can avoid
   # calling the auto registration.
@@ -1029,7 +1053,8 @@ def loss_tags_vjp(
 
   Returns:
     A function that computes the vector-Jacobian product with signature
-    `Callable[[FuncArgs], LossTagsVjp]`.
+    `Callable[[FuncArgs], LossTagsVjp]`, and a function that returns the
+    processed Jaxpr of `func` for a given set of function arguments.
   """
   # Note that this function is independent of any layer tags, hence we can avoid
   # calling the auto registration.
@@ -1066,7 +1091,8 @@ def loss_tags_jvp(
 
   Returns:
     A function that computes the Jacobian-vector product with signature
-    `Callable[[FuncArgs, Params], LossTagsVjp]`.
+    `Callable[[FuncArgs, Params], LossTagsVjp]`, and a function that returns
+    the processed Jaxpr of `func` for a given set of function arguments.
   """
   # Note that this function is independent of any layer tags, hence we can avoid
   # calling the auto registration.
@@ -1103,7 +1129,8 @@ def loss_tags_hvp(
   Returns:
     A function that computes the Hessian-vector product and also returns all
     losses, with signature `Callable[[FuncArgs, Params],
-    tuple[LossTagsVjp, tuple[LossFunction, ...]]`.
+    tuple[LossTagsVjp, tuple[LossFunction, ...]]`, and a function that returns
+    the processed Jaxpr of `func` for a given set of function arguments.
   """
   # Note that this function is independent of any layer tags, hence we can avoid
   # calling the auto registration.
@@ -1129,12 +1156,13 @@ def layer_tags_vjp(
   The returned function has a similar interface to :func:`jax.vjp`. It takes as
   inputs the concrete values of the primals at which the Jacobian will be
   evaluated. It returns a pair ``(losses, vjp_func)``, where ``losses`` is a
-  tuple of :class:`~LossFunction` objects, and ``vjp_func`` is a function
-  taking as inputs the concrete values of the tangents of the inputs for each
-  loss tag (corresponding to a loss object in ``losses``) and returns a list of
+  tuple of :class:`~LossFunction` objects and ``vjp_func`` is a function taking
+  as inputs the concrete values of the tangents of the inputs for each loss tag
+  (corresponding to a loss object in ``losses``) and returns a list of
   quantities computed for each layer tag in ``processed_jaxpr``. Each entry of
-  the list is a dictionary with the following self-explanatory keys:
-  ``inputs, outputs, params, outputs_tangents, params_tangents``.
+  the list is a :class:`~LayerVjpData` with the keys ``"primals", "tangents"``
+  mapping to LayerData objects that each separate the primals (or tangents) into
+  inputs, outputs, and parameters.
 
   Args:
     func: The model function, which must include at least one loss registration.
@@ -1149,8 +1177,8 @@ def layer_tags_vjp(
       to the automatic registration pass.
 
   Returns:
-    Returns a function that computes primal values and tangents wrt all layer
-    tags, with signature `Callable[[FuncArgs, Params], LossTagsVjp]`.
+    Returns the above described function, and a function that returns the
+    processed Jaxpr of `func` for a given set of function arguments.
   """
 
   return cached_transformation(

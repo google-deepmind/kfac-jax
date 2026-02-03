@@ -30,6 +30,7 @@ Arrays = tuple[Array, ...]
 @jax.tree_util.register_pytree_node_class
 class LayerData(Generic[T]):
   """A compact class for all data related to a single layer."""
+
   inputs: tuple[T, ...]
   outputs: tuple[T, ...]
   params: tuple[T, ...]
@@ -293,11 +294,15 @@ class LayerTag(jex.core.Primitive):
       args: Sequence[T],
       params: dict[str, Any],
       err_suffix: str = "",
+      exclude_inputs: bool = False,
   ) -> LayerData[T]:
-    """Splits the operands of the primitive into ``(outputs, inputs, params)``."""
+    """Splits the operands of the primitive into a ``LayerData`` object."""
+
     meta = get_and_verify_layer_meta(args, params, err_suffix)
+
     return LayerData(
-        inputs=tuple(args[i] for i in meta.inputs_index),
+        inputs=(() if exclude_inputs
+                else tuple(args[i] for i in meta.inputs_index)),
         outputs=tuple(args[i] for i in meta.outputs_index),
         params=tuple(args[i] for i in meta.params_index),
     )
