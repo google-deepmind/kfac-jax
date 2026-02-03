@@ -635,7 +635,7 @@ def match_equations(
     If at least one of the pattern variables is a parameter, but the
     corresponding graph variable is not or vise-versa, the method does not
     update the current variables map and returns ``False``. Similarly, if at
-    least one of the graph variables is a :class:`iteral` (meaning a
+    least one of the graph variables is a :class:`Literal` (meaning a
     constant, independent of the function inputs) and the corresponding
     pattern variable is not an input to the pattern, it returns ``False``. In
     all other cases it updates the map and returns ``True``.

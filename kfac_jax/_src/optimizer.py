@@ -887,7 +887,7 @@ class Optimizer(utils.WithStagedMethods):
   def _maybe_apply_norm_constraint(
       self, grads: Params, preconditioned_grads: Params, coefficient: Array
   ) -> tuple[Params, Params | None]:
-    """Scales precon grad to have F-weighted norm <= norm_constraint."""
+    """Scales precon grad to have curvature-weighted norm <= norm_constraint."""
 
     if self._norm_constraint is None:
       return preconditioned_grads, None

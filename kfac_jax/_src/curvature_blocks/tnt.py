@@ -66,6 +66,7 @@ class NaiveTNT(KroneckerFactored):
       identity_weight: Numeric,
       batch_size: Numeric,
   ) -> KroneckerFactored.State:
+
     del identity_weight
 
     # Copy this first since we mutate it later in this function.
@@ -119,6 +120,7 @@ class DenseTNT(kronecker_factored.DenseTwoKroneckerFactored):
       identity_weight: Numeric,
       batch_size: Numeric,
   ) -> KroneckerFactored.State:
+
     del identity_weight
 
     # Copy this first since we mutate it later in this function.
@@ -216,6 +218,7 @@ class Conv2DTNT(kronecker_factored.Conv2DTwoKroneckerFactored):
       identity_weight: Numeric,
       batch_size: Numeric,
   ) -> KroneckerFactored.State:
+
     del identity_weight
 
     # Copy this first since we mutate it later in this function.
