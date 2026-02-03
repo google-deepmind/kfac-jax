@@ -333,6 +333,7 @@ class OptaxPreconditioner:
         identity_weight=self.get_identity_weight(estimator_state),
         rng=rng,
         func_args=func_args,
+        pmap_axis_name=self.pmap_axis_name,
     )
 
     return jax.lax.cond(

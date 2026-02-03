@@ -115,6 +115,7 @@ class ExplicitExactCurvature(block_diagonal.BlockDiagonalCurvature):
       rng: PRNGKey,
       func_args: utils.FuncArgs,
       estimation_mode: str | None = None,
+      pmap_axis_name: str | None = None,
   ) -> BlockDiagonalState:
 
     rng = jax.random.split(rng, batch_size)
@@ -142,6 +143,7 @@ class ExplicitExactCurvature(block_diagonal.BlockDiagonalCurvature):
           rng=rng[index],
           func_args=args,
           estimation_mode=estimation_mode,
+          pmap_axis_name=pmap_axis_name,
       )
 
     return jax.lax.fori_loop(0, batch_size, single_state_update, state)

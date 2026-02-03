@@ -273,6 +273,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       rng: PRNGKey,
       func_args: utils.FuncArgs,
       estimation_mode: str | None = None,
+      pmap_axis_name: str | None = None,
   ) -> StateType:
     """Updates the estimator's curvature estimates.
 
@@ -294,6 +295,9 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       estimation_mode: The type of curvature estimator to use. By default
         (e.g. if ``None``) will use ``self.default_estimation_mode``. Must be
         one of ``self.valid_estimation_modes``.
+      pmap_axis_name: The name of a pmap axis, which will be used for
+        aggregating values over multiple devices if needed.
+
     Returns:
       The updated state.
     """
