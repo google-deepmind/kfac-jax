@@ -19,7 +19,6 @@ import jax
 from jax import core
 from jax import lax
 import jax.numpy as jnp
-
 from kfac_jax._src.utils import types
 
 jax_version = (
@@ -119,17 +118,85 @@ def get_sum(obj: TArrayTree) -> TArrayTree:
   return get_first(pmap_sum(obj))
 
 
-broadcast_all_local_devices = jax.pmap(lambda x: x)
+_broadcast_all_local_devices_legacy = jax.pmap(lambda x: x)
+_broadcast_all_local_devices_cache: dict[
+    str | None, Callable[[TArrayTree], TArrayTree]
+] = {}
+
+
+def broadcast_all_local_devices(
+    obj: TArrayTree, axis_name: str | None = None
+) -> TArrayTree:
+  """Broadcasts `obj` to all local Jax devices.
+
+  Args:
+    obj: A pytree to broadcast.
+    axis_name: Optional axis name for the pmap. When jax_pmap_shmap_merge is
+      enabled, this should match the axis_name of subsequent pmap calls that
+      will use the result to avoid mesh sharding mismatches.
+
+  Returns:
+    The broadcasted pytree.
+  """
+  if types.tree_is_empty(obj):
+    return obj
+
+  # When jax_pmap_shmap_merge is disabled or no axis_name provided, use pmap.
+  if not jax.config.jax_pmap_shmap_merge or axis_name is None:
+    return _broadcast_all_local_devices_legacy(obj)
+
+  # When jax_pmap_shmap_merge is enabled and axis_name is provided, create
+  # arrays with a mesh and partitioned sharding for compatibility with pmap.
+  devices = jax.local_devices()
+  mesh = jax.sharding.Mesh(devices, (axis_name,))
+  sharding = jax.NamedSharding(mesh, jax.sharding.PartitionSpec(axis_name))
+
+  def _broadcast_with_axis(x):
+    return jax.device_put(x, sharding)
+
+  return jax.tree_util.tree_map(_broadcast_with_axis, obj)
+
+
 pmap_zeros_like = jax.pmap(lambda x: jax.tree_util.tree_map(jnp.zeros_like, x))
 jit_zeros_like = jax.jit(lambda x: jax.tree_util.tree_map(jnp.zeros_like, x))
 
 
-def replicate_all_local_devices(obj: TArrayTree) -> TArrayTree:
-  """Replicates `obj` to all local Jax devices."""
+def replicate_all_local_devices(
+    obj: TArrayTree, axis_name: str | None = None
+) -> TArrayTree:
+  """Replicates `obj` to all local Jax devices.
+
+  Args:
+    obj: A pytree to replicate.
+    axis_name: Optional axis name for sharding. When jax_pmap_shmap_merge is
+      enabled and the result will be passed to a pmap with a specific axis_name,
+      this should match to avoid mesh sharding mismatches.
+
+  Returns:
+    The replicated pytree.
+  """
   if types.tree_is_empty(obj):
     return obj
 
-  return jax.device_put_replicated(obj, devices=jax.local_devices())
+  devices = jax.local_devices()
+
+  # When jax_pmap_shmap_merge is disabled, or when no axis_name is provided,
+  # use the original device_put_replicated implementation.
+  if not jax.config.jax_pmap_shmap_merge or axis_name is None:
+    return jax.device_put_replicated(obj, devices=devices)
+
+  # When jax_pmap_shmap_merge is enabled and axis_name is provided, create
+  # arrays with a mesh that uses the specified axis_name. Stack the data and
+  # use device_put with the appropriate sharding.
+  mesh = jax.sharding.Mesh(devices, (axis_name,))
+  sharding = jax.NamedSharding(mesh, jax.P(axis_name))
+
+  def _replicate_with_axis(x):
+    # Stack to add the device dimension, then device_put with sharding.
+    stacked = jnp.stack([x] * len(devices))
+    return jax.device_put(stacked, sharding)
+
+  return jax.tree_util.tree_map(_replicate_with_axis, obj)
 
 
 def make_different_rng_key_on_all_devices(rng: PRNGKey) -> PRNGKey:
