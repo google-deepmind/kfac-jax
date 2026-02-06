@@ -11,11 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""K-FAC utilities for classes with staged methods."""
+"""K-FAC JAX staging utilities."""
 
 import functools
 import inspect
-import numbers
 import operator
 from typing import Any, Callable, Sequence
 
@@ -150,12 +149,6 @@ class WithStagedMethods(misc.Finalizable):
       return func
 
 
-def _is_scalar(x: Any) -> bool:
-  return isinstance(x, numbers.Number) or (
-      isinstance(x, jax.Array) and not x.shape
-  )
-
-
 def staged(
     method: Callable[..., TArrayTree],
     static_argnums: int | Sequence[int] | None = None,
@@ -243,7 +236,7 @@ def staged(
 
         bcast_argnums = [
             i for i in range(len(args)) if (i in original_static_argnums
-                                            or _is_scalar(args[i]))]
+                                            or parallel.is_scalar(args[i]))]
 
         outs = []
         non_bcast_args = [args[i] if i not in bcast_argnums else None
@@ -275,7 +268,7 @@ def staged(
         # Compute in_axes so we broadcast any argument that is a scalar
         in_axes = [None]
         for i in range(len(args)):
-          if _is_scalar(args[i]):
+          if parallel.is_scalar(args[i]):
             in_axes.append(None)
           else:
             in_axes.append(0)

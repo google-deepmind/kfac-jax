@@ -13,7 +13,7 @@
 # limitations under the License.
 """K-FAC utilities for multi-device execution."""
 import functools
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 import jax
 from jax import core
@@ -82,25 +82,29 @@ pmap_mean = jax.pmap(lambda x: lax.pmean(x, "i"), axis_name="i")
 pmap_sum = jax.pmap(lambda x: lax.psum(x, "i"), axis_name="i")
 
 
+def is_scalar(x: Any) -> bool:
+  return isinstance(x, (float, int)) or (
+      isinstance(x, jax.Array) and not x.shape
+  )
+
+
 def get_first(obj: TArrayTree) -> TArrayTree:
-  """Index the PyTree leaves `x` of `obj` by `x[0]` if they are not scalars."""
+  """Gets the first device's contents from replicated pmap outputs."""
 
   def _get_first(value: Numeric) -> Numeric:
-    if isinstance(value, Array):
-
-      if value.ndim > 0:
-        if jax.config.jax_pmap_shmap_merge:
-          shard_data = value.addressable_shards[0].data
-          if not value.sharding.is_fully_replicated:
-            return shard_data.squeeze(0)
-          return shard_data
-        return value[0]
-      else:
-        return value
-
-    elif isinstance(value, (float, int)):
+    if is_scalar(value):
       return value
-    raise ValueError("The input should be an instance of `Numeric`.")
+    if not jax.config.jax_pmap_shmap_merge:
+      return value[0]
+
+    assert isinstance(value, jax.Array)
+    if isinstance(value.sharding, jax.sharding.SingleDeviceSharding):
+      return value[0]
+    assert isinstance(value.sharding, jax.NamedSharding)
+    shard_data = value.addressable_shards[0].data
+    if value.sharding.spec[0] is None:
+      return shard_data
+    return shard_data.squeeze(0)
 
   return jax.tree_util.tree_map(_get_first, obj)
 
