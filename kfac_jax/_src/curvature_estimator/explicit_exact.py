@@ -48,7 +48,8 @@ class ExplicitExactCurvature(block_diagonal.BlockDiagonalCurvature):
 
   def __init__(
       self,
-      func: utils.Func,
+      func: utils.Func | None = None,
+      func_and_grad: utils.ValueAndGradFunc | None = None,
       default_estimation_mode: str | None = None,
       layer_tag_to_block_ctor:
       Mapping[str, CurvatureBlockCtor] | None = None,
@@ -59,10 +60,14 @@ class ExplicitExactCurvature(block_diagonal.BlockDiagonalCurvature):
     """Initializes the curvature instance.
 
     Args:
-      func: The model function, which should have at least one registered loss.
+      func: The loss function, which should have at least one registered loss.
+        Should return only the loss value and not any auxiliary data. Only one
+        of ``func`` or ``func_and_grad`` should be provided.
+      func_and_grad: A function returning the loss value and the gradient as a
+        tuple. Only one of ``func`` or ``func_and_grad`` should be provided.
       default_estimation_mode: The estimation mode which to use by default when
         calling ``self.update_curvature_matrix_estimate``. If ``None`` this will
-        be ``'fisher_exact'``.
+        be ``'ggn_curvature_prop'``.
       layer_tag_to_block_ctor: An optional dict mapping tags to specific classes
         of block approximations, which to override the default ones.
       auto_register_tags: This argument will be ignored since this subclass
@@ -77,8 +82,15 @@ class ExplicitExactCurvature(block_diagonal.BlockDiagonalCurvature):
         ``BlockDiagonalCurvature``.
     """
 
+    if (func is None) == (func_and_grad is None):
+      raise ValueError("Exactly one of `func` and `func_and_grad` must be "
+                       "provided.")
+
     if layer_tag_to_block_ctor is None:
       layer_tag_to_block_ctor = dict(generic=curvature_blocks.NaiveFull)
+
+    if func_and_grad is not None:
+      func = lambda *args, **kwargs: func_and_grad(*args, **kwargs)[0]
 
     def retagged_func(params, *args):
 
@@ -115,6 +127,7 @@ class ExplicitExactCurvature(block_diagonal.BlockDiagonalCurvature):
       rng: PRNGKey,
       func_args: utils.FuncArgs,
       estimation_mode: str | None = None,
+      pmap_axis_name: str | None = None,
   ) -> BlockDiagonalState:
 
     rng = jax.random.split(rng, batch_size)
@@ -142,6 +155,7 @@ class ExplicitExactCurvature(block_diagonal.BlockDiagonalCurvature):
           rng=rng[index],
           func_args=args,
           estimation_mode=estimation_mode,
+          pmap_axis_name=pmap_axis_name,
       )
 
     return jax.lax.fori_loop(0, batch_size, single_state_update, state)

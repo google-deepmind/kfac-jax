@@ -12,19 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Module containing the BlockDiagonalCurvature class."""
+
 import functools
 from typing import Any, Callable, Sequence, Mapping
 from absl import logging
 import jax
 from jax import scipy
 import jax.numpy as jnp
+
 from kfac_jax._src import curvature_blocks
 from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import loss_functions
 from kfac_jax._src import tracer
 from kfac_jax._src import utils
 from kfac_jax._src.curvature_estimator import curvature_estimator
+
 import numpy as np
+
 
 # Types for annotation
 Array = utils.Array
@@ -79,7 +83,14 @@ class BlockDiagonalCurvature(
     curvature_estimator.CurvatureEstimator["BlockDiagonalCurvature.State"]):
   """Block diagonal curvature estimator class.
 
+    NOTE: all of these options, except for fisher_empirical_direct_synced, will
+    perform their computations per-device (using the per-device mini-batch and
+    batch size), and then average the resulting 2nd-order statistics (used to
+    define the curvature approximation or preconditioner matrix) across the
+    devices.
+
     Supports for the following estimation modes:
+
       * fisher_gradients - the basic estimation approach from the original
         K-FAC paper.
 
@@ -102,7 +113,24 @@ class BlockDiagonalCurvature(
       * fisher_empirical - computes the 'empirical' Fisher information
         matrix (which uses the data's distribution for the targets, as
         opposed to the true Fisher which uses the model's distribution) and
-        requires that each registered loss have specified targets.
+        requires that each registered loss have specified targets. This mode
+        will introduce an additional normalization of the 2nd-order statistics
+        by the batch size (on top of the normalization by batch size done in the
+        curvature block classes).
+
+      * fisher_empirical_direct - similar to fisher_empirical, but bypasses the
+        loss registration machinery, and just computes the gradients for the
+        statistics by reading the gradient from ``func_and_grad`` if provided
+        (or applying ``jax.grad`` to ``func`` instead). This will typically be
+        faster than fisher_empirical (as the gradient computation will be merged
+        by XLA with the one done for the optimizer). Currently, this mode only
+        supports curvature block approximations that use parameter gradient
+        information.
+
+      * fisher_empirical_direct_synced - the same as fisher_empirical_direct,
+        but syncs the gradients across the devices before computing the
+        2nd-order statistics from these. This option is useful to exactly
+        reproduce the preconditioner used in RMSProp/Adam, for example.
 
       * ggn_curvature_prop - Analogous to fisher_curvature_prop, but
         estimates the Generalized Gauss-Newton matrix (GGN).
@@ -127,7 +155,8 @@ class BlockDiagonalCurvature(
 
   def __init__(
       self,
-      func: utils.Func,
+      func: utils.Func | None = None,
+      func_and_grad: utils.ValueAndGradFunc | None = None,
       default_estimation_mode: str | None = None,
       layer_tag_to_block_ctor:
       Mapping[str, CurvatureBlockCtor] | None = None,
@@ -144,7 +173,17 @@ class BlockDiagonalCurvature(
     """Initializes the BlockDiagonalCurvature instance.
 
     Args:
-      func: The model function, which should have at least one registered loss.
+      func: The loss function, which should have at least one registered loss.
+        Should return only the loss value and not any auxiliary data. For the
+        purposes of the ``'fisher_empirical_direct[_synced]'`` estimation modes,
+        the loss value should be normalized by the batch size. (For other
+        estimation modes it won't matter either way.) Only one of ``func`` or
+        ``func_and_grad`` should be provided.
+      func_and_grad: A function returning the loss value and the gradient as a
+        tuple. For the purposes of the ``'fisher_empirical_direct[_synced]'``
+        estimation modes, the loss value should be normalized by the batch size.
+        (For other estimation modes it won't matter either way.) Only one of
+        ``func`` or ``func_and_grad`` should be provided.
       default_estimation_mode: The estimation mode which to use by default when
         calling ``self.update_curvature_matrix_estimate``. If ``None`` this will
         be ``'ggn_curvature_prop'``.
@@ -179,6 +218,7 @@ class BlockDiagonalCurvature(
 
     super().__init__(
         func=func,
+        func_and_grad=func_and_grad,
         default_estimation_mode=default_estimation_mode or "ggn_curvature_prop",
         **kwargs,
     )
@@ -188,7 +228,7 @@ class BlockDiagonalCurvature(
     self._auto_register_tags = auto_register_tags
     self._auto_register_kwargs = auto_register_kwargs or {}
     self._vjp, self._jaxpr_extractor = tracer.layer_tags_vjp(
-        func=func,
+        func=self.func,
         params_index=self.params_index,
         auto_register_tags=auto_register_tags,
         **self._auto_register_kwargs
@@ -208,7 +248,8 @@ class BlockDiagonalCurvature(
   def valid_estimation_modes(self) -> tuple[str, ...]:
     """The valid estimation modes for this estimator."""
     return ("fisher_gradients", "fisher_empirical", "fisher_exact",
-            "fisher_curvature_prop", "ggn_exact", "ggn_curvature_prop")
+            "fisher_curvature_prop", "ggn_exact", "ggn_curvature_prop",
+            "fisher_empirical_direct", "fisher_empirical_direct_synced")
 
   def _check_finalized(self):
     if not self.finalized:
@@ -536,6 +577,40 @@ class BlockDiagonalCurvature(
     blocks_eigenvalues = self.block_eigenvalues(state, use_cached)
     return jnp.concatenate(blocks_eigenvalues, axis=0)
 
+  def _package_params_curvature_into_blocks_info(
+      self,
+      params: utils.Params,
+      params_curvature: utils.Params,
+  ) -> list[tracer.LayerVjpData]:
+
+    params_flat = jax.tree_util.tree_leaves(params)
+    params_curvature_flat = jax.tree_util.tree_leaves(params_curvature)
+    blocks_info: list[tracer.LayerVjpData] = []
+
+    for indices in self.jaxpr.layer_indices:
+
+      primals = tags.LayerData(
+          inputs=(),
+          outputs=(),
+          params=tuple(params_flat[i] for i in indices)
+          )
+      tangents = tags.LayerData(
+          inputs=(),
+          outputs=(),
+          params=tuple(params_curvature_flat[i] for i in indices)
+          )
+
+      blocks_info.append(tracer.LayerVjpData(
+          primals=primals,
+          tangents=tangents,
+      ))
+
+    assert (
+        len(blocks_info) == self.num_blocks
+    ), f"{len(blocks_info)=}, {self.num_blocks=}"
+
+    return blocks_info
+
   # Helper function that updates the blocks given a vjp vector
   def _update_blocks(
       self,
@@ -621,6 +696,7 @@ class BlockDiagonalCurvature(
       rng: PRNGKey,
       func_args: utils.FuncArgs,
       estimation_mode: str | None = None,
+      pmap_axis_name: str | None = None,  # only used for fisher_empirical_direct_synced  # pylint: disable=line-too-long
   ) -> State:
 
     if not self.finalized:
@@ -667,8 +743,54 @@ class BlockDiagonalCurvature(
           loss.grad_of_evaluate(None, coefficient_mode="regular")
           for loss in losses)
 
+      # losses_vjp(vjp_vec) will return a gradient which isn't normalized by
+      # batch_size. Meanwhile, the curvature block classes will normalize their
+      # statistics (which are 2nd-order stats of the gradients) by just
+      # batch_size, instead of the batch_size**2. Thus, we need to divide by
+      # sqrt(batch_size) here to correct for that (so that the 2nd-order stats
+      # are effectively normalized by batch_size an additional time). Note that
+      # we *don't* perform this extra normalization for the regular Fisher or
+      # GGN computations, because the proper thing to do for their statistics is
+      # to normalize by just batch_size, and not batch_size**2. (This is due to
+      # how the vectors used to form the statistics for the Fisher/GGN are, by
+      # construction, statistically uncorrelated across the mini-batch.)
+      vjp_vec = utils.scalar_div(vjp_vec, jnp.sqrt(batch_size))
+
       return self._update_blocks(
           losses_vjp(vjp_vec),
+          state=state,
+          ema_old=ema_old,
+          ema_new=ema_new,
+          identity_weight=identity_weight,
+          batch_size=batch_size,
+      )
+
+    elif estimation_mode in {"fisher_empirical_direct",
+                             "fisher_empirical_direct_synced"}:
+
+      # This gradient computation is redundant with the one computed inside of
+      # the optimizer. Fortunately, XLA should optimize it away. One way that
+      # this can fail to happen is if self.func is defined using a slightly
+      # different function than was used to construct func_and_grad (e.g., if
+      # self.func was defined as value part of an external jax.value_and_grad
+      # call).
+      if self.func_and_grad is not None:
+        params_grad = self.func_and_grad(*func_args)[1]
+      else:
+        params_grad = jax.grad(self.func, self.params_index)(*func_args)
+
+      # Since self.func should be normalized by the batch size, we don't need
+      # to perform any additional normalization here (unlike with
+      # "fisher_empirical").
+
+      if estimation_mode == "fisher_empirical_direct_synced":
+        params_grad = utils.pmean_if_pmap(params_grad, pmap_axis_name)
+
+      block_info = self._package_params_curvature_into_blocks_info(
+          func_args[self.params_index], params_grad)
+
+      return self._update_blocks(
+          block_info,
           state=state,
           ema_old=ema_old,
           ema_new=ema_new,

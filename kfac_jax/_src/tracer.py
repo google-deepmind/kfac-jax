@@ -440,6 +440,7 @@ def cached_transformation(
   cache = {}
 
   def retrieve(func_args):
+
     # Construct a key and check cache for hits
     key = make_cache_key(func_args)
 

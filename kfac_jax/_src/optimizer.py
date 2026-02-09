@@ -192,6 +192,7 @@ class Optimizer(utils.WithStagedMethods):
       should_vmap_estimator_samples: bool = False,
       norm_to_scale_identity_weight_per_block: str | None = None,
       precon_power: Scalar = -1.0,
+      exact_quad_model_matrix_type: str | None = None,
   ):
     """Initializes the kfac_jax optimizer with the provided settings.
 
@@ -241,7 +242,11 @@ class Optimizer(utils.WithStagedMethods):
         ``value_func_has_aux`` is ``True``, and finally ``loss`` if
         ``value_func_has_state`` and ``value_func_has_aux`` are both ``False``.
         This should be consistent with how JAX's ``value_and_grad`` API function
-        is typically used.
+        is typically used. Note that the value (and its gradient) should be
+        normalized by the batch size, as is standard convention. Additional
+        normalization, such as by the sequence length, is up to the user, but
+        must by properly reported in the loss registration (by setting the
+        ``weight`` arguments in the loss registration functions.)
       l2_reg: Scalar. Set this value to tell the optimizer what L2
         regularization coefficient you are using (if any). Note the coefficient
         appears in the regularizer as ``coeff / 2 * sum(param**2)``. This adds
@@ -462,6 +467,10 @@ class Optimizer(utils.WithStagedMethods):
         K-FAC use -1 by default, but ``kfac_jax`` can simulate other optimizers
         like RMSProp by using -0.5 (along with appropriate changes to
         ``layer_tag_to_block_ctor`` and  ``estimation_mode``). (Default: -1)
+      exact_quad_model_matrix_type: The type of matrix to use when computing the
+        exact quadratic model (used in the adaptive learning rate and momentum).
+        Can be ``'fisher'``, ``'ggn'``, or None. If None, will use the value
+        implied by ``estimation_mode``. (Default: None)
     """
 
     super().__init__(
@@ -558,6 +567,8 @@ class Optimizer(utils.WithStagedMethods):
 
     self._precon_power = precon_power
 
+    self._exact_quad_model_matrix_type = exact_quad_model_matrix_type
+
     self._params_index = 0
     batch_index = int(value_func_has_state + value_func_has_rng + 1)
 
@@ -575,10 +586,26 @@ class Optimizer(utils.WithStagedMethods):
         patterns_to_skip=patterns_to_skip,
     ))
 
+    if value_func_for_estimator is None:
+      # The reason we pass value_and_grad_func to the estimator here and not
+      # value_func, is that the latter is usually produced using the primal
+      # computation which is part of jax.grad. For whatever reason, when JAX
+      # takes the gradient of this, it produces a slightly different graph than
+      # if we apply jax.grad directly to the original function. This then makes
+      # it impossible for XLA to merge the two computations, defeating the
+      # purpose of the estimation modes "fisher_empirical_direct[_synced]".
+      func_and_grad_for_estimator = convert_value_and_grad_to_clean_value_and_grad(  # pylint: disable=line-too-long
+          value_and_grad_func,
+          has_aux=value_func_has_aux or value_func_has_state,
+      )
+
+    else:
+      func_and_grad_for_estimator = None
+
     # Curvature estimator
     self._estimator = estimator_ctor(
-        func=(self._value_func if value_func_for_estimator is None else
-              value_func_for_estimator),
+        func=value_func_for_estimator,
+        func_and_grad=func_and_grad_for_estimator,
         default_estimation_mode=estimation_mode,
         params_index=self._params_index,
         batch_index=batch_index,
@@ -623,6 +650,12 @@ class Optimizer(utils.WithStagedMethods):
       return self._precon_power
     else:
       return None
+
+  @property
+  def _mat_type_for_exact_quad_model(self) -> str:
+    if self._exact_quad_model_matrix_type is None:
+      return self._estimator.default_mat_type
+    return self._exact_quad_model_matrix_type
 
   def _should_update_damping(self, step_counter: int) -> bool:
     """Whether at the current step the optimizer should update the damping."""
@@ -805,6 +838,7 @@ class Optimizer(utils.WithStagedMethods):
         batch_size=self._batch_size_extractor(func_args[-1]),
         rng=rng,
         func_args=func_args,
+        pmap_axis_name=self.pmap_axis_name,
     )
     return jax.lax.cond(
         sync,
@@ -1604,15 +1638,15 @@ class Optimizer(utils.WithStagedMethods):
 
     del state
 
-    if self._estimator.default_mat_type == "fisher":
+    if self._mat_type_for_exact_quad_model == "fisher":
       c_factor_v = tuple(self._implicit.multiply_fisher_factor_transpose
                          (func_args, vi) for vi in vectors)
-    elif self._estimator.default_mat_type == "ggn":
+    elif self._mat_type_for_exact_quad_model == "ggn":
       c_factor_v = tuple(self._implicit.multiply_ggn_factor_transpose
                          (func_args, vi) for vi in vectors)
     else:
-      raise ValueError(f"Unrecognized estimator.mat_type="
-                       f"{self._estimator.default_mat_type}.")
+      raise ValueError(f"Unrecognized matrix type string for exact quad model:"
+                       f"'{self._mat_type_for_exact_quad_model}'.")
 
     masked_vectors = tuple(self._maybe_mask_out_unregularized_parameters(vi)
                            for vi in vectors)
@@ -1808,6 +1842,30 @@ def convert_value_and_grad_to_value_func(
     return out[0] if has_aux else out
 
   return value_func
+
+
+def convert_value_and_grad_to_clean_value_and_grad(
+    value_and_grad_func: ValueAndGradFunc,
+    has_aux: bool = False,
+) -> utils.ValueAndGradFunc:
+  """Converts a value_and_grad function to return only (loss, grads).
+
+  Args:
+    value_and_grad_func: The function which computes the loss value and the
+      gradients w.r.t. parameters.
+    has_aux: Similar to the meaning in :func:`jax.grad`, whether the
+      ``value_and_grad_func`` returns with the loss value any auxiliary data.
+
+  Returns:
+    A function that returns `(loss, grads)`.
+  """
+
+  def clean_value_and_grad_func(*args, **kwargs) -> tuple[Array, Params]:
+    out, grads = value_and_grad_func(*args, **kwargs)
+    loss = out[0] if has_aux else out
+    return loss, grads
+
+  return clean_value_and_grad_func
 
 
 def make_func_args(

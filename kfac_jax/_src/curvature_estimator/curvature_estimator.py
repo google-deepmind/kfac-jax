@@ -66,7 +66,8 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
 
   def __init__(
       self,
-      func: utils.Func,
+      func: utils.Func | None = None,
+      func_and_grad: utils.ValueAndGradFunc | None = None,
       params_index: int = 0,
       batch_index: int = 1,
       default_estimation_mode: str = "ggn_curvature_prop",
@@ -74,7 +75,11 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
     """Initializes the CurvatureEstimator instance.
 
     Args:
-      func: The model function, which should have at least one registered loss.
+      func: The loss function, which should have at least one registered loss.
+        Should return only the loss value and not any auxiliary data. Only one
+        of ``func`` or ``func_and_grad`` should be provided.
+      func_and_grad: A function returning the loss value and the gradient as a
+        tuple. Only one of ``func`` or ``func_and_grad`` should be provided.
       params_index: The index of the parameters argument in arguments list of
         ``func``.
       batch_index: The index of the batch data argument in arguments list of
@@ -83,6 +88,10 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
         calling :func:`~CurvatureEstimator.update_curvature_matrix_estimate`.
     """
 
+    if (func is None) == (func_and_grad is None):
+      raise ValueError("Exactly one of `func` and `func_and_grad` must be "
+                       "provided.")
+
     if default_estimation_mode not in self.valid_estimation_modes:
       raise ValueError(
           f"Unsupported estimation mode: {default_estimation_mode}. This class "
@@ -90,12 +99,18 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
 
     super().__init__()
 
-    self.func = func
+    if func_and_grad is not None:
+      self.func = lambda *args, **kwargs: func_and_grad(*args, **kwargs)[0]
+    else:
+      self.func = func
+
+    self.func_and_grad = func_and_grad
+
     self.params_index = params_index
     self.batch_index = batch_index
     self.default_estimation_mode = default_estimation_mode
     self.compute_losses, _ = tracer.compute_all_losses(
-        func=func, params_index=params_index
+        func=self.func, params_index=params_index
     )
 
   @property
@@ -273,6 +288,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       rng: PRNGKey,
       func_args: utils.FuncArgs,
       estimation_mode: str | None = None,
+      pmap_axis_name: str | None = None,
   ) -> StateType:
     """Updates the estimator's curvature estimates.
 
@@ -294,6 +310,9 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
       estimation_mode: The type of curvature estimator to use. By default
         (e.g. if ``None``) will use ``self.default_estimation_mode``. Must be
         one of ``self.valid_estimation_modes``.
+      pmap_axis_name: The name of a pmap axis, which will be used for
+        aggregating values over multiple devices if needed.
+
     Returns:
       The updated state.
     """
