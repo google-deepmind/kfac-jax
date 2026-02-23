@@ -24,7 +24,7 @@ from kfac_jax._src import tracer
 from kfac_jax._src import utils
 
 
-__version__ = "0.0.7"
+__version__ = "0.0.8"
 
 # Patches Second Moments
 patches_moments = patches_second_moment.patches_moments
