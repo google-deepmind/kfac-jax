@@ -73,6 +73,7 @@ pmean_if_pmap = parallel.pmean_if_pmap
 psum_if_pmap = parallel.psum_if_pmap
 pmap_mean = parallel.pmap_mean
 pmap_sum = parallel.pmap_sum
+using_legacy_pmap = parallel.using_legacy_pmap
 get_first = parallel.get_first
 get_mean = parallel.get_mean
 get_sum = parallel.get_sum

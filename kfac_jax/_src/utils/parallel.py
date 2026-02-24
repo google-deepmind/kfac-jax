@@ -87,22 +87,35 @@ def is_scalar(x: Any) -> bool:
   )
 
 
+def using_legacy_pmap() -> bool:
+  """Returns whether the legacy pmap is being used."""
+  if "jax_pmap_shmap_merge" in jax.config.values:
+    return not jax.config.jax_pmap_shmap_merge
+  return False
+
+
 def get_first(obj: TArrayTree) -> TArrayTree:
   """Gets the first device's contents from replicated pmap outputs."""
 
   def _get_first(value: Numeric) -> Numeric:
+
     if is_scalar(value):
       return value
-    if not jax.config.jax_pmap_shmap_merge:
+
+    if using_legacy_pmap():
       return value[0]
 
     assert isinstance(value, jax.Array)
+
     if isinstance(value.sharding, jax.sharding.SingleDeviceSharding):
       return value[0]
+
     assert isinstance(value.sharding, jax.NamedSharding)
+
     shard_data = value.addressable_shards[0].data
     if value.sharding.spec[0] is None:
       return shard_data
+
     return shard_data.squeeze(0)
 
   return jax.tree_util.tree_map(_get_first, obj)
@@ -142,7 +155,7 @@ def broadcast_all_local_devices(
     return obj
 
   # When jax_pmap_shmap_merge is disabled or no axis_name provided, use pmap.
-  if not jax.config.jax_pmap_shmap_merge or axis_name is None:
+  if using_legacy_pmap() or axis_name is None:
     return _broadcast_all_local_devices_legacy(obj)
 
   # When jax_pmap_shmap_merge is enabled and axis_name is provided, create
@@ -182,7 +195,7 @@ def replicate_all_local_devices(
 
   # When jax_pmap_shmap_merge is disabled, or when no axis_name is provided,
   # use the original device_put_replicated implementation.
-  if not jax.config.jax_pmap_shmap_merge or axis_name is None:
+  if using_legacy_pmap() or axis_name is None:
     return jax.device_put_replicated(obj, devices=devices)
 
   # When jax_pmap_shmap_merge is enabled and axis_name is provided, create

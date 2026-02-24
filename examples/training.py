@@ -673,7 +673,7 @@ class SupervisedExperiment(abc.ABC):
       for i in range(gathered_stat.shape[0]):
         stats[f"{name}_{i}"] = jnp.array([gathered_stat[i]])
 
-    if jax.config.jax_pmap_shmap_merge:
+    if not kfac_jax.utils.using_legacy_pmap():
       stats = kfac_jax.utils.get_first(stats)
     else:
       stats = jax.tree_util.tree_map(functools.partial(jnp.mean, axis=0), stats)
