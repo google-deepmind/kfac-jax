@@ -144,9 +144,7 @@ def broadcast_all_local_devices(
 
   Args:
     obj: A pytree to broadcast.
-    axis_name: Optional axis name for the pmap. When jax_pmap_shmap_merge is
-      enabled, this should match the axis_name of subsequent pmap calls that
-      will use the result to avoid mesh sharding mismatches.
+    axis_name: Optional axis name for the pmap.
 
   Returns:
     The broadcasted pytree.
@@ -158,8 +156,6 @@ def broadcast_all_local_devices(
   if using_legacy_pmap() or axis_name is None:
     return _broadcast_all_local_devices_legacy(obj)
 
-  # When jax_pmap_shmap_merge is enabled and axis_name is provided, create
-  # arrays with a mesh and partitioned sharding for compatibility with pmap.
   devices = jax.local_devices()
   mesh = jax.sharding.Mesh(devices, (axis_name,))
   sharding = jax.NamedSharding(mesh, jax.sharding.PartitionSpec(axis_name))
@@ -198,9 +194,6 @@ def replicate_all_local_devices(
   if using_legacy_pmap() or axis_name is None:
     return jax.device_put_replicated(obj, devices=devices)
 
-  # When jax_pmap_shmap_merge is enabled and axis_name is provided, create
-  # arrays with a mesh that uses the specified axis_name. Stack the data and
-  # use device_put with the appropriate sharding.
   mesh = jax.sharding.Mesh(devices, (axis_name,))
   sharding = jax.NamedSharding(mesh, jax.P(axis_name))
 

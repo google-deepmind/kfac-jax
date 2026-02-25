@@ -673,10 +673,7 @@ class SupervisedExperiment(abc.ABC):
       for i in range(gathered_stat.shape[0]):
         stats[f"{name}_{i}"] = jnp.array([gathered_stat[i]])
 
-    if not kfac_jax.utils.using_legacy_pmap():
-      stats = kfac_jax.utils.get_first(stats)
-    else:
-      stats = jax.tree_util.tree_map(functools.partial(jnp.mean, axis=0), stats)
+    stats = kfac_jax.utils.get_first(stats)
 
     self._python_step += 1
     stats["progress"] = self.progress(self._python_step)
