@@ -89,8 +89,6 @@ def is_scalar(x: Any) -> bool:
 
 def using_legacy_pmap() -> bool:
   """Returns whether the legacy pmap is being used."""
-  if "jax_pmap_shmap_merge" in jax.config.values:
-    return not jax.config.jax_pmap_shmap_merge
   return False
 
 
@@ -152,8 +150,8 @@ def broadcast_all_local_devices(
   if types.tree_is_empty(obj):
     return obj
 
-  # When jax_pmap_shmap_merge is disabled or no axis_name provided, use pmap.
-  if using_legacy_pmap() or axis_name is None:
+  # When no axis_name provided, use legacy pmap.
+  if axis_name is None:
     return _broadcast_all_local_devices_legacy(obj)
 
   devices = jax.local_devices()
@@ -177,9 +175,9 @@ def replicate_all_local_devices(
 
   Args:
     obj: A pytree to replicate.
-    axis_name: Optional axis name for sharding. When jax_pmap_shmap_merge is
-      enabled and the result will be passed to a pmap with a specific axis_name,
-      this should match to avoid mesh sharding mismatches.
+    axis_name: Optional axis name for sharding. When the result will be passed
+      to a pmap with a specific axis_name, this should match to avoid mesh
+      sharding mismatches.
 
   Returns:
     The replicated pytree.
@@ -189,9 +187,8 @@ def replicate_all_local_devices(
 
   devices = jax.local_devices()
 
-  # When jax_pmap_shmap_merge is disabled, or when no axis_name is provided,
-  # use the original device_put_replicated implementation.
-  if using_legacy_pmap() or axis_name is None:
+  # When no axis_name is provided, use the original device_put_replicated.
+  if axis_name is None:
     return jax.device_put_replicated(obj, devices=devices)
 
   mesh = jax.sharding.Mesh(devices, (axis_name,))
