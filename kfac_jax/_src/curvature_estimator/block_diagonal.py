@@ -779,12 +779,15 @@ class BlockDiagonalCurvature(
       else:
         params_grad = jax.grad(self.func, self.params_index)(*func_args)
 
-      # Since self.func should be normalized by the batch size, we don't need
-      # to perform any additional normalization here (unlike with
-      # "fisher_empirical").
-
       if estimation_mode == "fisher_empirical_direct_synced":
         params_grad = utils.pmean_if_pmap(params_grad, pmap_axis_name)
+
+      # Since self.func should be normalized by batch_size, and the curvature
+      # block classes will normalize their statistics (which are 2nd-order stats
+      # of the gradients) by batch_size an additional time, the overall
+      # normalization will be batch_size**3. Thus, we need to multiply the
+      # gradients by sqrt(batch_size) here to correct for that.
+      params_grad = utils.scalar_mul(params_grad, jnp.sqrt(batch_size))
 
       block_info = self._package_params_curvature_into_blocks_info(
           func_args[self.params_index], params_grad)
