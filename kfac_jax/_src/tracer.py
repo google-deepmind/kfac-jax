@@ -568,7 +568,7 @@ def construct_compute_losses_inputs(
       if losses_so_far == len(processed_jaxpr.loss_tags):
         break
 
-    return tuple(tuple(p) for p in losses_p_deps), tuple(losses_inputs)
+    return tuple(tuple(p) for p in losses_p_deps), tuple(losses_inputs)  # pytype: disable=bad-return-type
 
   return forward_compute_losses
 

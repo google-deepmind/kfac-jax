@@ -200,7 +200,7 @@ def loss_eqn_construct_loss(
   if not isinstance(eqn.primitive, LossTag):
     raise ValueError("Primitive must be a LossTag.")
 
-  meta: LossMetaData[T] = eqn.params.get("meta")
+  meta: LossMetaData[T] = eqn.params.get("meta")  # pytype: disable=invalid-annotation
   assert meta is not None and isinstance(meta, LossMetaData)
   assert len(eqn.invars) == len(meta.argument_names)
   kwargs = dict(zip(meta.argument_names, args))
@@ -213,7 +213,7 @@ def loss_eqn_class_name(eqn: jex.core.JaxprEqn) -> str:
   if not isinstance(eqn.primitive, LossTag):
     raise ValueError("Primitive must be a LossTag.")
 
-  meta: LossMetaData[T] = eqn.params.get("meta")
+  meta: LossMetaData[T] = eqn.params.get("meta")  # pytype: disable=invalid-annotation
   assert meta is not None and isinstance(meta, LossMetaData)
 
   return meta.loss_class.__name__
