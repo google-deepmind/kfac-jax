@@ -18,7 +18,7 @@ import dataclasses
 import functools
 import itertools
 import pprint
-from typing import Any, Callable, Mapping, Sequence, Set, TypeVar
+from typing import Any, Callable, Mapping, Sequence, Set, TypeVar, TYPE_CHECKING
 
 from absl import logging
 import immutabledict
@@ -66,12 +66,16 @@ TagCtor = Callable[[Vars, Vars, JaxprEqns, MakeVarFunc], JaxprEqn]
 def eval_jaxpr_eqn(eqn: JaxprEqn, in_values: list[T]) -> list[T]:
   """Computes the outputs of the given Jaxpr equation."""
 
-  subfuns, bind_params = eqn.primitive.get_bind_params(eqn.params)
-
   user_context = jex.source_info_util.user_context
 
-  with user_context(eqn.source_info.traceback):
-    output = eqn.primitive.bind(*subfuns, *in_values, **bind_params)
+  if TYPE_CHECKING or jax_version >= (0, 9, 2):
+    bind_params = eqn.primitive.get_bind_params(eqn.params)
+    with user_context(eqn.source_info.traceback):
+      output = eqn.primitive.bind(*in_values, **bind_params)
+  else:
+    subfuns, bind_params = eqn.primitive.get_bind_params(eqn.params)
+    with user_context(eqn.source_info.traceback):
+      output = eqn.primitive.bind(*subfuns, *in_values, **bind_params)
 
   if not isinstance(output, list):
     return [output]
