@@ -307,7 +307,6 @@ class SupervisedExperiment(abc.ABC):
       logging.info("Initializing training data iterator.")
 
       if self.config.training.get("fix_dataset_seed", False):
-
         seed_rng = self.seed_rng
       else:
         # By folding in the step here we ensure that the training data iterator
@@ -322,8 +321,7 @@ class SupervisedExperiment(abc.ABC):
               self._build_train_input,
               split="train",
               seed=int(seed_rng[0]),
-              device_batch_size=self.batch_size.train.per_device_chunk_size,
-              index=0,
+              device_batch_size=self.batch_size.train.per_device,
           )
       )
 
@@ -819,25 +817,19 @@ class SupervisedExperiment(abc.ABC):
             global_step, self._params, self._state, self._opt_state, key, batch)
 
         if params_polyak is not None:
-
           stats_no_polyak = stats
-
           stats = self.eval_batch_pmap(
               global_step, params_polyak, func_state_polyak, self._opt_state,
               key, batch)
-
           stats.update(
               {k + "_no_polyak": v for k, v in stats_no_polyak.items()
                if k != "data_seen"})
 
         if params_schedule_free is not None:
-
           stats_no_sf = stats
-
           stats = self.eval_batch_pmap(
               global_step, params_schedule_free, func_state_schedule_free,
               self._opt_state, key, batch)
-
           stats.update(
               {k + "_no_sf": v for k, v in stats_no_sf.items()
                if k != "data_seen"})
@@ -1043,7 +1035,6 @@ class MnistExperiment(JaxlineExperiment):
       **_: Any,
   ) -> Iterator[Batch]:
     assert split in self.eval_splits
-
     return datasets.mnist_dataset(
         split=split,
         has_labels=self._supervised,
@@ -1110,7 +1101,6 @@ class ImageNetExperiment(JaxlineExperiment):
       **_: Any,
   ) -> datasets.tf.data.Dataset:
     assert split in ("train", "test")
-
     return datasets.imagenet_dataset(
         split="train_eval" if split == "train" else "test",
         seed=seed,
