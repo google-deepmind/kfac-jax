@@ -564,7 +564,6 @@ class SupervisedExperiment(abc.ABC):
       split: str,
       seed: int,
       device_batch_size: int,
-      **_: Any,
   ) -> Iterator[Batch]:
     """Constructs the training dataset."""
 
@@ -690,7 +689,6 @@ class SupervisedExperiment(abc.ABC):
       split: str,
       seed: int,
       device_batch_size: int,
-      **_: Any,
   ) -> Iterator[Batch]:
     """Constructs the evaluation dataset."""
 
@@ -1012,7 +1010,6 @@ class MnistExperiment(JaxlineExperiment):
       split: str,
       seed: int,
       device_batch_size: int,
-      **_: Any,
   ) -> Iterator[Batch]:
     assert split == "train"
     return datasets.mnist_dataset(
@@ -1032,7 +1029,6 @@ class MnistExperiment(JaxlineExperiment):
       split: str,
       seed: int,
       device_batch_size: int,
-      **_: Any,
   ) -> Iterator[Batch]:
     assert split in self.eval_splits
     return datasets.mnist_dataset(
@@ -1082,7 +1078,6 @@ class ImageNetExperiment(JaxlineExperiment):
       split: str,
       seed: int,
       device_batch_size: int,
-      **_: Any,
   ) -> datasets.tf.data.Dataset:
     assert split == "train"
     return datasets.imagenet_dataset(
@@ -1098,7 +1093,6 @@ class ImageNetExperiment(JaxlineExperiment):
       split: str,
       seed: int,
       device_batch_size: int,
-      **_: Any,
   ) -> datasets.tf.data.Dataset:
     assert split in ("train", "test")
     return datasets.imagenet_dataset(
