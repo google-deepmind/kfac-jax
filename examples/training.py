@@ -18,7 +18,6 @@ import collections
 from collections.abc import Mapping
 import copy
 import functools
-import itertools
 import os
 import time
 from typing import Any, Callable, Iterator
@@ -196,7 +195,7 @@ class SupervisedExperiment(abc.ABC):
     """
     self.mode = mode
     self.init_rng, seed_rng = jax.random.split(init_rng)
-    self.seed_rng = jax.random.fold_in(seed_rng, jax.process_index())
+    self.seed_rng = seed_rng
     self.config = config
     self.has_aux = has_aux
     self.has_rng = has_rng
@@ -306,13 +305,10 @@ class SupervisedExperiment(abc.ABC):
 
       logging.info("Initializing training data iterator.")
 
-      if self.config.training.get("fix_dataset_seed", False):
-        seed_rng = self.seed_rng
-      else:
-        # By folding in the step here we ensure that the training data iterator
-        # is rerandomized after a preemption. This is not a perfect solution,
-        # but it's better than restarting the old iterator from scratch.
-        seed_rng = jax.random.fold_in(self.seed_rng, self._python_step)
+      # By folding in the step here we ensure that the training data iterator
+      # is rerandomized after a preemption. This is not a perfect solution,
+      # but it's better than restarting the old iterator from scratch.
+      seed_rng = jax.random.fold_in(self.seed_rng, self._python_step)
 
       logging.info("Using seed rng %s to build train input.", seed_rng)
 
@@ -324,18 +320,6 @@ class SupervisedExperiment(abc.ABC):
               device_batch_size=self.batch_size.train.per_device,
           )
       )
-
-      if self.config.training.get("num_batches", -1) > 0:
-        # Creates infinite cycle from specified number of batches. (This will
-        # cache the dataset.) Training will halt as measured by progress.
-        self._train_input = itertools.cycle(
-            itertools.islice(
-                self._train_input, self.config.training.num_batches
-            )
-        )
-        # Ensures deterministic training by resuming at the correct batch.
-        skip = self._python_step % self.config.training.num_batches
-        self._train_input = itertools.islice(self._train_input, skip, None)
 
       self._train_input = more_itertools.peekable(self._train_input)
 
@@ -564,6 +548,7 @@ class SupervisedExperiment(abc.ABC):
       split: str,
       seed: int,
       device_batch_size: int,
+      **kwargs,
   ) -> Iterator[Batch]:
     """Constructs the training dataset."""
 
@@ -728,7 +713,7 @@ class SupervisedExperiment(abc.ABC):
       params: Params,
       func_state: FuncState,
       rng: PRNGKey,
-      dataset_iter_thunk: Callable[[], Iterator[kfac_jax.utils.Batch]],
+      dataset_iter_thunk: Callable[[], Iterator[Batch]],
       num_iters: int,
   ) -> FuncState:
     """Refreshes func_state on the given data using num_iters iterations."""
@@ -1010,6 +995,7 @@ class MnistExperiment(JaxlineExperiment):
       split: str,
       seed: int,
       device_batch_size: int,
+      **kwargs,
   ) -> Iterator[Batch]:
     assert split == "train"
     return datasets.mnist_dataset(
@@ -1019,9 +1005,9 @@ class MnistExperiment(JaxlineExperiment):
         device_batch_size=device_batch_size,
         repeat=True,
         shuffle=True,
-        drop_remainder=True,
         seed=seed,
         reshuffle_each_iteration=True,
+        **kwargs,
     )
 
   def _build_eval_input(
@@ -1029,6 +1015,7 @@ class MnistExperiment(JaxlineExperiment):
       split: str,
       seed: int,
       device_batch_size: int,
+      **kwargs,
   ) -> Iterator[Batch]:
     assert split in self.eval_splits
     return datasets.mnist_dataset(
@@ -1038,8 +1025,8 @@ class MnistExperiment(JaxlineExperiment):
         device_batch_size=device_batch_size,
         repeat=False,
         shuffle=False,
-        drop_remainder=False,
         seed=seed,
+        **kwargs,
     )
 
 
@@ -1078,7 +1065,8 @@ class ImageNetExperiment(JaxlineExperiment):
       split: str,
       seed: int,
       device_batch_size: int,
-  ) -> datasets.tf.data.Dataset:
+      **kwargs,
+  ) -> Iterator[Batch]:
     assert split == "train"
     return datasets.imagenet_dataset(
         split="train_and_valid",
@@ -1086,6 +1074,7 @@ class ImageNetExperiment(JaxlineExperiment):
         is_training=True,
         batch_dims=(jax.local_device_count(), device_batch_size),
         data_dir=None,
+        **kwargs,
     )
 
   def _build_eval_input(
@@ -1093,11 +1082,13 @@ class ImageNetExperiment(JaxlineExperiment):
       split: str,
       seed: int,
       device_batch_size: int,
-  ) -> datasets.tf.data.Dataset:
+      **kwargs,
+  ) -> Iterator[Batch]:
     assert split in ("train", "test")
     return datasets.imagenet_dataset(
         split="train_eval" if split == "train" else "test",
         seed=seed,
         is_training=False,
         batch_dims=(jax.local_device_count(), device_batch_size),
+        **kwargs,
     )

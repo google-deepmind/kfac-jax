@@ -166,6 +166,7 @@ def squared_error(
 def top_k_accuracy(
     logits_or_probs: Array,
     labels: Array,
+    mask: Array | None = None,
     k: int = 1,
 ) -> Array:
   """Top-k accuracy."""
@@ -187,7 +188,14 @@ def top_k_accuracy(
     correct = jnp.equal(indices, labels[..., None])
     correct = jnp.sum(correct, axis=-1)
 
-  return jnp.mean(correct.astype(logits_or_probs.dtype))
+  correct = correct.astype(logits_or_probs.dtype)
+
+  # Normalization is always "all_dims_nonmasked".
+  # TODO(jamesmartens): make this more general?
+  if mask is not None:
+    return jnp.sum(correct * mask) / jnp.sum(mask)
+
+  return jnp.mean(correct)
 
 
 def add_label_smoothing(
@@ -252,7 +260,7 @@ def classifier_loss_and_stats(
     top_k_stats: The top-k accuracies to compute.
     average_loss: Whether to average the loss over the batch.
     register_loss: Whether to register the loss.
-    mask: If not None, a binary mask of shape predictions.shape[:-1]. It's
+    mask: If not None, a binary mask of shape predictions.shape[:-1]. Its
       nonzero values determine which predictions are used in the loss
       computation.
     normalization_mode: The normalization mode to use for the returned loss, one
@@ -272,6 +280,8 @@ def classifier_loss_and_stats(
   Returns:
     The regularized loss and a dictionary of statistics.
   """
+
+  stats = {}
 
   batch_size = predictions.shape[0]
 
@@ -306,6 +316,7 @@ def classifier_loss_and_stats(
   )
 
   if loss_type == "cross_entropy":
+
     raw_loss = softmax_cross_entropy(
         predictions,
         labels,
@@ -315,6 +326,7 @@ def classifier_loss_and_stats(
         extra_registration_kwargs=extra_registration_kwargs,
         registration_module=registration_module,
     )
+
   elif loss_type == "squared_error":
 
     if predictions.ndim == labels.ndim + 1:
@@ -329,6 +341,7 @@ def classifier_loss_and_stats(
         extra_registration_kwargs=extra_registration_kwargs,
         registration_module=registration_module,
     )
+
   else:
     raise ValueError(f"Unknown loss type: {loss_type}")
 
@@ -341,11 +354,11 @@ def classifier_loss_and_stats(
 
   regularized_loss = loss + l2_reg * l2_reg_val
 
-  stats = dict(
-      raw_loss=averaged_raw_loss,
-      l2_reg_val=l2_reg_val,
-  )
+  stats["raw_loss"] = averaged_raw_loss
+  stats["l2_reg_val"] = l2_reg_val
+
   for k in top_k_stats:
-    stats[f"top_{k}_accuracy"] = top_k_accuracy(predictions, labels_as_int, k)
+    stats[f"top_{k}_accuracy"] = top_k_accuracy(
+        predictions, labels_as_int, mask=mask, k=k)
 
   return regularized_loss, stats

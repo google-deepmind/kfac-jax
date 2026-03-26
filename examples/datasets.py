@@ -35,6 +35,10 @@ _IMAGENET_MEAN_RGB = (0.485, 0.456, 0.406)
 _IMAGENET_STDDEV_RGB = (0.229, 0.224, 0.225)
 
 
+def fold_integer_seed(seed: int, data: int) -> int:
+  return int(jax.random.fold_in(jax.random.PRNGKey(seed), data)[0])
+
+
 def mnist_dataset(
     split: str,
     has_labels: bool,
@@ -42,8 +46,7 @@ def mnist_dataset(
     device_batch_size: int,
     repeat: bool,
     shuffle: bool,
-    drop_remainder: bool,
-    seed: int | None = None,
+    seed: int = 123,
     multi_device: bool = True,
     reshuffle_each_iteration: bool = True,
     dtype: str = "float32",
@@ -59,8 +62,6 @@ def mnist_dataset(
     device_batch_size: The per-device batch size to use.
     repeat: Whether to repeat the dataset.
     shuffle: Whether to shuffle the dataset.
-    drop_remainder: Whether to drop the remainder of the dataset if the number
-      of data points is not divisible by the total batch size.
     seed: Any seed to use for random pre-processing.
     multi_device: If the returned batch should take into account the number of
       devices present, in which case it will return an array with shape
@@ -75,6 +76,10 @@ def mnist_dataset(
   Returns:
     The MNIST dataset as a tensorflow dataset.
   """
+
+  # Sharding is before randomization, so we can do this safely. This gives us
+  # different randomization (e.g. of augmentation) on each process.
+  seed = fold_integer_seed(seed, jax.process_index())
 
   # Set for multi devices vs single device
   num_devices = jax.device_count() if multi_device else 1
@@ -127,7 +132,7 @@ def mnist_dataset(
   if repeat:
     ds = ds.repeat()
 
-  ds = ds.batch(host_batch_size, drop_remainder=drop_remainder)
+  ds = ds.batch(host_batch_size, drop_remainder=True)
 
   ds = ds.map(preprocess_batch,
               num_parallel_calls=tf.data.experimental.AUTOTUNE)
@@ -203,6 +208,10 @@ def imagenet_dataset(
   Returns:
     The ImageNet dataset as a tensorflow dataset.
   """
+
+  # Sharding is before randomization, so we can do this safely. This gives us
+  # different randomization (e.g. of augmentation) on each process.
+  seed = fold_integer_seed(seed, jax.process_index())
 
   preprocess_seed = seed
   shuffle_seed = seed + 1
@@ -310,7 +319,7 @@ def imagenet_dataset(
 
   for i, batch_size in enumerate(reversed(batch_dims)):
 
-    ds = ds.batch(batch_size, drop_remainder=not is_training)
+    ds = ds.batch(batch_size, drop_remainder=True)
 
     if i == 0:
       # NOTE: You may be tempted to move the casting earlier on in the pipeline,
