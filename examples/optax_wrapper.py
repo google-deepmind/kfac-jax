@@ -181,7 +181,7 @@ class OptaxWrapper:
       rng: PRNGKey,
       batch: Batch,
       func_state: FuncState | None = None,
-      global_step_int: int | None = None,
+      global_step: Array | None = None,
   ) -> (
       tuple[Params, OptaxAndPreconditionState, FuncState, Mapping[str, Array]] |
       tuple[Params, OptaxAndPreconditionState, Mapping[str, Array]]
@@ -234,10 +234,10 @@ class OptaxWrapper:
 
     # Add step and batch size
     batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
-    stats["step"] = global_step_int + 1
+    stats["step"] = global_step + 1
     stats["batch_size"] = batch_size * jax.device_count()
     stats["data_seen"] = stats["step"] * stats["batch_size"]
-    stats["learning_rate"] = self._learning_rate(global_step_int)
+    stats["learning_rate"] = self._learning_rate(global_step)
 
     if self._include_norms_in_stats:
       stats["grad_norm"] = kfac_jax.utils.norm(grads)
