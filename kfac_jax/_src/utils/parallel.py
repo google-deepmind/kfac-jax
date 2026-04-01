@@ -38,18 +38,18 @@ def in_pmap(axis_name: str | None) -> bool:
   if axis_name is None:
     return False
 
-  if jax_version >= (0, 4, 36):
-    return axis_name in core.unsafe_get_axis_names_DO_NOT_USE()
+  axis_names = core.unsafe_get_axis_names_DO_NOT_USE()
 
-  try:
-    # The only way to know if we are under `jax.pmap` is to check if the
-    # function call below raises a `NameError` or not.
-    core.axis_frame(axis_name)  # pytype: disable=module-attr
-
+  if axis_name in axis_names:
     return True
 
-  except NameError:
-    return False
+  if len(axis_names) > 0:
+    raise ValueError(
+        f"In pmap with axis names {axis_names}, but wrong axis name "
+        f"({axis_name}) was provided. This is likely a bug."
+    )
+
+  return False
 
 
 def wrap_if_pmap(
@@ -59,7 +59,6 @@ def wrap_if_pmap(
 
   @functools.wraps(p_func)
   def p_func_if_pmap(obj: TArrayTree, axis_name: str | None) -> TArrayTree:
-
     return p_func(obj, axis_name) if in_pmap(axis_name) else obj
 
   return p_func_if_pmap
@@ -68,12 +67,10 @@ def wrap_if_pmap(
 # TODO(jamesmartens,botev): We no longer use wrap_if_pmap in the below
 # definitions since it doesn't seem to transmit type info properly. Investigate?
 def pmean_if_pmap(obj: TArrayTree, axis_name: str | None) -> TArrayTree:
-
   return lax.pmean(obj, axis_name) if in_pmap(axis_name) else obj
 
 
 def psum_if_pmap(obj: TArrayTree, axis_name: str | None) -> TArrayTree:
-
   return lax.psum(obj, axis_name) if in_pmap(axis_name) else obj
 
 

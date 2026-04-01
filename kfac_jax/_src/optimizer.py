@@ -174,7 +174,7 @@ class Optimizer(utils.WithStagedMethods):
       batch_size_extractor: Callable[
           [Batch], Numeric
       ] = utils.default_batch_size_extractor,
-      pmap_axis_name: str = "kfac_axis",
+      pmap_axis_name: str = "batch_axis",
       forbid_setting_attributes_after_finalize: bool = True,
       modifiable_attribute_exceptions: Sequence[str] = (),
       include_norms_in_stats: bool = False,
@@ -412,7 +412,7 @@ class Optimizer(utils.WithStagedMethods):
         arguments and returns the batch size for a single device. (Default:
         ``kfac.utils.default_batch_size_extractor``)
       pmap_axis_name: String. The name of the pmap axis to use when
-        ``multi_device`` is set to True. (Default: ``kfac_axis``)
+        ``multi_device`` is set to True. (Default: ``batch_axis``)
       forbid_setting_attributes_after_finalize: Boolean. By default, after the
         object is finalized, you can not set any of its properties. This is done
         in order to protect the user from making changes to the object

@@ -63,7 +63,7 @@ class OptaxPreconditioner:
       layer_tag_to_block_ctor: (
           dict[str, curvature_estimator.CurvatureBlockCtor] | None
       ) = None,
-      pmap_axis_name: str = "kfac_axis",
+      pmap_axis_name: str = "batch_axis",
       batch_size_extractor: Callable[
           [Batch], Numeric
       ] = utils.default_batch_size_extractor,
@@ -123,7 +123,7 @@ class OptaxPreconditioner:
         :class:`~CurvatureEstimator` for a more detailed description. (Default:
         ``None``)
       pmap_axis_name: String. The name of the pmap axis to use when
-        ``multi_device`` is set to True. (Default: ``kfac_axis``)
+        ``multi_device`` is set to True. (Default: ``batch_axis``)
       batch_size_extractor: A function that takes as input the function
         arguments and returns the batch size for a single device. (Default:
         ``kfac.utils.default_batch_size_extractor``)

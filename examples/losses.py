@@ -240,6 +240,7 @@ def classifier_loss_and_stats(
     extra_registration_kwargs: dict[str, Any] | None = None,
     registration_module: types.ModuleType = kfac_jax,
     loss_type: str = "cross_entropy",
+    pmap_axis_name: str | None = None,
 ) -> tuple[Array, dict[str, Array]]:
   """Classification loss with regularizer and accuracy statistics.
 
@@ -276,6 +277,10 @@ def classifier_loss_and_stats(
       that will be used. These are 'register_softmax_cross_entropy_loss' and
       'register_squared_error_loss".
     loss_type: The type of loss to use ("cross_entropy" or "squared_error").
+    pmap_axis_name: The name of the pmap axis to use for pmean. Only used if
+      normalization_mode is "all_dims_nonmasked" for computing the
+      normalization. If None, will compute the normalization per device instead,
+      which is arguably suboptimal.
 
   Returns:
     The regularized loss and a dictionary of statistics.
@@ -283,7 +288,7 @@ def classifier_loss_and_stats(
 
   stats = {}
 
-  batch_size = predictions.shape[0]
+  batch_size = predictions.shape[0]  # this is per-device
 
   if labels_as_int.shape != predictions.shape[:-1]:
     raise ValueError(
@@ -305,7 +310,10 @@ def classifier_loss_and_stats(
 
   elif normalization_mode == "all_dims_nonmasked":
     assert mask is not None
-    weight = batch_size / jnp.sum(mask)
+    normalizer = jnp.sum(mask)
+    normalizer = kfac_jax.utils.pmean_if_pmap(
+        normalizer, axis_name=pmap_axis_name)
+    weight = batch_size / normalizer
 
   else:
     raise ValueError(f"Unrecognized value for normalization_mode: "

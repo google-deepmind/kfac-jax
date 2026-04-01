@@ -113,9 +113,13 @@ def create_optimizer(
     train_total_batch_size: int,
     total_steps: int | None,
     total_epochs: float | None,
-    schedule_free_config: config_dict.ConfigDict,
+    pmap_axis_name: str | None,
+    schedule_free_config: config_dict.ConfigDict | None = None,
 ) -> optax_wrapper.OptaxWrapper | kfac_jax.Optimizer:
   """Creates an optimizer from the provided configuration."""
+
+  if schedule_free_config is None:
+    schedule_free_config = config_dict.ConfigDict({"enabled": False})
 
   is_optax = "kfac" not in name and hasattr(optax, name)
 
@@ -162,6 +166,7 @@ def create_optimizer(
         value_func_has_rng=has_rng,
         value_func_for_estimator=model_func_for_estimator,
         multi_device=True,
+        pmap_axis_name=pmap_axis_name,
         **kwargs,
     )
 
@@ -191,6 +196,7 @@ def create_optimizer(
         value_func_has_state=has_func_state,
         learning_rate=learning_rate_schedule,
         optax_optimizer_ctor=optax_ctor,
+        pmap_axis_name=pmap_axis_name,
     )
 
   else:

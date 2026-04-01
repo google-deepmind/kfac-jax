@@ -120,7 +120,8 @@ class InPmapTest(absltest.TestCase):
 
   def test_in_pmap_inside_pmap_wrong_axis(self):
     def f(x):
-      self.assertFalse(kfac_jax.utils.in_pmap("my_axis"))
+      with self.assertRaises(ValueError):
+        kfac_jax.utils.in_pmap("my_axis")
       return x + 1
 
     jax.pmap(f, axis_name="their_axis")(jnp.ones([jax.local_device_count()]))

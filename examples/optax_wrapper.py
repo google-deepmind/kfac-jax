@@ -52,6 +52,7 @@ class OptaxWrapper:
       preconditioner: Preconditioner | None = None,
       include_norms_in_stats: bool = False,
       include_per_param_norms_in_stats: bool = False,
+      pmap_axis_name: str | None = "batch_axis",
   ):
     """Initializes the Optax wrapper.
 
@@ -85,6 +86,8 @@ class OptaxWrapper:
         vector norms of the gradient, preconditioned gradient, and parameter
         update are included in the statistics returned by the step function.
         (Default: ``False``)
+      pmap_axis_name: Optional string. The axis name used in ``jax.pmap`` for
+        batch parallelism. (Default: ``None``)
     """
     self._value_and_grad_func = value_and_grad_func
     self._value_func_has_aux = value_func_has_aux
@@ -107,7 +110,7 @@ class OptaxWrapper:
     self._include_per_param_norms_in_stats = include_per_param_norms_in_stats
     self._batch_process_func = batch_process_func or (lambda x: x)
     self.pmap_axis_name = (
-        "optax_axis"
+        pmap_axis_name
         if self._preconditioner is None
         else self._preconditioner.pmap_axis_name
     )

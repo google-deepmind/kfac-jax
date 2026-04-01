@@ -157,6 +157,7 @@ class SupervisedExperiment(abc.ABC):
     train_batch_pmap: A pmapped version of `self._train_batch`.
     eval_batch_pmap: A pmapped version of `self._eval_batch`.
     optimizer: The optimizer instance used for training.
+    pmap_axis_name: The name of the pmap axis to use.
   """
 
   def __init__(
@@ -172,6 +173,7 @@ class SupervisedExperiment(abc.ABC):
       model_func_for_estimator: kfac_jax.utils.Func | None = None,
       eval_splits: tuple[str, ...] = ("train", "test"),
       batch_size_calculator_ctor: BatchSizeCalculatorCtor = BatchSizeCalculator,
+      pmap_axis_name: str = "batch_axis",
   ):
     """Initializes experiment.
 
@@ -192,6 +194,7 @@ class SupervisedExperiment(abc.ABC):
       eval_splits: Evaluation splits of the evaluation dataset loader.
       batch_size_calculator_ctor: A constructor function to create a batch size
         calculator.
+      pmap_axis_name: The name of the pmap axis to use.
     """
     self.mode = mode
     self.init_rng, seed_rng = jax.random.split(init_rng)
@@ -202,10 +205,12 @@ class SupervisedExperiment(abc.ABC):
     self.has_func_state = has_func_state
     self.eval_splits = eval_splits
     self._batch_size_calculator_ctor = batch_size_calculator_ctor
+    self.pmap_axis_name = pmap_axis_name
 
     self._batch_size: ExperimentBatchSizes | None = None
 
-    self.params_init = jax.pmap(init_parameters_func, axis_name="kfac_axis")
+    self.params_init = jax.pmap(
+        init_parameters_func, axis_name=self.pmap_axis_name)
     self.model_loss_func = model_loss_func
     self.model_func_for_estimator = model_func_for_estimator
 
@@ -217,10 +222,10 @@ class SupervisedExperiment(abc.ABC):
     )
 
     self.train_batch_pmap = jax.pmap(
-        self._train_batch, axis_name="kfac_axis"
+        self._train_batch, axis_name=self.pmap_axis_name
     )
     self.eval_batch_pmap = jax.pmap(
-        self._eval_batch, axis_name="kfac_axis"
+        self._eval_batch, axis_name=self.pmap_axis_name
     )
 
     # Log some useful information
@@ -241,11 +246,14 @@ class SupervisedExperiment(abc.ABC):
     self._log_train_stats_with_polyak_avg_every_n_steps = config.get(
         "log_train_stats_with_polyak_avg_every_n_steps", 0)
 
-    self._get_value_pmap = jax.pmap(lambda x: x.value)
+    self._get_value_pmap = jax.pmap(
+        lambda x: x.value, axis_name=self.pmap_axis_name)
 
     if self._use_polyak_avg_with_decay_factor:
-      self._update_polyak_average_pmap = jax.pmap(self._update_polyak_average,
-                                                  donate_argnums=0)
+      self._update_polyak_average_pmap = jax.pmap(
+          self._update_polyak_average,
+          axis_name=self.pmap_axis_name,
+          donate_argnums=0)
 
     self._refresh_func_state_for_eval_with_n_iters = config.get(
         "refresh_func_state_for_eval_with_n_iters", 0)
@@ -458,6 +466,7 @@ class SupervisedExperiment(abc.ABC):
         train_total_batch_size=self.batch_size.train.total,
         total_steps=self.config.training.steps,
         total_epochs=self.config.training.epochs,
+        pmap_axis_name=self.pmap_axis_name,
         schedule_free_config=self._schedule_free_config,
     )
 
@@ -1007,6 +1016,7 @@ class MnistExperiment(JaxlineExperiment):
         shuffle=True,
         seed=seed,
         reshuffle_each_iteration=True,
+        **self.config.get("dataset_kwargs", {}),
         **kwargs,
     )
 
@@ -1043,6 +1053,7 @@ class ImageNetExperiment(JaxlineExperiment):
       has_aux: bool,
       has_rng: bool,
       has_func_state: bool,
+      **kwargs: Any,
   ):
     super().__init__(
         mode=mode,
@@ -1053,6 +1064,7 @@ class ImageNetExperiment(JaxlineExperiment):
         has_aux=has_aux,
         has_rng=has_rng,
         has_func_state=has_func_state,
+        **kwargs,
     )
 
   @property
@@ -1074,6 +1086,7 @@ class ImageNetExperiment(JaxlineExperiment):
         is_training=True,
         batch_dims=(jax.local_device_count(), device_batch_size),
         data_dir=None,
+        **self.config.get("dataset_kwargs", {}),
         **kwargs,
     )
 

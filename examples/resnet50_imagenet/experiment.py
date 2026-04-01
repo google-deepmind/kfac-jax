@@ -24,6 +24,7 @@ from ml_collections import config_dict
 
 def resnet50(
     bn_decay_rate: float,
+    pmap_axis_name: str | None,
     batch_norm_synced: bool = False,
     zero_init: bool = True,
     num_classes: int = 1000,
@@ -33,7 +34,7 @@ def resnet50(
 
   bn_config = dict(decay_rate=bn_decay_rate)
   if batch_norm_synced:
-    bn_config["cross_replica_axis"] = "kfac_axis"
+    bn_config["cross_replica_axis"] = pmap_axis_name
 
   def func(
       batch: chex.Array | Mapping[str, chex.Array],
@@ -59,6 +60,7 @@ def resnet50_loss(
     batch: Mapping[str, chex.Array],
     is_training: bool,
     l2_reg: chex.Numeric,
+    pmap_axis_name: str | None,
     label_smoothing: float = 0.0,
     average_loss: bool = True,
     num_classes: int = 1000,
@@ -73,6 +75,7 @@ def resnet50_loss(
 
   logits, state = resnet50(
       bn_decay_rate=bn_decay_rate,
+      pmap_axis_name=pmap_axis_name,
       batch_norm_synced=batch_norm_synced,
       num_classes=num_classes,
       **kwargs,
@@ -116,6 +119,7 @@ class Resnet50ImageNetExperiment(training.ImageNetExperiment):
         model_loss_func=functools.partial(
             resnet50_loss,
             l2_reg=config.l2_reg,
+            pmap_axis_name="batch_axis",
             num_classes=1000,
             **config.model_kwargs,
             **config.loss_kwargs,
@@ -123,4 +127,5 @@ class Resnet50ImageNetExperiment(training.ImageNetExperiment):
         has_aux=True,
         has_rng=False,
         has_func_state=True,
+        pmap_axis_name="batch_axis",
     )
