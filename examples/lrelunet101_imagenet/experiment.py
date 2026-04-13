@@ -347,7 +347,6 @@ def lrelunet_loss(
     is_training: bool,
     l2_reg: Numeric,
     label_smoothing: float = 0.0,
-    average_loss: bool = True,
     num_classes: int = 1000,
     depth: int = 101,
     **kwargs: Any,
@@ -367,7 +366,6 @@ def lrelunet_loss(
       haiku_exclude_batch_norm=True,
       haiku_exclude_biases=True,
       label_smoothing=label_smoothing if is_training else 0.0,
-      average_loss=average_loss,
   )
 
 

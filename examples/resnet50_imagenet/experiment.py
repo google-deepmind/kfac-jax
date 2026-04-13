@@ -62,7 +62,6 @@ def resnet50_loss(
     l2_reg: chex.Numeric,
     pmap_axis_name: str | None,
     label_smoothing: float = 0.0,
-    average_loss: bool = True,
     num_classes: int = 1000,
     bn_decay_rate: float = 0.9,
     batch_norm_synced: bool = False,
@@ -89,7 +88,6 @@ def resnet50_loss(
       haiku_exclude_batch_norm=True,
       haiku_exclude_biases=True,
       label_smoothing=label_smoothing if is_training else 0.0,
-      average_loss=average_loss,
   )
 
   if is_training:

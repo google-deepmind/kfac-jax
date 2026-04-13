@@ -62,32 +62,31 @@ def autoencoder_loss(
     batch: Array | Mapping[str, Array],
     l2_reg: Numeric,
     is_training: bool,
-    average_loss: bool = True,
 ) -> tuple[Array, dict[str, Array]]:
   """Evaluates the loss of the autoencoder."""
+
+  stats = {}
 
   if isinstance(batch, Mapping):
     batch = batch["images"]
 
   logits = autoencoder().apply(params, batch)
 
-  cross_entropy = jnp.sum(losses.sigmoid_cross_entropy(logits, batch), axis=-1)
-  averaged_cross_entropy = jnp.mean(cross_entropy)
+  loss = losses.sigmoid_cross_entropy(logits, batch)
 
-  loss: Array = averaged_cross_entropy if average_loss else cross_entropy
-
-  l2_reg_val = losses.l2_regularizer(params, False, False)
-  if is_training:
-    loss = loss + l2_reg * l2_reg_val
+  if l2_reg > 0.0:
+    l2_reg_val = losses.l2_regularizer(params, False, False)
+    stats["l2_reg_val"] = l2_reg_val
+    if is_training:
+      stats["raw_loss"] = loss
+      loss = loss + l2_reg * l2_reg_val
 
   error = nn.sigmoid(logits) - batch.reshape([batch.shape[0], -1])
   mean_squared_error = jnp.mean(jnp.sum(error * error, axis=1), axis=0)
 
-  return loss, dict(
-      cross_entropy=averaged_cross_entropy,
-      l2_reg_val=l2_reg_val,
-      mean_squared_error=mean_squared_error,
-  )
+  stats["mean_squared_error"] = mean_squared_error
+
+  return loss, stats
 
 
 class AutoencoderMnistExperiment(training.MnistExperiment):

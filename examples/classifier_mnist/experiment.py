@@ -59,7 +59,6 @@ def classifier_loss(
     batch: Mapping[str, Array],
     l2_reg: Numeric,
     is_training: bool,
-    average_loss: bool = True,
 ) -> tuple[Array, dict[str, Array]]:
   """Evaluates the loss of the classifier network."""
 
@@ -72,7 +71,6 @@ def classifier_loss(
       l2_reg=l2_reg if is_training else 0.0,
       haiku_exclude_batch_norm=False,
       haiku_exclude_biases=False,
-      average_loss=average_loss,
       top_k_stats=(1,),
   )
 
