@@ -19,6 +19,15 @@ from typing import Any, Generic, Sequence, TypeVar
 import jax
 import jax.extend as jex
 
+try:
+  # JAX v0.10.0 and newer
+  Effects: type[Any] = jex.core.Effects
+  no_effects: Effects = jex.core.no_effects
+except AttributeError:
+  # JAX v0.9.2 and older
+  Effects = jax.core.Effects
+  no_effects = jax.core.no_effects
+
 
 # Types for annotation
 T = TypeVar("T")
@@ -135,9 +144,9 @@ class LossTag(jex.core.Primitive):
       self,
       *args: Array,
       **params: Any,
-  ) -> tuple[Arrays, jax.core.Effects]:
+  ) -> tuple[Arrays, Effects]:
 
-    return get_loss_outputs(args, params), jax.core.no_effects
+    return get_loss_outputs(args, params), no_effects
 
   def _mlir_lowering(
       self,
@@ -336,10 +345,10 @@ class LayerTag(jex.core.Primitive):
       self,
       *args: Array,
       **params: Any,
-  ) -> tuple[Array, jax.core.Effects]:
+  ) -> tuple[Array, Effects]:
     # For now we support only single output
     [output] = self.layer_data(args, params).outputs
-    return output, jax.core.no_effects
+    return output, no_effects
 
   def _batching(
       self,
