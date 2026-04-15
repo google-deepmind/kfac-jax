@@ -135,9 +135,9 @@ class LossTag(jex.core.Primitive):
       self,
       *args: Array,
       **params: Any,
-  ) -> tuple[Arrays, jax.core.Effects]:
+  ) -> tuple[Arrays, jex.core.Effects]:
 
-    return get_loss_outputs(args, params), jax.core.no_effects
+    return get_loss_outputs(args, params), jex.core.no_effects
 
   def _mlir_lowering(
       self,
@@ -336,10 +336,10 @@ class LayerTag(jex.core.Primitive):
       self,
       *args: Array,
       **params: Any,
-  ) -> tuple[Array, jax.core.Effects]:
+  ) -> tuple[Array, jex.core.Effects]:
     # For now we support only single output
     [output] = self.layer_data(args, params).outputs
-    return output, jax.core.no_effects
+    return output, jex.core.no_effects
 
   def _batching(
       self,

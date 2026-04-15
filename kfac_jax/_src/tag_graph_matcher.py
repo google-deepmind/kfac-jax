@@ -35,7 +35,7 @@ jax_version = (
     else tuple(map(int, jax.__version__.split("."))))
 
 if jax_version >= (0, 5, 1):
-  DebugInfo = jax.core.DebugInfo
+  DebugInfo = jex.core.DebugInfo
 else:
   DebugInfo = jax.core.JaxprDebugInfo  #  pytype: disable=module-attr
 
@@ -361,7 +361,7 @@ def make_jax_graph(
 
   if compute_only_loss_tags:
 
-    make_var_func = jax.core.gensym()
+    make_var_func = jex.core.gensym()
     eqns = []
     sub_graph_vars = set()
     loss_tags_output_vars = []
@@ -376,7 +376,7 @@ def make_jax_graph(
           new_out_vars = []
           for v in eqn.outvars:
 
-            if isinstance(v, jax.core.DropVar):
+            if isinstance(v, jex.core.DropVar):
               new_out_vars.append(make_var_func(v.aval))
             else:
               new_out_vars.append(v)
@@ -526,7 +526,7 @@ class GraphPattern:
 
     new_out_vars = [make_var_func(v.aval) for v in out_vars]
 
-    tag_eqn = jax.core.new_jaxpr_eqn(
+    tag_eqn = jex.core.new_jaxpr_eqn(
         invars=[*out_vars, *in_vars],
         outvars=new_out_vars,
         primitive=tags.layer_tag,
@@ -899,7 +899,7 @@ def read_env(
     if isinstance(v, jex.core.Literal):
       # Literals are values baked into the Jaxpr
       result.append(v.val)
-    elif isinstance(v, jax.core.DropVar):
+    elif isinstance(v, jex.core.DropVar):
       result.append(None)
     else:
       result.append(env[v])
@@ -1555,7 +1555,7 @@ def _normalization_haiku_preprocessor(
 
   normalized_inputs_var = make_var_func(in_var.aval)
 
-  normalized_inputs_eqn = jax.core.new_jaxpr_eqn(
+  normalized_inputs_eqn = jex.core.new_jaxpr_eqn(
       invars=[in_var, rsqrt_var],
       outvars=[normalized_inputs_var],
       primitive=jax.lax.mul_p,
@@ -2020,7 +2020,7 @@ def _auto_register_tags(
       tagged_params.add(p)
 
   # Create the Jaxpr with all the tag registrations
-  make_var_func = jax.core.gensym()
+  make_var_func = jex.core.gensym()
   eqns = list()
   env = {}
   pattern_counters = {}
@@ -2037,17 +2037,19 @@ def _auto_register_tags(
         pattern_counters["generic"] = n + 1
 
         eqns.append(
-            jax.core.new_jaxpr_eqn(
+            jex.core.new_jaxpr_eqn(
                 invars=[param],
                 outvars=[orphan_p],
                 primitive=tags.layer_tag,
-                params=dict(meta=tags.LayerMetaData(
-                    variant="generic",
-                    inputs_index=(),
-                    outputs_index=(0,),
-                    params_index=(0,),
-                    name=f"Auto[generic({n})]",
-                )),
+                params=dict(
+                    meta=tags.LayerMetaData(
+                        variant="generic",
+                        inputs_index=(),
+                        outputs_index=(0,),
+                        params_index=(0,),
+                        name=f"Auto[generic({n})]",
+                    )
+                ),
                 effects=set(),
             )
         )
