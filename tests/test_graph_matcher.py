@@ -27,6 +27,13 @@ from tests import models
 Array = kfac_jax.utils.Array
 Shape = kfac_jax.utils.Shape
 
+try:
+  # JAX v0.10.0 and newer
+  DropVar = jex.core.DropVar
+except AttributeError:
+  # JAX v0.9.2 and older
+  DropVar = jax.core.DropVar
+
 
 class TestGraphMatcher(parameterized.TestCase):
   """Test class for the functions in `tag_graph_matcher.py`."""
@@ -34,8 +41,7 @@ class TestGraphMatcher(parameterized.TestCase):
   def check_equation_match(self, eqn1, vars_to_vars, vars_to_eqn):
     """Checks that equation is matched in the other graph."""
 
-    eqn1_out_vars = [v for v in eqn1.outvars
-                     if not isinstance(v, jax.core.DropVar)]
+    eqn1_out_vars = [v for v in eqn1.outvars if not isinstance(v, DropVar)]
     eqn2_out_vars = [vars_to_vars[v] for v in eqn1_out_vars]
     eqns = [vars_to_eqn[v] for v in eqn2_out_vars]
     self.assertTrue(all(e == eqns[0] for e in eqns[1:]))
@@ -124,8 +130,8 @@ class TestGraphMatcher(parameterized.TestCase):
       for eqn1, eqn2 in zip(l1_eqns, l2_eqns):
         self.assertEqual(len(eqn1.outvars), len(eqn2.outvars))
         for v1, v2 in zip(eqn1.outvars, eqn2.outvars):
-          if isinstance(v1, jax.core.DropVar):
-            self.assertIsInstance(v2, jax.core.DropVar)
+          if isinstance(v1, DropVar):
+            self.assertIsInstance(v2, DropVar)
           elif isinstance(v1, jex.core.Literal):
             self.assertIsInstance(v2, jex.core.Literal)
             self.assertEqual(v1.aval, v2.aval)

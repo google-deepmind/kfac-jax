@@ -34,10 +34,15 @@ jax_version = (
     jax.__version_info__ if hasattr(jax, "__version_info__")
     else tuple(map(int, jax.__version__.split("."))))
 
-if jax_version >= (0, 5, 1):
+if jax_version >= (0, 10, 0):
+  DebugInfo = jex.core.DebugInfo
+  DropVar = jex.core.DropVar
+elif jax_version >= (0, 5, 1):
   DebugInfo = jax.core.DebugInfo
+  DropVar = jax.core.DropVar
 else:
   DebugInfo = jax.core.JaxprDebugInfo  #  pytype: disable=module-attr
+  DropVar = jax.core.DropVar
 
 
 HIGHER_ORDER_NAMES = ("cond", "while", "scan", "pjit", "xla_call", "xla_pmap")
@@ -376,7 +381,7 @@ def make_jax_graph(
           new_out_vars = []
           for v in eqn.outvars:
 
-            if isinstance(v, jax.core.DropVar):
+            if isinstance(v, DropVar):
               new_out_vars.append(make_var_func(v.aval))
             else:
               new_out_vars.append(v)
@@ -899,7 +904,7 @@ def read_env(
     if isinstance(v, jex.core.Literal):
       # Literals are values baked into the Jaxpr
       result.append(v.val)
-    elif isinstance(v, jax.core.DropVar):
+    elif isinstance(v, DropVar):
       result.append(None)
     else:
       result.append(env[v])
