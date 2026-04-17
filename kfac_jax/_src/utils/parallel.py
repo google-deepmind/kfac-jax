@@ -16,10 +16,16 @@ import functools
 from typing import Any, Callable, Sequence
 
 import jax
-from jax import core
 from jax import lax
 import jax.numpy as jnp
 from kfac_jax._src.utils import types
+
+try:
+  # JAX v0.10.0 or newer
+  from jax.extend.core import unsafe_get_axis_names_DO_NOT_USE  # pylint: disable=g-import-not-at-top
+except ImportError:
+  # JAX v0.9.2 or older
+  from jax.core import unsafe_get_axis_names_DO_NOT_USE  # pylint: disable=g-import-not-at-top
 
 jax_version = (
     jax.__version_info__ if hasattr(jax, "__version_info__")
@@ -38,7 +44,7 @@ def in_pmap(axis_name: str | None) -> bool:
   if axis_name is None:
     return False
 
-  axis_names = core.unsafe_get_axis_names_DO_NOT_USE()
+  axis_names = unsafe_get_axis_names_DO_NOT_USE()
 
   if axis_name in axis_names:
     return True
