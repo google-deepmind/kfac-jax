@@ -347,13 +347,14 @@ class SupervisedExperiment(abc.ABC):
     if self._eval_input is None:
 
       logging.info("Initializing evaluation data iterator.")
-      seed_rng = jax.random.fold_in(self.seed_rng, self._python_step)
+
       self._eval_input = {}
+
       for split in self.eval_splits:
         self._eval_input[split] = functools.partial(
             self._build_eval_input,
             split=split,
-            seed=int(seed_rng[1]),
+            seed=int(self.seed_rng[1]),
             device_batch_size=self.batch_size.eval.per_device,
         )
 
@@ -656,20 +657,26 @@ class SupervisedExperiment(abc.ABC):
     if "aux" in stats:
       stats.update(stats.pop("aux", {}))
 
-    for name in self.config.get("per_device_stats_to_log", []):
-      gathered_stat = jnp.reshape(
-          kfac_jax.utils.host_all_gather(stats[name]), [-1]
-      )
+    per_device_stats_to_log = self.config.get("per_device_stats_to_log", [])
 
-      for i in range(gathered_stat.shape[0]):
-        stats[f"{name}_{i}"] = jnp.array([gathered_stat[i]])
+    stats_to_return = dict()
+    for name, value in stats.items():
 
-    stats = kfac_jax.utils.get_first(stats)
+      if name in per_device_stats_to_log:
+        gathered_stat = jnp.reshape(
+            kfac_jax.utils.host_all_gather(stats[name]), [-1]
+        )
+        for i in range(gathered_stat.shape[0]):
+          # Get value off of device i
+          stats_to_return[f"{name}_{i}"] = value[i]
+
+      else:
+        stats_to_return[name] = kfac_jax.utils.get_first(value)
 
     self._python_step += 1
-    stats["progress"] = self.progress(self._python_step)
+    stats_to_return["progress"] = self.progress(self._python_step)
 
-    return stats
+    return stats_to_return
 
   #                  _
   #   _____   ____ _| |

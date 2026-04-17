@@ -31,8 +31,8 @@ Batch = dict[str, Array]
 TfBatch = dict[str, tf.Tensor]
 
 # Special global variables
-_IMAGENET_MEAN_RGB = (0.485, 0.456, 0.406)
-_IMAGENET_STDDEV_RGB = (0.229, 0.224, 0.225)
+IMAGENET_MEAN_RGB = (0.485, 0.456, 0.406)
+IMAGENET_STDDEV_RGB = (0.229, 0.224, 0.225)
 
 
 def fold_integer_seed(seed: int, data: int) -> int:
@@ -361,8 +361,8 @@ def _imagenet_preprocess_image(
   image = tf.image.resize(image, image_size, tf.image.ResizeMethod.BICUBIC)
 
   # Normalize image
-  mean = tf.constant(_IMAGENET_MEAN_RGB, shape=[1, 1, 3], dtype=image.dtype)
-  std = tf.constant(_IMAGENET_STDDEV_RGB, shape=[1, 1, 3], dtype=image.dtype)
+  mean = tf.constant(IMAGENET_MEAN_RGB, shape=[1, 1, 3], dtype=image.dtype)
+  std = tf.constant(IMAGENET_STDDEV_RGB, shape=[1, 1, 3], dtype=image.dtype)
 
   return (image - mean * 255) / (std * 255)
 

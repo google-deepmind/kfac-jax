@@ -89,31 +89,35 @@ def using_legacy_pmap() -> bool:
   return False
 
 
-def get_first(obj: TArrayTree) -> TArrayTree:
-  """Gets the first device's contents from replicated pmap outputs."""
+def get_device_n_contents(obj: TArrayTree, n: int) -> TArrayTree:
+  """Gets the contents from pmap output for device n."""
 
-  def _get_first(value: Numeric) -> Numeric:
+  def _get_device_n_contents(value: Numeric) -> Numeric:
 
     if is_scalar(value):
       return value
 
     if using_legacy_pmap():
-      return value[0]
+      return value[n]
 
     assert isinstance(value, jax.Array)
 
     if isinstance(value.sharding, jax.sharding.SingleDeviceSharding):
-      return value[0]
+      return value[n]
 
     assert isinstance(value.sharding, jax.NamedSharding)
 
-    shard_data = value.addressable_shards[0].data
+    shard_data = value.addressable_shards[n].data
     if value.sharding.spec[0] is None:
       return shard_data
 
     return shard_data.squeeze(0)
 
-  return jax.tree_util.tree_map(_get_first, obj)
+  return jax.tree_util.tree_map(_get_device_n_contents, obj)
+
+
+def get_first(obj: TArrayTree) -> TArrayTree:
+  return get_device_n_contents(obj, 0)
 
 
 def get_mean(obj: TArrayTree) -> TArrayTree:
