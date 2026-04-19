@@ -37,12 +37,16 @@ jax_version = (
 if jax_version >= (0, 10, 0):
   DebugInfo = jex.core.DebugInfo
   DropVar = jex.core.DropVar
-elif jax_version >= (0, 5, 1):
-  DebugInfo = jax.core.DebugInfo
-  DropVar = jax.core.DropVar
+  gensym = jex.core.gensym
+  new_jaxpr_eqn = jex.core.new_jaxpr_eqn
 else:
-  DebugInfo = jax.core.JaxprDebugInfo  #  pytype: disable=module-attr
+  if jax_version >= (0, 5, 1):
+    DebugInfo = jax.core.DebugInfo
+  else:
+    DebugInfo = jax.core.JaxprDebugInfo  #  pytype: disable=module-attr
   DropVar = jax.core.DropVar
+  gensym = jax.core.gensym
+  new_jaxpr_eqn = jax.core.new_jaxpr_eqn
 
 
 HIGHER_ORDER_NAMES = ("cond", "while", "scan", "pjit", "xla_call", "xla_pmap")
@@ -366,7 +370,7 @@ def make_jax_graph(
 
   if compute_only_loss_tags:
 
-    make_var_func = jax.core.gensym()
+    make_var_func = gensym()
     eqns = []
     sub_graph_vars = set()
     loss_tags_output_vars = []
@@ -531,7 +535,7 @@ class GraphPattern:
 
     new_out_vars = [make_var_func(v.aval) for v in out_vars]
 
-    tag_eqn = jax.core.new_jaxpr_eqn(
+    tag_eqn = new_jaxpr_eqn(
         invars=[*out_vars, *in_vars],
         outvars=new_out_vars,
         primitive=tags.layer_tag,
@@ -1560,7 +1564,7 @@ def _normalization_haiku_preprocessor(
 
   normalized_inputs_var = make_var_func(in_var.aval)
 
-  normalized_inputs_eqn = jax.core.new_jaxpr_eqn(
+  normalized_inputs_eqn = new_jaxpr_eqn(
       invars=[in_var, rsqrt_var],
       outvars=[normalized_inputs_var],
       primitive=jax.lax.mul_p,
@@ -2025,7 +2029,7 @@ def _auto_register_tags(
       tagged_params.add(p)
 
   # Create the Jaxpr with all the tag registrations
-  make_var_func = jax.core.gensym()
+  make_var_func = gensym()
   eqns = list()
   env = {}
   pattern_counters = {}
@@ -2042,17 +2046,19 @@ def _auto_register_tags(
         pattern_counters["generic"] = n + 1
 
         eqns.append(
-            jax.core.new_jaxpr_eqn(
+            new_jaxpr_eqn(
                 invars=[param],
                 outvars=[orphan_p],
                 primitive=tags.layer_tag,
-                params=dict(meta=tags.LayerMetaData(
-                    variant="generic",
-                    inputs_index=(),
-                    outputs_index=(0,),
-                    params_index=(0,),
-                    name=f"Auto[generic({n})]",
-                )),
+                params=dict(
+                    meta=tags.LayerMetaData(
+                        variant="generic",
+                        inputs_index=(),
+                        outputs_index=(0,),
+                        params_index=(0,),
+                        name=f"Auto[generic({n})]",
+                    )
+                ),
                 effects=set(),
             )
         )
