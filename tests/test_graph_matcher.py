@@ -42,10 +42,25 @@ class TestGraphMatcher(parameterized.TestCase):
     """Checks that equation is matched in the other graph."""
 
     eqn1_out_vars = [v for v in eqn1.outvars if not isinstance(v, DropVar)]
-    eqn2_out_vars = [vars_to_vars[v] for v in eqn1_out_vars]
-    eqns = [vars_to_eqn[v] for v in eqn2_out_vars]
+    mapped_eqn1_out_vars = [v for v in eqn1_out_vars if v in vars_to_vars]
+    if not mapped_eqn1_out_vars:
+      raise ValueError(
+          f"No outputs of equation {eqn1} are mapped in vars_to_vars."
+      )
+    eqn2_mapped_out_vars = [vars_to_vars[v] for v in mapped_eqn1_out_vars]
+    eqns = [vars_to_eqn[v] for v in eqn2_mapped_out_vars]
     self.assertTrue(all(e == eqns[0] for e in eqns[1:]))
     eqn2 = eqns[0]
+
+    self.assertEqual(len(eqn1.outvars), len(eqn2.outvars))
+    for v1, v2 in zip(eqn1.outvars, eqn2.outvars):
+      if isinstance(v1, DropVar):
+        self.assertIsInstance(v2, DropVar)
+      else:
+        if v1 not in vars_to_vars:
+          vars_to_vars[v1] = v2
+        else:
+          self.assertEqual(vars_to_vars[v1], v2)
 
     self.assertEqual(eqn1.primitive, eqn2.primitive)
 
