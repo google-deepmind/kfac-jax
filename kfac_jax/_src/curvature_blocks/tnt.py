@@ -176,12 +176,14 @@ class Conv2DTNT(kronecker_factored.Conv2DTwoKroneckerFactored):
       weighting_per_location: bool = True,
       parameters_specs: Sequence[str] | None = None,
       parameters_concat_axis: int = 0,
+      **kwargs,
   ):
     self.weighting_per_location = weighting_per_location
     super().__init__(
         layer_tag_eq=layer_tag_eq,
         parameters_specs=parameters_specs,
         parameters_concat_axis=parameters_concat_axis,
+        **kwargs,
     )
 
   def state_dependent_scale(

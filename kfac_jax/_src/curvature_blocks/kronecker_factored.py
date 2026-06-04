@@ -85,6 +85,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       layer_tag_eq: tags.LayerTagEqn,
       parameters_specs: Sequence[str] | None = None,
       parameters_concat_axis: int = 0,
+      **kwargs,
   ):
 
     # Even though the superclass constructor will set this later, we need to do
@@ -110,7 +111,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
     self.parameters_specs = parameters_specs
     self.parameters_concat_axis = parameters_concat_axis
 
-    super().__init__(layer_tag_eq)
+    super().__init__(layer_tag_eq, **kwargs)
 
   def __str__(self):
     return (
@@ -483,12 +484,14 @@ class RepeatedDenseKroneckerFactored(DenseTwoKroneckerFactored):
       use_masking: bool = True,
       parameters_specs: Sequence[str] | None = None,
       parameters_concat_axis: int = 0,
+      **kwargs,
   ):
     self._use_masking = use_masking
     super().__init__(
         layer_tag_eq=layer_tag_eq,
         parameters_specs=parameters_specs,
         parameters_concat_axis=parameters_concat_axis,
+        **kwargs,
     )
 
   def _init(

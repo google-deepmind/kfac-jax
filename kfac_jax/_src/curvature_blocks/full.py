@@ -50,6 +50,7 @@ class Full(CurvatureBlock, abc.ABC):
       self,
       layer_tag_eq: tags.LayerTagEqn,
       eigen_decomposition_threshold: int | None = None,
+      **kwargs,
   ):
     """Initializes the block.
 
@@ -62,6 +63,7 @@ class Full(CurvatureBlock, abc.ABC):
        directly compute the eigen-decomposition instead (which provide access to
        any matrix power). If this is ``None`` will use the value returned from
        :func:`~get_default_eigen_decomposition_threshold()`.
+      **kwargs: Any other keyword arguments passed to the superclass.
     """
 
     if eigen_decomposition_threshold is None:
@@ -71,7 +73,7 @@ class Full(CurvatureBlock, abc.ABC):
     else:
       self._eigen_decomposition_threshold = eigen_decomposition_threshold
 
-    super().__init__(layer_tag_eq)
+    super().__init__(layer_tag_eq, **kwargs)
 
   def parameters_list_to_single_vector(
       self,
@@ -395,6 +397,7 @@ class Conv2DFull(Full):
       self,
       layer_tag_eq: tags.LayerTagEqn,
       max_elements_for_vmap: int | None = None,
+      **kwargs,
   ):
     """Initializes the block.
 
@@ -418,6 +421,7 @@ class Conv2DFull(Full):
         computation to the in parallel and how much in serial manner. If
         ``None`` will use the value returned by
         :func:`~get_max_parallel_elements`.
+      **kwargs: Any other keyword arguments passed to the superclass.
     """
 
     self._averaged_tangents_outer_product = utils.loop_and_parallelize_average(
@@ -426,7 +430,7 @@ class Conv2DFull(Full):
         cb_utils.get_max_parallel_elements(),
     )
 
-    super().__init__(layer_tag_eq)
+    super().__init__(layer_tag_eq, **kwargs)
 
   def conv2d_tangent_outer_product(
       self,

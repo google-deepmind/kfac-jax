@@ -16,7 +16,6 @@ import abc
 from typing import Callable, Sequence, Generic, TypeVar
 import jax.numpy as jnp
 from kfac_jax._src import curvature_blocks
-from kfac_jax._src import layers_and_loss_tags as tags
 from kfac_jax._src import loss_functions
 from kfac_jax._src import tracer
 from kfac_jax._src import utils
@@ -34,7 +33,7 @@ LossFunctionInputs = loss_functions.LossFunctionInputs
 LossFunctionInputsSequence = Sequence[loss_functions.LossFunctionInputs]
 LossFunctionInputsTuple = tuple[loss_functions.LossFunctionInputs, ...]
 CurvatureBlockCtor = Callable[
-    [tags.LayerTagEqn],
+    ...,
     curvature_blocks.CurvatureBlock
 ]
 StateType = TypeVar("StateType")

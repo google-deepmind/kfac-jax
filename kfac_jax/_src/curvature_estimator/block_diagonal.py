@@ -37,7 +37,7 @@ Numeric = utils.Numeric
 Scalar = utils.Scalar
 Shape = utils.Shape
 CurvatureBlockCtor = Callable[
-    [tags.LayerTagEqn],
+    ...,
     curvature_blocks.CurvatureBlock
 ]
 
@@ -262,6 +262,7 @@ class BlockDiagonalCurvature(
     assert self._jaxpr is not None
 
     blocks_list = []
+    var_to_idx = {v: i for i, v in enumerate(self._jaxpr.params_vars_flat)}
 
     for tag_eqn, idx in zip(self._jaxpr.layer_tags, self._jaxpr.layer_indices):
       meta = tag_eqn.params.get("meta")
@@ -283,7 +284,8 @@ class BlockDiagonalCurvature(
               f"{meta.variant}."
           )
 
-      blocks_list.append(cls(tag_eqn))
+      block = cls(tag_eqn, var_to_idx=var_to_idx)
+      blocks_list.append(block)
 
     self._blocks = tuple(blocks_list)
 
@@ -363,7 +365,9 @@ class BlockDiagonalCurvature(
   def param_order(self):
     # is there a nicer way to do this?
     params_vars = self.params_vector_to_blocks_vectors(self.jaxpr.params_vars)
-    return np.argsort([p.count for p in jax.tree_util.tree_leaves(params_vars)])
+    leaves = jax.tree_util.tree_leaves(params_vars)
+    var_to_idx = {v: i for i, v in enumerate(self.jaxpr.params_vars_flat)}
+    return np.argsort([var_to_idx[p] for p in leaves])
 
   def log_registrations(self):
     if self._blocks is None:

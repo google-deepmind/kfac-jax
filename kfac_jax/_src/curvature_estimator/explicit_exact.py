@@ -23,7 +23,7 @@ from kfac_jax._src.curvature_estimator import block_diagonal
 PRNGKey = utils.PRNGKey
 Numeric = utils.Numeric
 CurvatureBlockCtor = Callable[
-    [tags.LayerTagEqn],
+    ...,
     curvature_blocks.CurvatureBlock
 ]
 BlockDiagonalState = block_diagonal.BlockDiagonalCurvature.State

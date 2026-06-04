@@ -63,16 +63,22 @@ class CurvatureBlock(utils.Finalizable):
     """
     cache: dict[str, Array | dict[str, Array]] | None
 
-  def __init__(self, layer_tag_eq: tags.LayerTagEqn):
+  def __init__(
+      self,
+      layer_tag_eq: tags.LayerTagEqn,
+      var_to_idx: dict[jex.core.Var, int] | None = None,
+  ):
     """Initializes the block.
 
     Args:
       layer_tag_eq: The Jax equation corresponding to the layer tag that this
         block will approximate the curvature to.
+      var_to_idx: The mapping from Var to its global index in the Jaxpr.
     """
     super().__init__()
 
     self._layer_tag_eq = layer_tag_eq
+    self._var_to_idx = var_to_idx
 
     self.finalize()
 
@@ -135,7 +141,11 @@ class CurvatureBlock(utils.Finalizable):
   def parameters_canonical_order(self) -> tuple[int, ...]:
     """The canonical order of the parameter variables."""
 
-    return tuple(np.argsort([p.count for p in self.parameter_variables]))
+    if self._var_to_idx is not None:
+      return tuple(
+          np.argsort([self._var_to_idx[p] for p in self.parameter_variables])
+      )
+    return tuple(range(len(self.parameter_variables)))
 
   @property
   def layer_tag_extra_params(self) -> dict[str, Any]:
@@ -499,6 +509,7 @@ class ScaledIdentity(CurvatureBlock):
       self,
       layer_tag_eq: tags.LayerTagEqn,
       scale: Numeric = 1.0,
+      **kwargs,
   ):
     """Initializes the block.
 
@@ -506,9 +517,10 @@ class ScaledIdentity(CurvatureBlock):
       layer_tag_eq: The Jax equation corresponding to the layer tag, that this
         block will approximate the curvature to.
       scale: The scale of the identity matrix.
+      **kwargs: Any other keyword arguments passed to the superclass.
     """
     self._scale = scale
-    super().__init__(layer_tag_eq)
+    super().__init__(layer_tag_eq, **kwargs)
 
   def fixed_scale(self) -> Numeric:
     return self._scale

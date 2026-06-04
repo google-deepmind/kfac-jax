@@ -222,6 +222,7 @@ class Conv2DDiagonal(Diagonal):
       self,
       layer_tag_eq: tags.LayerTagEqn,
       max_elements_for_vmap: int | None = None,
+      **kwargs,
   ):
     """Initializes the block.
 
@@ -244,13 +245,14 @@ class Conv2DDiagonal(Diagonal):
         computation to the in parallel and how much in serial manner. If
         ``None`` will use the value returned by
         :func:`~get_max_parallel_elements`.
+      **kwargs: Any other keyword arguments passed to the superclass.
     """
     self._averaged_kernel_squared_tangents = utils.loop_and_parallelize_average(
         func=self.conv2d_tangent_squared,
         max_parallel_size=max_elements_for_vmap or
         cb_utils.get_max_parallel_elements(),
     )
-    super().__init__(layer_tag_eq)
+    super().__init__(layer_tag_eq, **kwargs)
 
   @property
   def has_bias(self) -> bool:
