@@ -323,6 +323,79 @@ class LossFunction(utils.Finalizable):
   def ggn_factor_inner_shape(self) -> Shape:
     """The shape of the array returned by `self.multiply_ggn_factor`."""
 
+  def multiply_empirical_fisher(
+      self,
+      vector: Sequence[Array],
+  ) -> tuple[Array, ...]:
+    """Right-multiplies a vector by the empirical Fisher of the loss function.
+
+    Args:
+      vector: The vector to multiply. Must have the same shape(s) as
+        ``self.inputs``.
+
+    Returns:
+      The vector right-multiplied by the empirical Fisher. Will have the same
+      shape(s) as ``self.inputs``.
+    """
+    return self.multiply_empirical_fisher_factor(
+        self.multiply_empirical_fisher_factor_transpose(vector)
+    )
+
+  def multiply_empirical_fisher_factor(
+      self,
+      vector: Array,
+  ) -> tuple[Array, ...]:
+    """Right-multiplies a vector by a factor B of the empirical Fisher.
+
+    Note that B can be any matrix satisfying ``B * B^T = EF`` where ``EF`` is
+    the empirical Fisher.
+
+    Args:
+      vector: The vector to multiply. Must be of the shape(s) given by
+        ``self.empirical_fisher_factor_inner_shape``.
+
+    Returns:
+      The vector right-multiplied by B. Will be of the same shape(s) as
+      ``self.inputs``.
+    """
+    def evaluate_fn(*inputs: Array) -> Array:
+      instance = self.copy_with_different_inputs(inputs)
+      return instance.evaluate(None, "sqrt")
+
+    _, vjp_fn = jax.vjp(evaluate_fn, *self.parameter_dependants)
+    return vjp_fn(vector)
+
+  def multiply_empirical_fisher_factor_transpose(
+      self,
+      vector: Sequence[Array],
+  ) -> Array:
+    """Right-multiplies a vector by the transpose of a factor B of the empirical Fisher.
+
+    Note that B can be any matrix satisfying ``B * B^T = EF`` where ``EF`` is
+    the empirical Fisher.
+
+    Args:
+      vector: The vector to multiply. Must have the same shape(s) as
+        ``self.inputs``.
+
+    Returns:
+      The vector right-multiplied by B^T. Will be of the shape(s) given by
+      ``self.empirical_fisher_factor_inner_shape``.
+    """
+    def evaluate_fn(*inputs: Array) -> Array:
+      instance = self.copy_with_different_inputs(inputs)
+      return instance.evaluate(None, "sqrt")
+
+    _, jvp_val = jax.jvp(evaluate_fn, self.parameter_dependants, tuple(vector))
+    return jvp_val
+
+  @property
+  def empirical_fisher_factor_inner_shape(self) -> Shape:
+    """The shape of the array returned by `self.multiply_empirical_fisher_factor`."""
+    return jax.eval_shape(
+        self.evaluate, targets=None, coefficient_mode="sqrt"
+    ).shape
+
 
 class NegativeLogProbLoss(LossFunction):
   """Base class for loss functions that represent negative log-probability."""

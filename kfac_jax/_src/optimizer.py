@@ -186,7 +186,7 @@ class Optimizer(utils.WithStagedMethods):
       should_vmap_estimator_samples: bool = False,
       norm_to_scale_identity_weight_per_block: str | None = None,
       precon_power: Scalar = -1.0,
-      exact_quad_model_matrix_type: str | None = None,
+      exact_quad_model_matrix_type: str = "ggn",
   ):
     """Initializes the kfac_jax optimizer with the provided settings.
 
@@ -463,8 +463,8 @@ class Optimizer(utils.WithStagedMethods):
         ``layer_tag_to_block_ctor`` and  ``estimation_mode``). (Default: -1)
       exact_quad_model_matrix_type: The type of matrix to use when computing the
         exact quadratic model (used in the adaptive learning rate and momentum).
-        Can be ``'fisher'``, ``'ggn'``, or None. If None, will use the value
-        implied by ``estimation_mode``. (Default: None)
+        Can be ``'fisher'``, ``'ggn'``, or ``'fisher_empirical'``.
+        (Default: ``'ggn'``)
     """
 
     super().__init__(
@@ -647,8 +647,6 @@ class Optimizer(utils.WithStagedMethods):
 
   @property
   def _mat_type_for_exact_quad_model(self) -> str:
-    if self._exact_quad_model_matrix_type is None:
-      return self._estimator.default_mat_type
     return self._exact_quad_model_matrix_type
 
   def _should_update_damping(self, step_counter: int) -> bool:
@@ -1638,6 +1636,11 @@ class Optimizer(utils.WithStagedMethods):
     elif self._mat_type_for_exact_quad_model == "ggn":
       c_factor_v = tuple(self._implicit.multiply_ggn_factor_transpose
                          (func_args, vi) for vi in vectors)
+    elif self._mat_type_for_exact_quad_model == "fisher_empirical":
+      c_factor_v = tuple(
+          self._implicit.multiply_empirical_fisher_factor_transpose
+          (func_args, vi) for vi in vectors
+          )
     else:
       raise ValueError(f"Unrecognized matrix type string for exact quad model:"
                        f"'{self._mat_type_for_exact_quad_model}'.")

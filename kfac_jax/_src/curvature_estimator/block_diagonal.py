@@ -112,7 +112,7 @@ class BlockDiagonalCurvature(
 
       * fisher_empirical - computes the 'empirical' Fisher information
         matrix (which uses the data's distribution for the targets, as
-        opposed to the true Fisher which uses the model's distribution) and
+        opposed to the true Fisher, which uses the model's distribution) and
         requires that each registered loss have specified targets. This mode
         will introduce an additional normalization of the 2nd-order statistics
         by the batch size (on top of the normalization by batch size done in the
@@ -711,7 +711,7 @@ class BlockDiagonalCurvature(
     # Compute the losses and the VJP function from the function inputs
     losses, losses_vjp = self._compute_losses_vjp(func_args)
 
-    if "fisher" in estimation_mode:
+    if estimation_mode in {"fisher_gradients", "fisher_empirical"}:
       if any(not isinstance(l, loss_functions.NegativeLogProbLoss)
              for l in losses):
         raise ValueError(

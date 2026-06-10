@@ -169,6 +169,56 @@ class ImplicitExactCurvature:
     return tuple(loss.multiply_ggn_factor_transpose(vec)
                  for loss, vec in zip(losses, loss_vectors))
 
+  def multiply_loss_empirical_fisher(
+      self,
+      losses: LossFunctionsSequence,
+      loss_vectors: LossFunctionInputsSequence,
+  ) -> LossFunctionInputsTuple:
+    """Multiplies ``loss_vectors`` by the empirical Fisher of the total loss."""
+    assert len(losses) == len(loss_vectors)
+    return tuple(loss.multiply_empirical_fisher(vec)
+                 for loss, vec in zip(losses, loss_vectors))
+
+  def multiply_loss_empirical_fisher_factor(
+      self,
+      losses: Sequence[loss_functions.LossFunction],
+      loss_inner_vectors: Sequence[Array],
+  ) -> LossFunctionInputsTuple:
+    """Multiplies the vectors with the empirical Fisher factors of each loss.
+
+    Args:
+      losses: A sequence of loss instances.
+      loss_inner_vectors: A sequence of vectors, each corresponding to one
+        instance of a loss in losses.
+
+    Returns:
+      The product of all vectors with the factors of the empirical Fisher of
+      each the losses.
+    """
+    assert len(losses) == len(loss_inner_vectors)
+    return tuple(loss.multiply_empirical_fisher_factor(vec)
+                 for loss, vec in zip(losses, loss_inner_vectors))
+
+  def multiply_loss_empirical_fisher_factor_transpose(
+      self,
+      losses: LossFunctionsSequence,
+      loss_vectors: LossFunctionInputsSequence,
+  ) -> tuple[Array, ...]:
+    """Multiplies the vectors with the transposed empirical Fisher factors of each loss.
+
+    Args:
+      losses: A sequence of loss instances.
+      loss_vectors: A sequence of vectors, each corresponding to one instance of
+        a loss in losses.
+
+    Returns:
+      The product of all vectors with the factors of the empirical Fisher of
+      each the losses.
+    """
+    assert len(losses) == len(loss_vectors)
+    return tuple(loss.multiply_empirical_fisher_factor_transpose(vec)
+                 for loss, vec in zip(losses, loss_vectors))
+
   @classmethod
   def _assert_losses_same(
       cls,
@@ -452,6 +502,87 @@ class ImplicitExactCurvature:
 
     return utils.scalar_div(vectors, jnp.sqrt(self.batch_size(func_args)))
 
+  @utils.auto_scope_method
+  def multiply_empirical_fisher(
+      self,
+      func_args: utils.FuncArgs,
+      parameter_structured_vector: utils.Params,
+  ) -> utils.Params:
+    """Multiplies the vector with the empirical Fisher matrix of the total loss.
+
+    Args:
+      func_args: The inputs to the model function, on which to evaluate the
+        empirical Fisher matrix.
+      parameter_structured_vector: The vector which to multiply with the
+        empirical Fisher matrix.
+
+    Returns:
+      The product ``EFv``.
+    """
+    jacobian_vectors, losses = self.multiply_jacobian(
+        func_args, parameter_structured_vector, True)
+
+    loss_ef_jacobian_vectors = self.multiply_loss_empirical_fisher(
+        losses, jacobian_vectors)
+
+    vector = self.multiply_jacobian_transpose(
+        func_args, loss_ef_jacobian_vectors)
+
+    assert utils.abstract_objects_equal(parameter_structured_vector, vector)
+
+    return utils.scalar_div(vector, self.batch_size(func_args))
+
+  @utils.auto_scope_method
+  def multiply_empirical_fisher_factor_transpose(
+      self,
+      func_args: utils.FuncArgs,
+      parameter_structured_vector: utils.Params,
+  ) -> tuple[Array, ...]:
+    """Multiplies the vector with the transposed factor of the empirical Fisher matrix.
+
+    Args:
+      func_args: The inputs to the model function, on which to evaluate the
+        empirical Fisher matrix.
+      parameter_structured_vector: The vector which to multiply with the
+        empirical Fisher matrix.
+
+    Returns:
+      The product ``B^T v``, where ``EF = BB^T``.
+    """
+    jacobian_vectors, losses = self.multiply_jacobian(
+        func_args, parameter_structured_vector, True)
+
+    vectors = self.multiply_loss_empirical_fisher_factor_transpose(
+        losses, jacobian_vectors)
+
+    return utils.scalar_div(vectors, jnp.sqrt(self.batch_size(func_args)))
+
+  @utils.auto_scope_method
+  def multiply_empirical_fisher_factor(
+      self,
+      func_args: utils.FuncArgs,
+      loss_inner_vectors: Sequence[Array],
+  ) -> utils.Params:
+    """Multiplies the vector with the factor of the empirical Fisher matrix.
+
+    Args:
+      func_args: The inputs to the model function, on which to evaluate the
+        empirical Fisher matrix.
+      loss_inner_vectors: The vector which to multiply with the empirical Fisher
+        factor matrix.
+
+    Returns:
+      The product ``Bv``, where ``EF = BB^T``.
+    """
+    losses, vjp = self._loss_tags_vjp(func_args)
+
+    ef_factor_vectors = self.multiply_loss_empirical_fisher_factor(
+        losses, loss_inner_vectors)
+
+    vectors = vjp(ef_factor_vectors)
+
+    return utils.scalar_div(vectors, jnp.sqrt(self.batch_size(func_args)))
+
   def get_loss_inner_vector_shapes_and_batch_size(
       self,
       func_args: utils.FuncArgs,
@@ -478,7 +609,8 @@ class ImplicitExactCurvature:
         shapes.append(loss.fisher_factor_inner_shape)
       elif mode == "ggn":
         shapes.append(loss.ggn_factor_inner_shape)
-
+      elif mode == "fisher_empirical":
+        shapes.append(loss.empirical_fisher_factor_inner_shape)
       else:
         raise ValueError(f"Unrecognized mode: {mode}")
 
