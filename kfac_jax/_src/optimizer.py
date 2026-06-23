@@ -248,7 +248,9 @@ class Optimizer(utils.WithStagedMethods):
         quadratic model when using adaptive damping. Note that the user is still
         responsible for adding regularization to the loss.
       regularized_parameters_path_exclusions: str. A comma-separated list
-        specifying the names of parameters that should not be regularized.
+        specifying the names of parameters that are excluded from L2
+        regularization. If any string in the path to a parameter is found in
+        this list, the parameter is considered excluded from L2 regularization.
         A number of convenience examples are given in this module, e.g.
         HAIKU_BIASES_AND_NORMS, which is ``"b,bias,scale,offset"``.
         (Default: ``""``)
