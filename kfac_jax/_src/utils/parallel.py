@@ -114,7 +114,7 @@ def get_device_n_contents(obj: TArrayTree, n: int) -> TArrayTree:
     assert isinstance(value.sharding, jax.NamedSharding)
 
     shard_data = value.addressable_shards[n].data
-    if value.sharding.spec[0] is None:
+    if len(value.sharding.spec) == 0 or value.sharding.spec[0] is None:
       return shard_data
 
     return shard_data.squeeze(0)
@@ -254,6 +254,8 @@ def host_sync(
                                      axis_name="i",
                                      static_broadcasted_argnums=1)
 
+    local_device = jax.local_devices()[0]
+    obj = jax.tree_util.tree_map(lambda x: jax.device_put(x, local_device), obj)
     obj = jax.tree_util.tree_map(lambda x: jnp.expand_dims(x, axis=0), obj)
 
     return get_first(default_device_sync(obj, sync_op))
