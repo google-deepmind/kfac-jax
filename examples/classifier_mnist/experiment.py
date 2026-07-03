@@ -68,7 +68,7 @@ def classifier_loss(
       predictions=logits,
       labels_as_int=batch["labels"],
       params=params,
-      l2_reg=l2_reg if is_training else 0.0,
+      l2_reg=l2_reg if is_training else 0.0,  # pyrefly: ignore[bad-argument-type]
       haiku_exclude_batch_norm=False,
       haiku_exclude_biases=False,
       top_k_stats=(1,),
@@ -88,7 +88,7 @@ class ClassifierMnistExperiment(training.MnistExperiment):
         init_rng=init_rng,
         config=config,
         init_parameters_func=convolutional_classifier().init,
-        model_loss_func=functools.partial(
+        model_loss_func=functools.partial(  # pyrefly: ignore[bad-argument-type]
             classifier_loss, l2_reg=config.l2_reg),
         has_aux=True,
         has_rng=False,

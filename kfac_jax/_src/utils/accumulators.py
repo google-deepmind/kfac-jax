@@ -43,7 +43,7 @@ def default_add_function(
 
 
 @misc.register_state_class
-class WeightedMovingAverage(Generic[TArrayTree], misc.State):
+class WeightedMovingAverage(Generic[TArrayTree], misc.State):  # pyrefly: ignore[invalid-type-var]
   """A wrapped class for an arbitrary weighted moving average."""
 
   weight: Numeric
@@ -97,7 +97,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
     """Resets the weighted average."""
 
     self.weight = jnp.zeros_like(self.weight)
-    self.value = None if value_to_none else jnp.zeros_like(self.value)
+    self.value = None if value_to_none else jnp.zeros_like(self.value)  # pyrefly: ignore[bad-argument-type]
 
   def value_and_clear(self) -> TArrayTree:
     """Retrieves the value of the weighted average and clears it."""
@@ -117,8 +117,8 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
     """Initializes a `WeightedMovingAverage` with a single array of zeros."""
 
     return cls(  # pytype: disable=wrong-keyword-args
-        weight=jnp.zeros([], dtype=dtype),
-        value=jnp.zeros(shape, dtype=dtype),
+        weight=jnp.zeros([], dtype=dtype),  # pyrefly: ignore[unexpected-keyword]
+        value=jnp.zeros(shape, dtype=dtype),  # pyrefly: ignore[unexpected-keyword]
     )
 
   @classmethod
@@ -126,14 +126,14 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):
     """Initializes a `WeightedMovingAverage` with zeros structure like `value`."""
 
     return cls(  # pytype: disable=wrong-keyword-args
-        weight=jnp.array(
+        weight=jnp.array(  # pyrefly: ignore[unexpected-keyword]
             0.0, dtype=types.get_float_dtype_and_check_consistency(value)
         ),
-        value=jax.tree_util.tree_map(jnp.zeros_like, value),
+        value=jax.tree_util.tree_map(jnp.zeros_like, value),  # pyrefly: ignore[unexpected-keyword]
     )
 
 
-class MultiChunkAccumulator(Generic[TArrayTree]):
+class MultiChunkAccumulator(Generic[TArrayTree]):  # pyrefly: ignore[invalid-type-var]
   """Statistics accumulation, abstracted over multiple chunks."""
 
   def __init__(
@@ -174,7 +174,7 @@ class MultiChunkAccumulator(Generic[TArrayTree]):
   def value(self) -> TArrayTree | None:
     """The current normalized value of the accumulator."""
 
-    if types.tree_is_empty(self.accumulator):
+    if types.tree_is_empty(self.accumulator):  # pyrefly: ignore[bad-argument-type]
       return self.accumulator
 
     if self._multi_device:
@@ -185,7 +185,7 @@ class MultiChunkAccumulator(Generic[TArrayTree]):
   def clear(self) -> None:
     """Sets the underlying accumulator and weight to `None`."""
     self._accumulator = None
-    self._weight = None
+    self._weight = None  # pyrefly: ignore[bad-assignment]
 
   def value_and_clear(self) -> TArrayTree | None:
     """Retrieves the normalized value of the accumulator and clears it."""

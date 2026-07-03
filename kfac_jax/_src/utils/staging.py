@@ -271,7 +271,7 @@ def staged(
           if parallel.is_scalar(args[i]):
             in_axes.append(None)
           else:
-            in_axes.append(0)
+            in_axes.append(0)  # pyrefly: ignore[bad-argument-type]
 
         in_axes = tuple(in_axes)
         key = (instance.pmap_axis_name, in_axes)

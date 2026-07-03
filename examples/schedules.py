@@ -79,12 +79,12 @@ def piecewise_interpolated_schedule(
     raise ValueError("`vals` must have one more element than `boundaries`.")
 
   bounds = np.stack((0,) + tuple(boundaries))
-  vals = np.array(vals)
+  vals = np.array(vals)  # pyrefly: ignore[bad-assignment]
   interval_sizes = bounds[1:] - bounds[:-1]
 
   indicator = (bounds[:-1] <= count) & (count < bounds[1:])
   pct = (count - bounds[:-1]) / interval_sizes
-  interp_vals = interpolate_fn(vals[:-1], vals[1:], pct)
+  interp_vals = interpolate_fn(vals[:-1], vals[1:], pct)  # pyrefly: ignore[bad-argument-type]
 
   return indicator.dot(interp_vals) + (bounds[-1] <= count) * vals[-1]
 
@@ -185,7 +185,7 @@ def stepwise_schedule(
   values = jnp.concatenate(
       [jnp.array([1.0]), jnp.array(decay_factors)]) * init_value
 
-  index = jnp.sum(boundaries <= count)
+  index = jnp.sum(boundaries <= count)  # pyrefly: ignore[unsupported-operation]
 
   return jnp.take(values, index)
 
@@ -427,11 +427,11 @@ def with_warmup(
   warmup_sched = optax.linear_schedule(
       init_value=warmup_start_value,
       end_value=warmup_end_value,
-      transition_steps=warmup_duration,
+      transition_steps=warmup_duration,  # pyrefly: ignore[bad-argument-type]
   )
 
   return optax.join_schedules([warmup_sched, base_schedule_fn],  # pytype: disable=bad-return-type
-                              [warmup_duration])
+                              [warmup_duration])  # pyrefly: ignore[bad-argument-type]
 
 
 def construct_schedule(
@@ -516,7 +516,7 @@ def construct_schedule(
   # new_kwargs = _convert_fieldreferences(kwargs)  # this also makes a copy
   new_kwargs = kwargs.copy()
 
-  for param in SCHEDULE_METADATA[name]["params_to_convert"]:
+  for param in SCHEDULE_METADATA[name]["params_to_convert"]:  # pyrefly: ignore[not-iterable]
 
     if param not in new_kwargs:
       raise ValueError(f"Parameter '{param}' is required for schedule "
@@ -529,7 +529,7 @@ def construct_schedule(
     if mode == "steps":
 
       if total_steps is None:
-        total_steps = int(total_epochs * dataset_size / train_total_batch_size)
+        total_steps = int(total_epochs * dataset_size / train_total_batch_size)  # pyrefly: ignore[unsupported-operation]
 
       new_kwargs["total"] = total_steps
 
@@ -537,7 +537,7 @@ def construct_schedule(
 
       # Convert to data seen in this case
       if total_epochs is None:
-        new_kwargs["total"] = total_steps * train_total_batch_size
+        new_kwargs["total"] = total_steps * train_total_batch_size  # pyrefly: ignore[unsupported-operation]
       else:
         new_kwargs["total"] = total_epochs * dataset_size
 
@@ -545,12 +545,12 @@ def construct_schedule(
 
       # Convert to data seen in this case
       if total_steps:
-        new_kwargs["total"] = total_steps * train_total_batch_size
+        new_kwargs["total"] = total_steps * train_total_batch_size  # pyrefly: ignore[unsupported-operation]
       else:
-        new_kwargs["total"] = total_epochs * dataset_size
+        new_kwargs["total"] = total_epochs * dataset_size  # pyrefly: ignore[unsupported-operation]
 
   # Create the base schedule (which does not include warmup).
-  base_schedule = lambda count: SCHEDULE_METADATA[name]["ctor"](count,
+  base_schedule = lambda count: SCHEDULE_METADATA[name]["ctor"](count,  # pyrefly: ignore[not-callable]
                                                                 **new_kwargs)
 
   # If a warmup is asked for, wrap the base schedule with it.

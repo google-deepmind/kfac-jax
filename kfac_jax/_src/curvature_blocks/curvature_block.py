@@ -536,7 +536,7 @@ class ScaledIdentity(CurvatureBlock):
     del rng, exact_powers_to_cache, approx_powers_to_cache  # Unused
 
     return CurvatureBlock.State(
-        cache=None,
+        cache=None,  # pyrefly: ignore[unexpected-keyword]
     )
 
   def sync(

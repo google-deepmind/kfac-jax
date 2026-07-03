@@ -106,7 +106,7 @@ def extract_tags(
 ) -> tuple[tuple[tags.LayerTagEqn, ...], tuple[tags.LossTagEqn, ...]]:
   """Extracts the layer and the loss tags from the given Jaxpr."""
 
-  return (
+  return (  # pyrefly: ignore[bad-return]
       tuple(
           eqn for eqn in jaxpr.eqns if isinstance(eqn.primitive, tags.LayerTag)
       ),
@@ -234,11 +234,11 @@ class ProcessedJaxpr(utils.Finalizable):
 
     _, self.loss_tags = extract_tags(self.jaxpr)
 
-    name_layer_tags(self.layer_tags)
+    name_layer_tags(self.layer_tags)  # pyrefly: ignore[bad-argument-type]
 
     self.layer_tags, self.layer_indices = order_layer_tags(
         params_vars_flat=self.params_vars_flat,
-        layer_tags=self.layer_tags,
+        layer_tags=self.layer_tags,  # pyrefly: ignore[bad-argument-type]
         allow_left_out_params=allow_left_out_params,
     )
 
@@ -257,7 +257,7 @@ class ProcessedJaxpr(utils.Finalizable):
   @property
   def params_vars(self) -> utils.PyTree[Var]:
     """The abstract parameter variables, as an un-flatten structure."""
-    return self.in_vars[self.params_index]
+    return self.in_vars[self.params_index]  # pyrefly: ignore[bad-index]
 
   @property
   def params_vars_flat(self) -> list[Var]:
@@ -355,7 +355,7 @@ class ProcessedJaxpr(utils.Finalizable):
 
     return processed_jaxpr
 
-  def __eq__(self, other: ProcJaxpr) -> bool:
+  def __eq__(self, other: ProcJaxpr) -> bool:  # pyrefly: ignore[bad-override]
     """Compares two ProcessedJaxpr instances by tree structure."""
 
     # Verify whether input trees are equivalent
@@ -746,7 +746,7 @@ def _loss_tags_hvp(
     # now use jax.grad rather than jax.vjp for taking derivatives.
     _, losses_inputs = losses_func(param_primals)
     losses = processed_jaxpr.reconstruct_losses(losses_inputs)
-    return sum(jnp.sum(loss.evaluate()) for loss in losses)
+    return sum(jnp.sum(loss.evaluate()) for loss in losses)  # pyrefly: ignore[bad-return]
 
   # Directional derivative function
   df_dot_dv = lambda p: (jax.jvp(losses_sum, [p], [params_tangents])[1])
@@ -856,7 +856,7 @@ def _layer_tag_vjp(
 
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 
-    return tuple(read(layer_tag_invars))
+    return tuple(read(layer_tag_invars))  # pyrefly: ignore[bad-return]
 
   def forward_aux(
       aux: dict[Var, Array],
@@ -908,7 +908,7 @@ def _layer_tag_vjp(
 
       if isinstance(eqn.primitive, tags.LossTag):
 
-        loss: LossFunction = tags.loss_eqn_construct_loss(eqn, *input_values)
+        loss: LossFunction = tags.loss_eqn_construct_loss(eqn, *input_values)  # pyrefly: ignore[bad-argument-type]
 
         losses_p_dependants.append(loss.parameter_dependants)
         losses_inputs_values.append(tuple(input_values))
@@ -919,7 +919,7 @@ def _layer_tag_vjp(
           break
 
       else:
-        write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, input_values))
+        write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, input_values))  # pyrefly: ignore[bad-argument-type]
 
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 
@@ -980,7 +980,7 @@ def _layer_tag_vjp(
     for tag in processed_jaxpr.layer_tags:
 
       primals = read_primals(tag.invars)  # pytype: disable=wrong-arg-types
-      tangents = read_tangents(tag.invars)
+      tangents = read_tangents(tag.invars)  # pyrefly: ignore[bad-assignment]
 
       # The input tangents could be potentially wrong, so we don't include them.
       # This is because the one of the invars could be a Literal, which breaks

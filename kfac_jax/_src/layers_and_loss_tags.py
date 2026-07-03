@@ -181,7 +181,7 @@ class LossTag(jex.core.Primitive):
   ) -> tuple[Array, int | tuple[int, ...]]:
     """Defines how the primitive behaves under :func:`jax.vmap`."""
 
-    return self.bind(*batched_args, **params), batched_dims[:1]
+    return self.bind(*batched_args, **params), batched_dims[:1]  # pyrefly: ignore[bad-index]
 
 
 def loss_eqn_parameter_dependants(
@@ -198,7 +198,7 @@ def loss_eqn_parameter_dependants(
   assert meta is not None and isinstance(meta, LossMetaData)
   assert len(eqn.invars) == len(meta.argument_names)
   kwargs = dict(zip(meta.argument_names, eqn.invars))
-  return [kwargs[name] for name in meta.parameter_dependants]
+  return [kwargs[name] for name in meta.parameter_dependants]  # pyrefly: ignore[bad-return]
 
 
 def loss_eqn_construct_loss(
@@ -213,7 +213,7 @@ def loss_eqn_construct_loss(
   assert meta is not None and isinstance(meta, LossMetaData)
   assert len(eqn.invars) == len(meta.argument_names)
   kwargs = dict(zip(meta.argument_names, args))
-  return meta.loss_class(**kwargs)
+  return meta.loss_class(**kwargs)  # pyrefly: ignore[not-callable]
 
 
 def loss_eqn_class_name(eqn: jex.core.JaxprEqn) -> str:
@@ -225,7 +225,7 @@ def loss_eqn_class_name(eqn: jex.core.JaxprEqn) -> str:
   meta: LossMetaData[T] = eqn.params.get("meta")  # pytype: disable=invalid-annotation
   assert meta is not None and isinstance(meta, LossMetaData)
 
-  return meta.loss_class.__name__
+  return meta.loss_class.__name__  # pyrefly: ignore[bad-return]
 
 
 def get_and_verify_layer_meta(
@@ -245,12 +245,14 @@ def get_and_verify_layer_meta(
   for i in meta.inputs_index:
     if i >= n:
       raise ValueError(
+          # pyrefly: ignore[missing-attribute]
           f"Meta data has {meta.input_index=}, but only {n} "
           f"arguments passed for {err_suffix}.")
 
   for i in meta.outputs_index:
     if i >= n:
       raise ValueError(
+          # pyrefly: ignore[missing-attribute]
           f"Meta data has {meta.output_index=}, but only {n} "
           f"arguments passed for {err_suffix}.")
 
@@ -357,7 +359,7 @@ class LayerTag(jex.core.Primitive):
       **params: Any,
   ) -> tuple[Array, int]:
     """Defines how the primitive behaves under :func:`jax.vmap`."""
-    return self.bind(*batched_args, **params), batched_dims[0]
+    return self.bind(*batched_args, **params), batched_dims[0]  # pyrefly: ignore[bad-index]
 
 
 def layer_eqn_data(  # pytype: disable=invalid-annotation
@@ -366,7 +368,7 @@ def layer_eqn_data(  # pytype: disable=invalid-annotation
 ) -> LayerData[jex.core.Var]:
 
   if isinstance(eqn.primitive, LayerTag):
-    return eqn.primitive.layer_data(eqn.invars, eqn.params, str(eqn))
+    return eqn.primitive.layer_data(eqn.invars, eqn.params, str(eqn))  # pyrefly: ignore[bad-return]
 
   if raise_an_error:
     raise ValueError("Primitive must be a LayerTag.")

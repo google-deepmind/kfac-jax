@@ -121,7 +121,7 @@ class OptaxWrapper:
         in_axes=(0,) * 5 + (None,),
     )
     self._pmap_init = jax.pmap(
-        lambda p, *_: OptaxAndPreconditionState(self._optax_optimizer.init(p)),
+        lambda p, *_: OptaxAndPreconditionState(self._optax_optimizer.init(p)),  # pyrefly: ignore[bad-argument-type]
         axis_name=self.pmap_axis_name,
     )
     self._pmap_rng_split = jax.pmap(
@@ -204,7 +204,7 @@ class OptaxWrapper:
 
     if self._preconditioner is not None:
       precond_state = self._preconditioner.maybe_update(
-          precond_state,
+          precond_state,  # pyrefly: ignore[bad-argument-type]
           func_args,
           rng_precon,
       )
@@ -232,31 +232,31 @@ class OptaxWrapper:
         params,
         precond_state=precond_state,
     )
-    new_state = OptaxAndPreconditionState(new_optax_state, precond_state)
+    new_state = OptaxAndPreconditionState(new_optax_state, precond_state)  # pyrefly: ignore[bad-argument-type]
     new_params = optax.apply_updates(params, updates)
 
     # Add step and batch size
     batch_size = jax.tree_util.tree_leaves(batch)[0].shape[0]
-    stats["step"] = global_step + 1
+    stats["step"] = global_step + 1  # pyrefly: ignore[unsupported-operation]
     stats["batch_size"] = batch_size * jax.device_count()
     stats["data_seen"] = stats["step"] * stats["batch_size"]
-    stats["learning_rate"] = self._learning_rate(global_step)
+    stats["learning_rate"] = self._learning_rate(global_step)  # pyrefly: ignore[bad-argument-count, bad-argument-type]
 
     if self._include_norms_in_stats:
       stats["grad_norm"] = kfac_jax.utils.norm(grads)
-      stats["update_norm"] = kfac_jax.utils.norm(updates)
+      stats["update_norm"] = kfac_jax.utils.norm(updates)  # pyrefly: ignore[bad-argument-type]
       stats["param_norm"] = kfac_jax.utils.norm(params)
       stats["rel_grad_norm"] = stats["grad_norm"] / stats["param_norm"]
       stats["rel_update_norm"] = stats["update_norm"] / stats["param_norm"]
 
     if self._include_per_param_norms_in_stats:
-      stats.update(kfac_jax.utils.per_parameter_norm(grads, "grad_norm"))
-      stats.update(kfac_jax.utils.per_parameter_norm(updates, "update_norm"))
+      stats.update(kfac_jax.utils.per_parameter_norm(grads, "grad_norm"))  # pyrefly: ignore[no-matching-overload]
+      stats.update(kfac_jax.utils.per_parameter_norm(updates, "update_norm"))  # pyrefly: ignore[bad-argument-type, no-matching-overload]
       param_norms = kfac_jax.utils.per_parameter_norm(params, "param_norm")
 
       for key in param_norms:
 
-        norm = param_norms[key]
+        norm = param_norms[key]  # pyrefly: ignore[bad-index]
         stats[key] = norm
 
         grad_key = key.replace("param", "grad")

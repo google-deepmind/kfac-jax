@@ -62,9 +62,9 @@ class BatchSizeCalculator:
 
   def __init__(self, mode: str, total: int, per_device: int):
     if total == -1:
-      total = None
+      total = None  # pyrefly: ignore[bad-assignment]
     if per_device == -1:
-      per_device = None
+      per_device = None  # pyrefly: ignore[bad-assignment]
     if not is_exactly_one_not_none(total, per_device):
       raise ValueError(
           "Exactly one of the ``total`` and ``per_device`` arguments must "
@@ -320,7 +320,7 @@ class SupervisedExperiment(abc.ABC):
 
       logging.info("Using seed rng %s to build train input.", seed_rng)
 
-      self._train_input = pipe_utils.py_prefetch(
+      self._train_input = pipe_utils.py_prefetch(  # pyrefly: ignore[bad-assignment]
           functools.partial(
               self._build_train_input,
               split="train",
@@ -329,9 +329,9 @@ class SupervisedExperiment(abc.ABC):
           )
       )
 
-      self._train_input = more_itertools.peekable(self._train_input)
+      self._train_input = more_itertools.peekable(self._train_input)  # pyrefly: ignore[bad-argument-type, bad-assignment]
 
-    return self._train_input
+    return self._train_input  # pyrefly: ignore[bad-return]
 
   @property
   def train_inputs(
@@ -348,17 +348,17 @@ class SupervisedExperiment(abc.ABC):
 
       logging.info("Initializing evaluation data iterator.")
 
-      self._eval_input = {}
+      self._eval_input = {}  # pyrefly: ignore[bad-assignment]
 
       for split in self.eval_splits:
-        self._eval_input[split] = functools.partial(
+        self._eval_input[split] = functools.partial(  # pyrefly: ignore[unsupported-operation]
             self._build_eval_input,
             split=split,
             seed=int(self.seed_rng[1]),
             device_batch_size=self.batch_size.eval.per_device,
         )
 
-    return self._eval_input
+    return self._eval_input  # pyrefly: ignore[bad-return]
 
   @property
   def init_batch(self) -> Batch:
@@ -489,13 +489,13 @@ class SupervisedExperiment(abc.ABC):
 
     # Initialize optimizer state
     logging.info("Initializing optimizer state.")
-    self._opt_state = self.optimizer.init(
+    self._opt_state = self.optimizer.init(  # pyrefly: ignore[bad-assignment]
         self._params, optimizer_rng, self.init_batch, self._state
     )
 
     if not self.has_func_state:
       # Needed for checkpointing
-      self._state = ()
+      self._state = ()  # pyrefly: ignore[bad-assignment]
 
     # Log parameters
     def format_path_entry(entry: Any) -> str:
@@ -637,25 +637,25 @@ class SupervisedExperiment(abc.ABC):
     # Perform optimizer step
     result = self.optimizer.step(
         params=self._params,
-        state=self._opt_state,
+        state=self._opt_state,  # pyrefly: ignore[bad-argument-type]
         rng=rng,
-        data_iterator=self.train_inputs,
+        data_iterator=self.train_inputs,  # pyrefly: ignore[bad-argument-type]
         func_state=self._state if self.has_func_state else None,
         global_step_int=self._python_step,
     )
 
     # Unpack result
     if self.has_func_state:
-      self._params, self._opt_state, self._state, stats = result
+      self._params, self._opt_state, self._state, stats = result  # pyrefly: ignore[bad-assignment, bad-unpacking]
     else:
-      self._params, self._opt_state, stats = result
+      self._params, self._opt_state, stats = result  # pyrefly: ignore[bad-assignment, bad-unpacking]
 
-    self._post_param_update_processing(global_step, stats)
+    self._post_param_update_processing(global_step, stats)  # pyrefly: ignore[bad-argument-type]
 
-    self._maybe_update_polyak_average_and_stats(rng, stats)
+    self._maybe_update_polyak_average_and_stats(rng, stats)  # pyrefly: ignore[bad-argument-type]
 
     if "aux" in stats:
-      stats.update(stats.pop("aux", {}))
+      stats.update(stats.pop("aux", {}))  # pyrefly: ignore[missing-attribute]
 
     per_device_stats_to_log = self.config.get("per_device_stats_to_log", [])
 
@@ -668,7 +668,7 @@ class SupervisedExperiment(abc.ABC):
         )
         for i in range(gathered_stat.shape[0]):
           # Get value off of device i
-          stats_to_return[f"{name}_{i}"] = value[i]
+          stats_to_return[f"{name}_{i}"] = value[i]  # pyrefly: ignore[bad-index]
 
       else:
         stats_to_return[name] = kfac_jax.utils.get_first(value)
@@ -845,7 +845,7 @@ class SupervisedExperiment(abc.ABC):
       logging.info(
           "Evaluation for %s is completed with %d number of batches.",
           name,
-          int(averaged_stats.weight[0]),
+          int(averaged_stats.weight[0]),  # pyrefly: ignore[bad-index, unsupported-operation]
       )
 
     all_stats["progress"] = self.progress(self._python_step)
@@ -857,7 +857,7 @@ class JaxlineExperiment(SupervisedExperiment, experiment.AbstractExperiment):
   """A Jaxline supervised experiment."""
 
   @property
-  def CHECKPOINT_ATTRS(self) -> dict[str, str]:
+  def CHECKPOINT_ATTRS(self) -> dict[str, str]:  # pyrefly: ignore[bad-override]
     attrs = {
         "_params": "params",
         "_params_polyak": "params_polyak",
@@ -968,7 +968,7 @@ def train_standalone_supervised(
         f"{storage_folder}/snapshot_final.npz",
         *jax.tree_util.tree_leaves(experiment_instance.snapshot_state()),
     )
-    jnp.savez(f"{storage_folder}/stats.npz", **stats)
+    jnp.savez(f"{storage_folder}/stats.npz", **stats)  # pyrefly: ignore[bad-argument-type]
   return stats
 
 

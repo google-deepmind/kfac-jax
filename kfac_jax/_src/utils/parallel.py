@@ -65,7 +65,7 @@ def wrap_if_pmap(
 
   @functools.wraps(p_func)
   def p_func_if_pmap(obj: TArrayTree, axis_name: str | None) -> TArrayTree:
-    return p_func(obj, axis_name) if in_pmap(axis_name) else obj
+    return p_func(obj, axis_name) if in_pmap(axis_name) else obj  # pyrefly: ignore[bad-argument-type]
 
   return p_func_if_pmap
 
@@ -104,7 +104,7 @@ def get_device_n_contents(obj: TArrayTree, n: int) -> TArrayTree:
       return value
 
     if using_legacy_pmap():
-      return value[n]
+      return value[n]  # pyrefly: ignore[bad-index]
 
     assert isinstance(value, jax.Array)
 

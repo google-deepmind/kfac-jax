@@ -173,7 +173,7 @@ class LossFunction(utils.Finalizable):
       multiplier = 1.0
     else:
       raise ValueError(f"Unrecognized coefficient_mode={coefficient_mode}.")
-    return self._evaluate(targets) * multiplier
+    return self._evaluate(targets) * multiplier  # pyrefly: ignore[bad-argument-type]
 
   @abc.abstractmethod
   def _evaluate(self, targets: Array) -> Array:
@@ -836,21 +836,21 @@ class NormalMeanVarianceNegativeLogProbLoss(DistributionNegativeLogProbLoss):
       self,
       index: tuple[int, ...],
   ) -> tuple[Array, Array]:
-    [index] = index
+    [index] = index  # pyrefly: ignore[bad-assignment]
 
-    if index < int(self._mean.shape[-1]):
+    if index < int(self._mean.shape[-1]):  # pyrefly: ignore[unsupported-operation]
       # Index corresponds to mean parameter.
       mean_slice = self._fisher_mean_factor[:, index][..., None]
       mean_output = insert_slice_in_zeros(
-          mean_slice, self._mean.shape, [0, index])
+          mean_slice, self._mean.shape, [0, index])  # pyrefly: ignore[bad-argument-type]
       var_output = jnp.zeros_like(mean_output)
 
     else:
-      index -= int(self._mean.shape[-1])
+      index -= int(self._mean.shape[-1])  # pyrefly: ignore[bad-assignment, unsupported-operation]
       # Index corresponds to variance parameter.
       var_slice = self._fisher_var_factor[:, index][..., None]
       var_output = insert_slice_in_zeros(
-          var_slice, self._variance.shape, [0, index])
+          var_slice, self._variance.shape, [0, index])  # pyrefly: ignore[bad-argument-type]
       mean_output = jnp.zeros_like(var_output)
 
     return mean_output, var_output
@@ -958,7 +958,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
   def _probs(self) -> Array:
     """The probabilities of the underlying Bernoulli distribution."""
     if self.mask is not None:
-      return self.dist.probs * self.mask
+      return self.dist.probs * self.mask  # pyrefly: ignore[bad-return]
     else:
       return self.dist.probs  # pytype: disable=bad-return-type
 
@@ -1078,9 +1078,9 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     """The probabilities of the underlying Categorical distribution."""
 
     if self.mask is not None:
-      return self.dist.probs * self.mask[..., None]
+      return self.dist.probs * self.mask[..., None]  # pyrefly: ignore[bad-return]
     else:
-      return self.dist.probs
+      return self.dist.probs  # pyrefly: ignore[bad-return]
 
   @property
   def _sqrt_probs(self) -> Array:

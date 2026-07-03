@@ -109,7 +109,7 @@ class CurvatureEstimator(Generic[StateType], utils.Finalizable):
     self.batch_index = batch_index
     self.default_estimation_mode = default_estimation_mode
     self.compute_losses, _ = tracer.compute_all_losses(
-        func=self.func, params_index=params_index
+        func=self.func, params_index=params_index  # pyrefly: ignore[bad-argument-type]
     )
 
   @property

@@ -48,7 +48,7 @@ def _extract_params(
       # In the tests, parameter names are guaranteed to have the form
       # 'layer_name/parameter_name'.
       if "/" + k in name:
-        params[i] = v
+        params[i] = v  # pyrefly: ignore[unsupported-operation]
         found = True
         break
     if not found:
@@ -176,8 +176,8 @@ class _LayerNorm(hk.LayerNorm):
   def __call__(self, inputs: LayerInputs, *_) -> LayerInputs:  # pytype: disable=signature-mismatch  # jax-ndarray
     x, layer_values, aux = inputs
 
-    mean = jnp.mean(x, axis=self.axis, keepdims=True)
-    variance = jnp.var(x, axis=self.axis, keepdims=True)
+    mean = jnp.mean(x, axis=self.axis, keepdims=True)  # pyrefly: ignore[bad-argument-type]
+    variance = jnp.var(x, axis=self.axis, keepdims=True)  # pyrefly: ignore[bad-argument-type]
     param_shape = x.shape[-1:]
     scale = hk.get_parameter("scale", param_shape, x.dtype,
                              init=self.scale_init)
@@ -442,7 +442,7 @@ def autoencoder_deterministic_loss(
       layer_widths, x.shape[-1], explicit_tagging, activation=activation,
   ).apply(params, x)
   _register_deterministic_bernoulli(logits, x)
-  loss = - distrax.Bernoulli(logits=logits).log_prob(x)
+  loss = - distrax.Bernoulli(logits=logits).log_prob(x)  # pyrefly: ignore[unsupported-operation]
   loss = jnp.mean(jnp.sum(loss, axis=-1)).astype(logits.dtype)
   return loss + l2_reg * utils.norm(params)
 
@@ -475,8 +475,8 @@ def autoencoder_with_two_losses(
   if return_losses_outputs:
     return [[logits], [logits]]
 
-  loss_1 = - distrax.Bernoulli(logits=logits).log_prob(x)
-  loss_2 = - distrax.MultivariateNormalDiag(
+  loss_1 = - distrax.Bernoulli(logits=logits).log_prob(x)  # pyrefly: ignore[unsupported-operation]
+  loss_2 = - distrax.MultivariateNormalDiag(  # pyrefly: ignore[unsupported-operation]
       loc=logits, scale_diag=jnp.ones_like(logits) * jnp.sqrt(0.5)).log_prob(x)
 
   assert isinstance(loss_1, Array) and isinstance(loss_2, Array)
@@ -554,7 +554,7 @@ def conv_classifier_deterministic_loss(
       num_classes, layer_channels, explicit_tagging, activation=activation
   ).apply(params, batch["images"])
   _register_deterministic_categorical(logits, batch["labels"])
-  loss = - distrax.Categorical(logits=logits).log_prob(batch["labels"])
+  loss = - distrax.Categorical(logits=logits).log_prob(batch["labels"])  # pyrefly: ignore[unsupported-operation]
   loss = jnp.mean(jnp.sum(loss, axis=-1)).astype(logits.dtype)
   return loss + l2_reg * utils.norm(params)
 
@@ -581,12 +581,12 @@ def conv_classifier_loss(
   if return_losses_outputs:
     return [[logits]]
 
-  loss = - distrax.Categorical(logits=logits).log_prob(batch["labels"])
+  loss = - distrax.Categorical(logits=logits).log_prob(batch["labels"])  # pyrefly: ignore[unsupported-operation]
   loss = loss + l2_reg * utils.norm(params)
   if return_layer_values:
-    return [loss], layer_values
+    return [loss], layer_values  # pyrefly: ignore[bad-return]
   else:
-    return [loss]
+    return [loss]  # pyrefly: ignore[bad-return]
 
 
 def layer_stack_with_scan_mlp(
@@ -624,7 +624,7 @@ def layer_stack_with_scan_mlp(
       aux = None
       x, layer_values = stack(x)
     else:
-      aux_scan, aux = aux
+      aux_scan, aux = aux  # pyrefly: ignore[bad-assignment]
       x, layer_values = stack(scan_fn)(x, aux_scan)
 
     y_hat, layer_values, aux = _Linear(
@@ -683,7 +683,7 @@ def vanilla_rnn_with_scan(
       unroll_in = (x, list(), None)
       (x, _), _ = hk.dynamic_unroll(core, unroll_in, init_state)
     else:
-      aux_rnn, aux = aux
+      aux_rnn, aux = aux  # pyrefly: ignore[bad-assignment]
       unroll_in = (x, list(), aux_rnn)
       (x, _), _ = hk.dynamic_unroll(core, unroll_in, init_state)
 

@@ -50,11 +50,11 @@ class NaiveTNT(KroneckerFactored):
   unbiased estimator.
   """
 
-  def state_dependent_scale(
+  def state_dependent_scale(  # pyrefly: ignore[bad-override]
       self,
       state: "NaiveTNT.State",
   ) -> Numeric:
-    return utils.tnt_scale([factor.value for factor in state.factors])
+    return utils.tnt_scale([factor.value for factor in state.factors])  # pyrefly: ignore[bad-argument-type]
 
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
@@ -107,8 +107,8 @@ class DenseTNT(kronecker_factored.DenseTwoKroneckerFactored):
   The estimator is unbiased, and will have lower variance then the naive one.
   """
 
-  def state_dependent_scale(self, state: "DenseTNT.State") -> Numeric:
-    return utils.tnt_scale([factor.value for factor in state.factors])
+  def state_dependent_scale(self, state: "DenseTNT.State") -> Numeric:  # pyrefly: ignore[bad-override]
+    return utils.tnt_scale([factor.value for factor in state.factors])  # pyrefly: ignore[bad-argument-type]
 
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
@@ -129,7 +129,7 @@ class DenseTNT(kronecker_factored.DenseTwoKroneckerFactored):
     [x] = estimation_data.primals.inputs
     [dy] = estimation_data.tangents.outputs
 
-    assert utils.first_dim_is_size(batch_size, x, dy)
+    assert utils.first_dim_is_size(batch_size, x, dy)  # pyrefly: ignore[bad-argument-type]
 
     if self.number_of_parameters == 2:
       x_one = jnp.ones_like(x[:, :1])
@@ -186,10 +186,10 @@ class Conv2DTNT(kronecker_factored.Conv2DTwoKroneckerFactored):
         **kwargs,
     )
 
-  def state_dependent_scale(
+  def state_dependent_scale(  # pyrefly: ignore[bad-override]
       self, state: "Conv2DTNT.State"
   ) -> Numeric:
-    return utils.tnt_scale([factor.value for factor in state.factors])
+    return utils.tnt_scale([factor.value for factor in state.factors])  # pyrefly: ignore[bad-argument-type]
 
   def x_squared_spatial_norms(self, x: Array) -> Array:
 
@@ -229,7 +229,7 @@ class Conv2DTNT(kronecker_factored.Conv2DTwoKroneckerFactored):
     [x] = estimation_data.primals.inputs
     [dy] = estimation_data.tangents.outputs
 
-    assert utils.first_dim_is_size(batch_size, x, dy)
+    assert utils.first_dim_is_size(batch_size, x, dy)  # pyrefly: ignore[bad-argument-type]
 
     # We multiply each x by the norm_y, and each dy by the norm of x
     dy_sq_norms = jnp.sum(dy * dy, axis=self.outputs_channel_index)

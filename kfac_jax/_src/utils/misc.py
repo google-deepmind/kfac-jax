@@ -30,7 +30,7 @@ Numeric = types.Numeric
 ArrayTree = types.ArrayTree
 TArrayTree = types.TArrayTree
 StateType = TypeVar("StateType")
-StateTree = types.PyTree["State"]
+StateTree = types.PyTree["State"]  # pyrefly: ignore[not-a-type]
 
 
 STATE_CLASSES_SERIALIZATION_DICT = {}
@@ -73,7 +73,7 @@ def filter_sequence(
 
   filtered = itertools.compress(unfiltered_sequence, bool_sequence)
 
-  return tuple(filtered) if isinstance(
+  return tuple(filtered) if isinstance(  # pyrefly: ignore[bad-return]
       unfiltered_sequence, tuple) else list(filtered)
 
 
@@ -146,7 +146,7 @@ def rearrange(x: Array, spec: str) -> Array:
       shape.append(size)
       size = None
     elif open_bracket:
-      size *= x.shape[i]
+      size *= x.shape[i]  # pyrefly: ignore[unsupported-operation]
       i += 1
     else:
       shape.append(x.shape[i])
@@ -211,7 +211,7 @@ def register_state_class(class_type: type[Any]) -> type[Any]:
         f"Class {class_type} is not a subclass of kfac_jax.utils.State."
     )
 
-  class_type = dataclasses.dataclass(class_type)
+  class_type = dataclasses.dataclass(class_type)  # pyrefly: ignore[bad-assignment]
   class_type = jax.tree_util.register_pytree_node_class(class_type)
   class_name = f"{class_type.__module__}.{class_type.__qualname__}"
   STATE_CLASSES_SERIALIZATION_DICT[class_name] = class_type
@@ -234,7 +234,7 @@ def serialize_state_tree(instance: StateTree) -> ArrayTree:
     return tuple(serialize_state_tree(v) for v in instance)
 
   elif isinstance(instance, set):
-    return set(serialize_state_tree(v) for v in instance)
+    return set(serialize_state_tree(v) for v in instance)  # pyrefly: ignore[bad-return]
 
   elif isinstance(instance, dict):
     return {k: serialize_state_tree(v) for k, v in instance.items()}
@@ -298,8 +298,8 @@ class Finalizable(abc.ABC):
     """
     self._finalized = False
     self._forbid_setting_attributes = forbid_setting_attributes_after_finalize
-    excluded_attribute_names = set(excluded_attribute_names)
-    excluded_attribute_names.add("_forbid_setting_attributes")
+    excluded_attribute_names = set(excluded_attribute_names)  # pyrefly: ignore[bad-assignment]
+    excluded_attribute_names.add("_forbid_setting_attributes")  # pyrefly: ignore[missing-attribute]
     self._excluded_attribute_names = frozenset(excluded_attribute_names)
     super().__init__(**parent_kwargs)
 

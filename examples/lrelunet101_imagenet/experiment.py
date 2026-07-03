@@ -33,7 +33,7 @@ DType = kfac_jax.utils.DType
 FloatStrOrBool = str | float | bool
 
 
-class ScaledUniformOrthogonal(hk.initializers.Initializer):
+class ScaledUniformOrthogonal(hk.initializers.Initializer):  # pyrefly: ignore[invalid-inheritance]
   """SUO (+ Delta) initializer for fully-connected and convolutional layers."""
 
   def __init__(self, scale: float = 1.0, axis: int = -1):
@@ -269,8 +269,8 @@ class LReLUNet(hk.Module):
     logits_config.setdefault("name", "logits")
 
     # Number of blocks in each group.
-    _check_length(4, blocks_per_group, "blocks_per_group")
-    _check_length(4, channels_per_group, "channels_per_group")
+    _check_length(4, blocks_per_group, "blocks_per_group")  # pyrefly: ignore[bad-argument-type]
+    _check_length(4, channels_per_group, "channels_per_group")  # pyrefly: ignore[bad-argument-type]
 
     initial_conv_config = dict(initial_conv_config or {})
     initial_conv_config.setdefault("output_channels", 64)
@@ -288,8 +288,8 @@ class LReLUNet(hk.Module):
     strides = (1, 2, 2, 2)
     for i in range(4):
       self.block_groups.append(BlockGroup(
-          channels=channels_per_group[i],
-          num_blocks=blocks_per_group[i],
+          channels=channels_per_group[i],  # pyrefly: ignore[bad-index]
+          num_blocks=blocks_per_group[i],  # pyrefly: ignore[bad-index]
           stride=strides[i],
           bottleneck=bottleneck,
           activation=self.activation,
@@ -362,7 +362,7 @@ def lrelunet_loss(
       predictions=logits,
       labels_as_int=batch["labels"],
       params=params,
-      l2_reg=l2_reg if is_training else 0.0,
+      l2_reg=l2_reg if is_training else 0.0,  # pyrefly: ignore[bad-argument-type]
       haiku_exclude_batch_norm=True,
       haiku_exclude_biases=True,
       label_smoothing=label_smoothing if is_training else 0.0,
@@ -387,7 +387,7 @@ class LReLUNetImageNetExperiment(training.ImageNetExperiment):
             lrelunet(num_classes=1000, **config.model_kwargs).init,
             is_training=True,
         ),
-        model_loss_func=functools.partial(
+        model_loss_func=functools.partial(  # pyrefly: ignore[bad-argument-type]
             lrelunet_loss,
             l2_reg=config.l2_reg,
             num_classes=1000,

@@ -100,7 +100,7 @@ class AutoencoderMnistExperiment(training.MnistExperiment):
         init_rng=init_rng,
         config=config,
         init_parameters_func=autoencoder().init,
-        model_loss_func=functools.partial(
+        model_loss_func=functools.partial(  # pyrefly: ignore[bad-argument-type]
             autoencoder_loss, l2_reg=config.l2_reg),
         has_aux=True,
         has_rng=False,

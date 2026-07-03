@@ -74,7 +74,7 @@ def tf1_rmsprop(
   return optax.chain(
       tf1_scale_by_rms(decay_=decay, epsilon_=epsilon),
       optax.trace(decay=momentum, nesterov=False),
-      optax.scale_by_schedule(learning_rate_fn),
+      optax.scale_by_schedule(learning_rate_fn),  # pyrefly: ignore[bad-argument-type]
       optax.scale(-1.))
 
 
@@ -166,7 +166,7 @@ def create_optimizer(
         value_func_has_rng=has_rng,
         value_func_for_estimator=model_func_for_estimator,
         multi_device=True,
-        pmap_axis_name=pmap_axis_name,
+        pmap_axis_name=pmap_axis_name,  # pyrefly: ignore[bad-argument-type]
         **kwargs,
     )
 

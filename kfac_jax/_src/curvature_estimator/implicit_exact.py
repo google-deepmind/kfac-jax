@@ -461,7 +461,7 @@ class ImplicitExactCurvature:
     Returns:
       The product ``Bv``, where ``F = BB^T``.
     """
-    losses, vjp = self._loss_tags_vjp(func_args)
+    losses, vjp = self._loss_tags_vjp(func_args)  # pyrefly: ignore[bad-assignment]
     losses: Sequence[loss_functions.NegativeLogProbLoss]
 
     if any(not isinstance(l, loss_functions.NegativeLogProbLoss)

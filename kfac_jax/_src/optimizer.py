@@ -96,7 +96,7 @@ class Optimizer(utils.WithStagedMethods):
   """The kfac_jax optimizer (supporting K-FAC and other methods)."""
 
   @utils.register_state_class
-  class State(Generic[Params], utils.State):
+  class State(Generic[Params], utils.State):  # pyrefly: ignore[invalid-type-var]
     r"""Persistent state of the optimizer.
 
     Attributes:
@@ -117,7 +117,7 @@ class Optimizer(utils.WithStagedMethods):
     @classmethod
     def from_dict(cls, dict_representation: dict[str, Any]) -> Self:
       dict_representation["estimator_state"] = (
-          BlockDiagonalCurvature.State.from_dict(
+          BlockDiagonalCurvature.State.from_dict(  # pyrefly: ignore[missing-attribute]
               dict_representation["estimator_state"]
           )
       )
@@ -600,7 +600,7 @@ class Optimizer(utils.WithStagedMethods):
 
     # Curvature estimator
     self._estimator = estimator_ctor(
-        func=value_func_for_estimator,
+        func=value_func_for_estimator,  # pyrefly: ignore[bad-argument-type]
         func_and_grad=func_and_grad_for_estimator,
         default_estimation_mode=estimation_mode,
         params_index=self._params_index,
@@ -614,9 +614,9 @@ class Optimizer(utils.WithStagedMethods):
         auto_register_kwargs=auto_register_kwargs,
     )
     self._implicit = curvature_estimator.ImplicitExactCurvature(
-        self._value_func,
+        self._value_func,  # pyrefly: ignore[bad-argument-type]
         params_index=self._params_index,
-        batch_size_extractor=batch_size_extractor,
+        batch_size_extractor=batch_size_extractor,  # pyrefly: ignore[bad-argument-type]
     )
 
     # Each subclass should call finalize on its own, so this gets called only
@@ -682,7 +682,7 @@ class Optimizer(utils.WithStagedMethods):
   @utils.auto_scope_method
   def _compute_loss_value(self, func_args: FuncArgsVariants) -> Array:
     """Computes the value of the loss function being optimized."""
-    return self._value_func(*func_args)
+    return self._value_func(*func_args)  # pyrefly: ignore[bad-return]
 
   def _verify_args_and_get_step_counter(
       self,
@@ -971,7 +971,7 @@ class Optimizer(utils.WithStagedMethods):
     # we multiply the gradients, while the momentum is the coefficient by
     # which we multiply the velocities.
     neg_learning_rate = -learning_rate if learning_rate is not None else None
-    fixed_coefficients = (neg_learning_rate, momentum)
+    fixed_coefficients = (neg_learning_rate, momentum)  # pyrefly: ignore[bad-assignment]
 
     if self._use_adaptive_learning_rate or self._use_adaptive_momentum:
 
@@ -993,7 +993,7 @@ class Optimizer(utils.WithStagedMethods):
         delta = self._weighted_sum_of_objects(vectors, fixed_coefficients)
 
         quad_change = self._compute_quad_change_for_damping_adapt(
-            state, delta, grads, damping, func_args)
+            state, delta, grads, damping, func_args)  # pyrefly: ignore[bad-argument-type]
 
       else:
         quad_change = self._invalid_metric_value
@@ -1032,8 +1032,8 @@ class Optimizer(utils.WithStagedMethods):
     # these are just dummy values used to perform the tracing.
 
     return Optimizer.State(
-        velocities=jax.tree_util.tree_map(jnp.zeros_like, params),
-        estimator_state=self._estimator.init(
+        velocities=jax.tree_util.tree_map(jnp.zeros_like, params),  # pyrefly: ignore[unexpected-keyword]
+        estimator_state=self._estimator.init(  # pyrefly: ignore[unexpected-keyword]
             rng=rng,
             func_args=make_func_args(
                 params=params,
@@ -1047,11 +1047,11 @@ class Optimizer(utils.WithStagedMethods):
             approx_powers_to_cache=self._approx_powers_to_cache,
             cache_eigenvalues=False
         ),
-        damping=jnp.array(
+        damping=jnp.array(  # pyrefly: ignore[unexpected-keyword]
             (self._initial_damping if self._initial_damping is not None
              else -1e10), dtype=float),
-        data_seen=jnp.array(0, dtype=int),
-        step_counter=jnp.array(0, dtype=int)
+        data_seen=jnp.array(0, dtype=int),  # pyrefly: ignore[unexpected-keyword]
+        step_counter=jnp.array(0, dtype=int)  # pyrefly: ignore[unexpected-keyword]
     )
 
   def init(
@@ -1337,12 +1337,12 @@ class Optimizer(utils.WithStagedMethods):
       stats["update_norm"] = utils.norm(delta)
 
     if self._include_per_param_norms_in_stats:
-      stats.update(utils.per_parameter_norm(params, "param_norm"))
-      stats.update(utils.per_parameter_norm(grads, "grad_norm"))
-      stats.update(
+      stats.update(utils.per_parameter_norm(params, "param_norm"))  # pyrefly: ignore[no-matching-overload]
+      stats.update(utils.per_parameter_norm(grads, "grad_norm"))  # pyrefly: ignore[no-matching-overload]
+      stats.update(  # pyrefly: ignore[no-matching-overload]
           utils.per_parameter_norm(preconditioned_gradient, "precon_grad_norm")
       )
-      stats.update(utils.per_parameter_norm(delta, "update_norm"))
+      stats.update(utils.per_parameter_norm(delta, "update_norm"))  # pyrefly: ignore[no-matching-overload]
 
     if self._include_registered_loss_in_stats:
       assert aux is not None
@@ -1426,7 +1426,7 @@ class Optimizer(utils.WithStagedMethods):
                        "``batch`` must be provided.")
 
     step_counter_int = self._verify_args_and_get_step_counter(
-        step_counter=state.step_counter,
+        step_counter=state.step_counter,  # pyrefly: ignore[bad-argument-type]
         learning_rate=learning_rate,
         momentum=momentum,
         damping=damping,
@@ -1751,7 +1751,7 @@ class Optimizer(utils.WithStagedMethods):
         w = -lax.cond(special_case, lambda: b, lambda: b / A_damped[0])
 
       elif len(fixed_coefficients) == 2:
-        w = -utils.psd_solve_maybe_zero_last_idx(A_damped, b)
+        w = -utils.psd_solve_maybe_zero_last_idx(A_damped, b)  # pyrefly: ignore[bad-assignment]
 
       else:
         raise NotImplementedError()
@@ -1759,19 +1759,19 @@ class Optimizer(utils.WithStagedMethods):
     elif all(c is not None for c in fixed_coefficients):
       # No coefficients adapted
 
-      w = jnp.asarray(fixed_coefficients)
+      w = jnp.asarray(fixed_coefficients)  # pyrefly: ignore[bad-assignment]
 
     elif len(fixed_coefficients) == 2:
       # Exactly one adapted coefficient
 
-      w = [None, None]
+      w = [None, None]  # pyrefly: ignore[bad-assignment]
       index = fixed_coefficients.index(None)
-      w[1 - index] = fixed_coefficients[1 - index]
+      w[1 - index] = fixed_coefficients[1 - index]  # pyrefly: ignore[unsupported-operation]
 
       b_extra = A_damped[1 - index, index] * w[1 - index]
       # pylint: enable=invalid-name
 
-      w[index] = -(b[index] + b_extra) / A_damped[index, index]
+      w[index] = -(b[index] + b_extra) / A_damped[index, index]  # pyrefly: ignore[unsupported-operation]
 
     else:
       raise NotImplementedError()
@@ -1838,7 +1838,7 @@ def convert_value_and_grad_to_value_func(
 
   def value_func(*args, **kwargs) -> Array:
     out, _ = value_and_grad_func(*args, **kwargs)
-    return out[0] if has_aux else out
+    return out[0] if has_aux else out  # pyrefly: ignore[bad-return]
 
   return value_func
 
@@ -1862,7 +1862,7 @@ def convert_value_and_grad_to_clean_value_and_grad(
   def clean_value_and_grad_func(*args, **kwargs) -> tuple[Array, Params]:
     out, grads = value_and_grad_func(*args, **kwargs)
     loss = out[0] if has_aux else out
-    return loss, grads
+    return loss, grads  # pyrefly: ignore[bad-return]
 
   return clean_value_and_grad_func
 
@@ -1910,7 +1910,7 @@ def make_func_args(
     return params, rng, batch
 
   else:
-    return params, func_state, rng, batch
+    return params, func_state, rng, batch  # pyrefly: ignore[bad-return]
 
 
 def extract_func_outputs(
@@ -1944,4 +1944,4 @@ def extract_func_outputs(
   else:
     func_state, aux = other, None
 
-  return loss, func_state, aux
+  return loss, func_state, aux  # pyrefly: ignore[bad-return]

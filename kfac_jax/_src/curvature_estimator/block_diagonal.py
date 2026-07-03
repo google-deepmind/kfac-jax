@@ -228,7 +228,7 @@ class BlockDiagonalCurvature(
     self._auto_register_tags = auto_register_tags
     self._auto_register_kwargs = auto_register_kwargs or {}
     self._vjp, self._jaxpr_extractor = tracer.layer_tags_vjp(
-        func=self.func,
+        func=self.func,  # pyrefly: ignore[bad-argument-type]
         params_index=self.params_index,
         auto_register_tags=auto_register_tags,
         **self._auto_register_kwargs
@@ -298,12 +298,12 @@ class BlockDiagonalCurvature(
   @property
   def num_blocks(self) -> int:
     """The number of separate blocks that this estimator has."""
-    return len(self.blocks)
+    return len(self.blocks)  # pyrefly: ignore[bad-argument-type]
 
   @property
   def block_dims(self) -> Shape:
     """The number of elements of all parameter variables for each block."""
-    return tuple(block.dim for block in self.blocks)
+    return tuple(block.dim for block in self.blocks)  # pyrefly: ignore[not-iterable]
 
   @property
   def dim(self) -> int:
@@ -328,7 +328,7 @@ class BlockDiagonalCurvature(
       self
   ) -> Mapping[tuple[int, ...], curvature_blocks.CurvatureBlock]:
     """A mapping of parameter indices to their associated blocks."""
-    return dict(zip(self.jaxpr.layer_indices, self.blocks))
+    return dict(zip(self.jaxpr.layer_indices, self.blocks))  # pyrefly: ignore[bad-argument-type]
 
   @property
   def params_block_index(self) -> utils.Params:
@@ -442,7 +442,7 @@ class BlockDiagonalCurvature(
     blocks_init = []
     blocks_rng = jax.random.split(rng, self.num_blocks)
 
-    for block, block_rng in zip(self.blocks, blocks_rng):
+    for block, block_rng in zip(self.blocks, blocks_rng):  # pyrefly: ignore[bad-argument-type]
 
       block_init = block.init(
           rng=block_rng,
@@ -453,8 +453,8 @@ class BlockDiagonalCurvature(
       blocks_init.append(block_init)
 
     return BlockDiagonalCurvature.State(
-        synced=jnp.asarray(True),
-        blocks_states=tuple(blocks_init),
+        synced=jnp.asarray(True),  # pyrefly: ignore[unexpected-keyword]
+        blocks_states=tuple(blocks_init),  # pyrefly: ignore[unexpected-keyword]
     )
 
   def _sync_state(
@@ -465,12 +465,12 @@ class BlockDiagonalCurvature(
 
     block_states = []
 
-    for block, block_state in zip(self.blocks, state.blocks_states):
-      block_states.append(block.sync(block_state.copy(), pmap_axis_name))
+    for block, block_state in zip(self.blocks, state.blocks_states):  # pyrefly: ignore[bad-argument-type]
+      block_states.append(block.sync(block_state.copy(), pmap_axis_name))  # pyrefly: ignore[bad-argument-type]
 
     return BlockDiagonalCurvature.State(
-        synced=jnp.asarray(True),
-        blocks_states=tuple(block_states),
+        synced=jnp.asarray(True),  # pyrefly: ignore[unexpected-keyword]
+        blocks_states=tuple(block_states),  # pyrefly: ignore[unexpected-keyword]
     )
 
   @utils.auto_scope_method
@@ -530,7 +530,7 @@ class BlockDiagonalCurvature(
 
     thunks = []
     for block, block_state, block_vector, block_identity_weight in zip(
-        self.blocks, state.blocks_states, blocks_vectors, identity_weight):
+        self.blocks, state.blocks_states, blocks_vectors, identity_weight):  # pyrefly: ignore[bad-argument-type]
 
       thunks.append(
           make_thunk(block, block_state, block_vector, block_identity_weight))
@@ -569,7 +569,7 @@ class BlockDiagonalCurvature(
       ``self.parameters_block_index``.
     """
     return tuple(block.eigenvalues(b_state, use_cached=use_cached)
-                 for block, b_state in zip(self.blocks, state.blocks_states))
+                 for block, b_state in zip(self.blocks, state.blocks_states))  # pyrefly: ignore[bad-argument-type]
 
   @utils.auto_scope_method
   def eigenvalues(
@@ -630,7 +630,7 @@ class BlockDiagonalCurvature(
 
     new_state = []
     for block, block_state, block_info in zip(
-        self.blocks, state.blocks_states, blocks_info):
+        self.blocks, state.blocks_states, blocks_info):  # pyrefly: ignore[bad-argument-type]
 
       new_state.append(
           block.update_curvature_matrix_estimate(
@@ -644,8 +644,8 @@ class BlockDiagonalCurvature(
       )
 
     return BlockDiagonalCurvature.State(
-        synced=jnp.asarray(False),
-        blocks_states=tuple(new_state),
+        synced=jnp.asarray(False),  # pyrefly: ignore[unexpected-keyword]
+        blocks_states=tuple(new_state),  # pyrefly: ignore[unexpected-keyword]
     )
 
   def _maybe_do_multiple_updates(self, update_func, state, rng, ema_old):
@@ -736,7 +736,7 @@ class BlockDiagonalCurvature(
             ema_old=ema_old_i,
             ema_new=ema_new,
             identity_weight=identity_weight,
-            batch_size=batch_size,
+            batch_size=batch_size,  # pyrefly: ignore[bad-argument-type]
         )
 
       return self._maybe_do_multiple_updates(update_func, state, rng, ema_old)
@@ -766,7 +766,7 @@ class BlockDiagonalCurvature(
           ema_old=ema_old,
           ema_new=ema_new,
           identity_weight=identity_weight,
-          batch_size=batch_size,
+          batch_size=batch_size,  # pyrefly: ignore[bad-argument-type]
       )
 
     elif estimation_mode in {"fisher_empirical_direct",
@@ -802,7 +802,7 @@ class BlockDiagonalCurvature(
           ema_old=ema_old,
           ema_new=ema_new,
           identity_weight=identity_weight,
-          batch_size=batch_size,
+          batch_size=batch_size,  # pyrefly: ignore[bad-argument-type]
       )
 
     elif estimation_mode in ("fisher_curvature_prop", "ggn_curvature_prop"):
@@ -832,7 +832,7 @@ class BlockDiagonalCurvature(
             ema_old=ema_old_i,
             ema_new=ema_new,
             identity_weight=identity_weight,
-            batch_size=batch_size,
+            batch_size=batch_size,  # pyrefly: ignore[bad-argument-type]
         )
 
       return self._maybe_do_multiple_updates(update_func, state, rng, ema_old)
@@ -884,7 +884,7 @@ class BlockDiagonalCurvature(
               ema_old=ema_old,
               ema_new=ema_new,
               identity_weight=identity_weight,
-              batch_size=batch_size,
+              batch_size=batch_size,  # pyrefly: ignore[bad-argument-type]
           )
 
           ema_old = 1.0
@@ -931,7 +931,7 @@ class BlockDiagonalCurvature(
       return thunk
 
     thunks = []
-    for block, block_state, block_identity_weight in zip(self.blocks,
+    for block, block_state, block_identity_weight in zip(self.blocks,  # pyrefly: ignore[bad-argument-type]
                                                          state.blocks_states,
                                                          identity_weight):
 
@@ -969,14 +969,14 @@ class BlockDiagonalCurvature(
       new_states = tuple(thunk() for thunk in thunks)
 
     return BlockDiagonalCurvature.State(
-        synced=state.synced,
-        blocks_states=new_states,
+        synced=state.synced,  # pyrefly: ignore[unexpected-keyword]
+        blocks_states=new_states,  # pyrefly: ignore[unexpected-keyword]
     )
 
   def undamped_diagonal(self, state: State) -> utils.Params:
     result = tuple(
         block.undamped_diagonal(block_state)
-        for block, block_state in zip(self.blocks, state.blocks_states))
+        for block, block_state in zip(self.blocks, state.blocks_states))  # pyrefly: ignore[bad-argument-type]
 
     return self.blocks_vectors_to_params_vector(result)
 
@@ -984,7 +984,7 @@ class BlockDiagonalCurvature(
   def to_diagonal_block_dense_matrix(self, state: State) -> tuple[Array, ...]:
     """Returns a tuple of arrays with explicit dense matrices of each block."""
     return tuple(block.to_dense_matrix(block_state) for block, block_state in
-                 zip(self.blocks, state.blocks_states))
+                 zip(self.blocks, state.blocks_states))  # pyrefly: ignore[bad-argument-type]
 
   @utils.auto_scope_method
   def to_dense_matrix(self, state: State) -> Array:

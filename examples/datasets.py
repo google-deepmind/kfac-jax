@@ -148,15 +148,15 @@ def imagenet_num_examples_and_split(
   """Returns the number of examples in the given split of Imagenet."""
 
   if split == "train":
-    return 1271167, tensorflow_datasets.Split.TRAIN
+    return 1271167, tensorflow_datasets.Split.TRAIN  # pyrefly: ignore[missing-attribute]
   elif split == "valid":
-    return 10000, tensorflow_datasets.Split.TRAIN
+    return 10000, tensorflow_datasets.Split.TRAIN  # pyrefly: ignore[missing-attribute]
   elif split == "train_and_valid":
-    return 1281167, tensorflow_datasets.Split.TRAIN
+    return 1281167, tensorflow_datasets.Split.TRAIN  # pyrefly: ignore[missing-attribute]
   elif split == "train_eval":
-    return 200000, tensorflow_datasets.Split.TRAIN
+    return 200000, tensorflow_datasets.Split.TRAIN  # pyrefly: ignore[missing-attribute]
   elif split == "test":
-    return 50000, tensorflow_datasets.Split.VALIDATION
+    return 50000, tensorflow_datasets.Split.VALIDATION  # pyrefly: ignore[missing-attribute]
   else:
     raise NotImplementedError()
 

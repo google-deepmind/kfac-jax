@@ -77,7 +77,7 @@ def product(iterable_object: Iterable[TNumeric]) -> TNumeric:
   for element in iterable_object:
     x = x * element
 
-  return x
+  return x  # pyrefly: ignore[bad-return]
 
 
 def outer_product(*arrays: Array) -> Array:
@@ -220,7 +220,7 @@ def inner_product(
   elements_product = jax.tree_util.tree_map(
       lambda x, y: jnp.sum(x * y), obj1, obj2)
 
-  return sum(jax.tree_util.tree_leaves(elements_product))
+  return sum(jax.tree_util.tree_leaves(elements_product))  # pyrefly: ignore[bad-return]
 
 
 def symmetric_matrix_inner_products(
@@ -381,7 +381,7 @@ def squared_norm(obj: ArrayTree) -> Array:
   elements_squared_norm = jax.tree_util.tree_map(
       lambda x: jnp.sum(jnp.square(x)), obj)
 
-  return sum(jax.tree_util.tree_leaves(elements_squared_norm))
+  return sum(jax.tree_util.tree_leaves(elements_squared_norm))  # pyrefly: ignore[bad-return]
 
 
 def norm(obj: ArrayTree) -> Array:
@@ -502,7 +502,7 @@ def psd_matrix_norm(
 
       elif method_2norm == "power_iteration":
 
-        return float(optax.power_iteration(
+        return float(optax.power_iteration(  # pyrefly: ignore[bad-argument-type]
             matrix, num_iters=300, error_tolerance=1e-7)[0])
 
       else:
@@ -719,11 +719,11 @@ def pi_adjusted_kronecker_factors(
         u_hat = jnp.ones_like(u)  # damping not used in the scalar factors
 
       elif u.ndim == 2:
-        u_hat = u + d_hat * jnp.eye(u.shape[0], dtype=u.dtype)
+        u_hat = u + d_hat * jnp.eye(u.shape[0], dtype=u.dtype)  # pyrefly: ignore[unbound-name]
 
       else:  # diagonal case
         assert u.ndim == 1
-        u_hat = u + d_hat
+        u_hat = u + d_hat  # pyrefly: ignore[unbound-name]
 
       u_hats.append(u_hat * c_k)
 
@@ -820,7 +820,7 @@ def pi_adjusted_kronecker_inverse(
     pi-adjusted factored-damping approach.
   """
 
-  return invert_psd_matrices(
+  return invert_psd_matrices(  # pyrefly: ignore[bad-return]
       pi_adjusted_kronecker_factors(*factors, damping=damping))
 
 
@@ -854,7 +854,7 @@ def kronecker_product_axis_mul_v(
     axis_groups = tuple(tuple(group) for group in axis_groups)
 
   # Sanity checks
-  if sum(axis_groups, ()) != tuple(range(v.ndim)):
+  if sum(axis_groups, ()) != tuple(range(v.ndim)):  # pyrefly: ignore[no-matching-overload]
     raise ValueError(f"The `axis_groups={axis_groups}` are either not in "
                      f"consecutive order or do not cover exactly the axis of "
                      f"the input `v`..")

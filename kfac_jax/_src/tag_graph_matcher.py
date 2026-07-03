@@ -572,7 +572,7 @@ class GraphMatch:
 
   @functools.cached_property
   def output_var(self) -> Var:
-    return self.variables_map[self.pattern.jaxpr.outvars[0]]
+    return self.variables_map[self.pattern.jaxpr.outvars[0]]  # pyrefly: ignore[bad-index]
 
   @functools.cached_property
   def param_graph_variables(self) -> Vars:
@@ -588,7 +588,7 @@ class GraphMatch:
     in_vars = [self.variables_map[k] for k in self.pattern.graph.jaxpr.invars]
     in_vars = [env.get(v, v) if isinstance(v, Var) else v for v in in_vars]
 
-    out_vars = [self.variables_map[k] for k in self.pattern.graph.jaxpr.outvars]
+    out_vars = [self.variables_map[k] for k in self.pattern.graph.jaxpr.outvars]  # pyrefly: ignore[bad-index]
     out_vars = [env.get(v, v) for v in out_vars]
 
     eqns = self.pattern.tag_ctor(
@@ -715,7 +715,7 @@ def match_equations(
         pattern_vars = [eqn.invars[j] for j in permutation]
 
         # Check if this ordering is feasible
-        if not add_vars_if_possible(pattern_vars, graph_eqn.invars):
+        if not add_vars_if_possible(pattern_vars, graph_eqn.invars):  # pyrefly: ignore[bad-argument-type]
           continue
 
         # Recursively continue by trying to match the remaining equations.
@@ -744,7 +744,7 @@ def match_equations(
       else:
         return None
 
-    elif not add_vars_if_possible(eqn.invars, graph_eqn.invars):
+    elif not add_vars_if_possible(eqn.invars, graph_eqn.invars):  # pyrefly: ignore[bad-argument-type]
       # In the case where we can't update the current variables map directly
       # return
       return None
@@ -786,7 +786,7 @@ def match_pattern(
   # check the match from there.
   match_variables_map = match_equations(
       graph=graph,
-      current_variables_map=dict(zip(pattern.jaxpr.outvars,
+      current_variables_map=dict(zip(pattern.jaxpr.outvars,  # pyrefly: ignore[bad-argument-type]
                                      root_eqn.outvars)),
       reversed_eqns_to_match=tuple(reversed(pattern.jaxpr.eqns)),
       input_vars=pattern.jaxpr.invars,
@@ -922,8 +922,8 @@ def write_env(
 ) -> None:
   """Writes to the variable-to-array environment during tracing."""
   assert len(variables) == len(values)
-  for variables, val in zip(variables, values):
-    env[variables] = val
+  for variables, val in zip(variables, values):  # pyrefly: ignore[bad-assignment]
+    env[variables] = val  # pyrefly: ignore[unsupported-operation]
 
 
 def to_closed_jaxpr(jaxpr: JaxprOrClosedJaxpr) -> ClosedJaxpr:
@@ -935,7 +935,7 @@ def to_closed_jaxpr(jaxpr: JaxprOrClosedJaxpr) -> ClosedJaxpr:
 def to_jaxpr_or_closed_jaxpr(closed_jaxpr: ClosedJaxpr, original: J) -> J:
   if isinstance(original, Jaxpr):
     return closed_jaxpr.jaxpr
-  return closed_jaxpr
+  return closed_jaxpr  # pyrefly: ignore[bad-return]
 
 
 def apply_to_higher_order_primitives(
@@ -1334,7 +1334,7 @@ def _make_general_dense_pattern(
           _dense, axes=num_in_dims, with_reshape=with_reshape),
       parameters_extractor_func=functools.partial(
           _dense_parameter_extractor, variant=variant),
-      example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
+      example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],  # pyrefly: ignore[bad-argument-type]
   )
 
 
@@ -1399,7 +1399,7 @@ def _make_conv2d_pattern(
       tag_primitive=tags.layer_tag,
       compute_func=functools.partial(_conv2d, flax_style=flax_style),
       parameters_extractor_func=_conv2d_parameter_extractor,
-      example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
+      example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],  # pyrefly: ignore[bad-argument-type]
   )
 
 
@@ -1486,7 +1486,7 @@ def _make_scale_and_shift_pattern(
       compute_func=functools.partial(
           _scale_and_shift, has_scale=has_scale, has_shift=has_shift),
       parameters_extractor_func=_scale_and_shift_parameter_extractor,
-      example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],
+      example_args=[np.zeros(x_shape), [np.zeros(s) for s in p_shapes]],  # pyrefly: ignore[bad-argument-type]
   )
 
 
@@ -1503,24 +1503,24 @@ def _normalization_haiku_flax(
     raise ValueError("The inputs to the `normalization_haiku` computation must "
                      f"have either 1 or 2 parameters, but got {len(params)}.")
 
-  [inputs, rsqrt_var] = inputs
+  [inputs, rsqrt_var] = inputs  # pyrefly: ignore[bad-assignment]
 
   if has_scale:
     scale = params[0]
     if has_reshape:
       scale = scale.reshape(
-          [1] * (inputs.ndim - scale.ndim) + list(scale.shape))
+          [1] * (inputs.ndim - scale.ndim) + list(scale.shape))  # pyrefly: ignore[missing-attribute]
     inv = scale * rsqrt_var
   else:
     inv = rsqrt_var
 
-  outputs = inputs * inv
+  outputs = inputs * inv  # pyrefly: ignore[unsupported-operation]
 
   if has_shift:
     shift = params[1]
     if has_reshape:
       shift = shift.reshape(
-          [1] * (inputs.ndim - shift.ndim) + list(shift.shape))
+          [1] * (inputs.ndim - shift.ndim) + list(shift.shape))  # pyrefly: ignore[missing-attribute]
     return outputs + shift
   return outputs
 
@@ -1600,7 +1600,7 @@ def _make_normalization_haiku_flax_pattern(
           has_shift=has_shift,
           has_reshape=has_reshape),
       parameters_extractor_func=_scale_and_shift_parameter_extractor,
-      example_args=[[np.zeros(x_shape), np.zeros(x_shape)], example_params],
+      example_args=[[np.zeros(x_shape), np.zeros(x_shape)], example_params],  # pyrefly: ignore[bad-argument-type]
       in_values_preprocessor=_normalization_haiku_preprocessor
   )
 

@@ -211,6 +211,6 @@ __all__ = (
 #                 ||     ||
 #
 try:
-  del _src  # pylint: disable=undefined-variable
+  del _src  # pylint: disable=undefined-variable  # pyrefly: ignore[unbound-name]
 except NameError:
   pass

@@ -369,7 +369,7 @@ class TestEstimator(parameterized.TestCase):
     # KF approximation assumes independence between locations as well.
     kf_estimator = kfac_jax.BlockDiagonalCurvature(
         model_func,
-        layer_tag_to_block_ctor=dict(
+        layer_tag_to_block_ctor=dict(  # pyrefly: ignore[bad-argument-type]
             dense=kfac_jax.DenseTwoKroneckerFactored,
             conv2d=None,
             scale_and_shift=kfac_jax.ScaleAndShiftFull,
@@ -441,7 +441,7 @@ class TestEstimator(parameterized.TestCase):
     params = init_func(init_key, data)
     func_args = (params, data)
     estimator = kfac_jax.BlockDiagonalCurvature(
-        model_func,
+        model_func,  # pyrefly: ignore[bad-argument-type]
         index_to_block_ctor={
             (0, 1): kfac_jax.Conv2DTwoKroneckerFactored,
             (3, 2): kfac_jax.Conv2DDiagonal,
@@ -470,23 +470,23 @@ class TestEstimator(parameterized.TestCase):
     )
 
     block_eigenvalues = estimator.block_eigenvalues(cached_state, True)
-    scales = [block.fixed_scale() for block in estimator.blocks]
+    scales = [block.fixed_scale() for block in estimator.blocks]  # pyrefly: ignore[not-iterable]
 
     self.assertLen(block_eigenvalues, estimator.num_blocks)
     for block_state, eigs, scale in zip(
         cached_state.blocks_states, block_eigenvalues, scales):
       if isinstance(block_state, kfac_jax.KroneckerFactored.State):
         in_eigs, _ = kfac_jax.utils.safe_psd_eigh(
-            block_state.factors[1].value)
+            block_state.factors[1].value)  # pyrefly: ignore[bad-argument-type]
         out_eigs, _ = kfac_jax.utils.safe_psd_eigh(
-            block_state.factors[0].value)
+            block_state.factors[0].value)  # pyrefly: ignore[bad-argument-type]
         self.assert_trees_all_close(scale * jnp.outer(out_eigs, in_eigs), eigs)
       elif isinstance(block_state, kfac_jax.Diagonal.State):
-        diag_eigs = jnp.concatenate([factor.value.flatten() for factor in
+        diag_eigs = jnp.concatenate([factor.value.flatten() for factor in  # pyrefly: ignore[missing-attribute]
                                      block_state.diagonal_factors])
         self.assert_trees_all_close(diag_eigs, eigs)
       elif isinstance(block_state, kfac_jax.Full.State):
-        matrix_eigs, _ = kfac_jax.utils.safe_psd_eigh(block_state.matrix.value)
+        matrix_eigs, _ = kfac_jax.utils.safe_psd_eigh(block_state.matrix.value)  # pyrefly: ignore[bad-argument-type]
         self.assert_trees_all_close(matrix_eigs, eigs)
       elif isinstance(block_state, kfac_jax.CurvatureBlock.State):
         # ScaledIdentity
@@ -528,7 +528,7 @@ class TestEstimator(parameterized.TestCase):
     params = init_func(init_key1, data)
     func_args = (params, data)
     estimator = kfac_jax.BlockDiagonalCurvature(
-        model_func,
+        model_func,  # pyrefly: ignore[bad-argument-type]
         index_to_block_ctor={
             (1, 0): kfac_jax.Conv2DTwoKroneckerFactored,
             (3, 2): kfac_jax.Conv2DDiagonal,
@@ -615,7 +615,7 @@ class TestEstimator(parameterized.TestCase):
 
     params = init_func(init_key1, data)
     func_args = (params, data)
-    estimator = kfac_jax.ImplicitExactCurvature(model_func)
+    estimator = kfac_jax.ImplicitExactCurvature(model_func)  # pyrefly: ignore[bad-argument-type]
 
     v = init_func(init_key2, data)
     if curvature_type == "fisher":

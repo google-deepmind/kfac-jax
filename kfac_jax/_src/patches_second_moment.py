@@ -97,11 +97,11 @@ class _ConvSpec:
     for axis in self.spatial_axes:
       spatial_axes.append(axis + sum(axis > a for a in self.spatial_axes))
       spatial_axes.append(spatial_axes[-1] + 1)
-    return _ConvSpec([n_axis, c_axis, *spatial_axes])
+    return _ConvSpec([n_axis, c_axis, *spatial_axes])  # pyrefly: ignore[bad-return]
 
   def swap_n_and_c(self) -> Self:
     """Swaps the batch and channel indices of the layout."""
-    return _ConvSpec([self.c_axis, self.n_axis, *self.spatial_axes])
+    return _ConvSpec([self.c_axis, self.n_axis, *self.spatial_axes])  # pyrefly: ignore[bad-return]
 
   def create_shape(self, n: T, c: T, *spatial_dims: T) -> tuple[T, ...]:
     """Creates a shape according to this layout specification."""
@@ -119,7 +119,7 @@ class _ConvSpec:
     """Changes the layout from `NHWC` to `IHWO` where `I=C`, `O=N`."""
     # Change the spec: NHWC -> IHWO where I=C, O=N
     order = [i - 2 if i > self.spatial_axes[1] else i for i in self.order[:4]]
-    return _ConvSpec(order).swap_n_and_c()
+    return _ConvSpec(order).swap_n_and_c()  # pyrefly: ignore[bad-return]
 
 
 def _slice_array(
@@ -181,8 +181,8 @@ def _normalize_padding(
       for out_d, d, k, s in zip(output_shape, inputs_spatial_shape,
                                 kernel_spatial_shape, spatial_strides):
         pad = max(0, (out_d - 1) * s + k - d)
-        padding.append((pad // 2, pad - pad // 2))
-      return tuple(padding)
+        padding.append((pad // 2, pad - pad // 2))  # pyrefly: ignore[bad-argument-type]
+      return tuple(padding)  # pyrefly: ignore[bad-return]
     else:
       raise ValueError(f"Unrecognized padding: {padding}!")
   elif isinstance(padding, int):
@@ -629,7 +629,7 @@ def patches_moments_explicit(
         wf_n = weighting_array[in_spec.n_axis]
         wf_spatial = [weighting_array.shape[a] for a in in_spec.spatial_axes]
         wf_sizes = in_spec.create_shape(wf_n, jnp.ones([]), *wf_spatial)  # pytype: disable=wrong-arg-types  # jnp-type
-        wf_i = _slice_array(weighting_array, index, wf_sizes)
+        wf_i = _slice_array(weighting_array, index, wf_sizes)  # pyrefly: ignore[bad-argument-type]
     else:
       wf_i = None
 

@@ -106,7 +106,7 @@ class ExplicitExactCurvature(block_diagonal.BlockDiagonalCurvature):
 
       params = jax.tree_util.tree_unflatten(params_treedef, params_flat)
 
-      return func(params, *args)
+      return func(params, *args)  # pyrefly: ignore[not-callable]
 
     super().__init__(
         func=retagged_func,
@@ -130,7 +130,7 @@ class ExplicitExactCurvature(block_diagonal.BlockDiagonalCurvature):
       pmap_axis_name: str | None = None,
   ) -> BlockDiagonalState:
 
-    rng = jax.random.split(rng, batch_size)
+    rng = jax.random.split(rng, batch_size)  # pyrefly: ignore[bad-argument-type]
 
     super_ = super()
 

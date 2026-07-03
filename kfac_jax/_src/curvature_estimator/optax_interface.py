@@ -241,7 +241,7 @@ class OptaxPreconditioner:
     damping = self._damping
 
     if damping is None:
-      damping = self._damping_schedule(state.count)
+      damping = self._damping_schedule(state.count)  # pyrefly: ignore[bad-argument-count, not-callable]
 
     return damping + self._l2_reg
 
@@ -439,7 +439,7 @@ class OptaxPreconditioner:
 
     if self._norm_constraint is not None:
 
-      sq_norm_grads = utils.inner_product(new_updates, updates)
+      sq_norm_grads = utils.inner_product(new_updates, updates)  # pyrefly: ignore[bad-argument-type]
       del updates
 
       max_coefficient = jnp.sqrt(self._norm_constraint / sq_norm_grads)
@@ -499,7 +499,7 @@ class OptaxPreconditioner:
       del params, extra_args
       return multiply_fn(updates, precond_state), state
 
-    return optax.GradientTransformationExtraArgs(init_fn, update_fn)
+    return optax.GradientTransformationExtraArgs(init_fn, update_fn)  # pyrefly: ignore[bad-argument-type]
 
   def increment_count(self, state: OptaxPreconditionState):
     count_inc = optax.safe_int32_increment(state.count)

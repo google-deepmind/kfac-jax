@@ -34,7 +34,7 @@ def resnet50(
 
   bn_config = dict(decay_rate=bn_decay_rate)
   if batch_norm_synced:
-    bn_config["cross_replica_axis"] = pmap_axis_name
+    bn_config["cross_replica_axis"] = pmap_axis_name  # pyrefly: ignore[bad-assignment]
 
   def func(
       batch: chex.Array | Mapping[str, chex.Array],
@@ -82,18 +82,18 @@ def resnet50_loss(
 
   loss, stats = losses.classifier_loss_and_stats(
       predictions=logits,
-      labels_as_int=batch["labels"],
+      labels_as_int=batch["labels"],  # pyrefly: ignore[bad-argument-type]
       params=params,
-      l2_reg=l2_reg if is_training else 0.0,
+      l2_reg=l2_reg if is_training else 0.0,  # pyrefly: ignore[bad-argument-type]
       haiku_exclude_batch_norm=True,
       haiku_exclude_biases=True,
       label_smoothing=label_smoothing if is_training else 0.0,
   )
 
   if is_training:
-    return loss, (state, stats)
+    return loss, (state, stats)  # pyrefly: ignore[bad-return]
   else:
-    return loss, stats
+    return loss, stats  # pyrefly: ignore[bad-return]
 
 
 class Resnet50ImageNetExperiment(training.ImageNetExperiment):
@@ -114,7 +114,7 @@ class Resnet50ImageNetExperiment(training.ImageNetExperiment):
             resnet50(num_classes=1000, **config.model_kwargs).init,
             is_training=True,
         ),
-        model_loss_func=functools.partial(
+        model_loss_func=functools.partial(  # pyrefly: ignore[bad-argument-type]
             resnet50_loss,
             l2_reg=config.l2_reg,
             pmap_axis_name="batch_axis",
