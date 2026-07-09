@@ -416,13 +416,13 @@ def make_jax_graph(
       )
 
     closed_jaxpr = ClosedJaxpr(
-        closed_jaxpr.jaxpr.replace(
+        jaxpr=closed_jaxpr.jaxpr.replace(
             eqns=eqns[::-1],
             constvars=[closed_jaxpr.jaxpr.constvars[i] for i in consts_i],
             outvars=loss_tags_output_vars[::-1],
             debug_info=debug_info,
         ),
-        [closed_jaxpr.consts[i] for i in consts_i],
+        consts=[closed_jaxpr.consts[i] for i in consts_i],
     )
     out_shapes = [jax.ShapeDtypeStruct(shape=v.aval.shape, dtype=v.aval.dtype)
                   for v in closed_jaxpr.jaxpr.outvars]  # pytype:disable=attribute-error
@@ -927,6 +927,8 @@ def write_env(
 
 
 def to_closed_jaxpr(jaxpr: JaxprOrClosedJaxpr) -> ClosedJaxpr:
+  if isinstance(jaxpr, Jaxpr):
+    return ClosedJaxpr(jaxpr=jaxpr, consts=[])
   return jaxpr
 
 
@@ -1059,9 +1061,9 @@ def clean_jaxpr(
     raise ValueError("Something went wrong with the dead code elimination.")
 
   closed_jaxpr = ClosedJaxpr(
-      closed_jaxpr.jaxpr.replace(eqns=list(reversed(eqns)),
-                                 outvars=final_outvars),
-      closed_jaxpr.consts,
+      jaxpr=closed_jaxpr.jaxpr.replace(eqns=list(reversed(eqns)),
+                                       outvars=final_outvars),
+      consts=closed_jaxpr.consts,
   )
 
   return to_jaxpr_or_closed_jaxpr(closed_jaxpr, jaxpr)
@@ -1127,8 +1129,8 @@ def clean_layer_tags_jaxpr(
   layer_tag_eqns_new = remap_input_vars(layer_tag_eqns, var_map)
 
   closed_jaxpr = ClosedJaxpr(
-      closed_jaxpr.jaxpr.replace(eqns=eqns_new),
-      closed_jaxpr.consts,
+      jaxpr=closed_jaxpr.jaxpr.replace(eqns=eqns_new),
+      consts=closed_jaxpr.consts,
   )
 
   return (
@@ -1228,8 +1230,8 @@ def merge_broadcasts_jaxpr(jaxpr: J) -> J:
       eqns.append(eqn)
 
   closed_jaxpr = ClosedJaxpr(
-      closed_jaxpr.jaxpr.replace(eqns=eqns),
-      closed_jaxpr.consts
+      jaxpr=closed_jaxpr.jaxpr.replace(eqns=eqns),
+      consts=closed_jaxpr.consts
   )
   return to_jaxpr_or_closed_jaxpr(closed_jaxpr, jaxpr)
 
@@ -1990,8 +1992,8 @@ def _auto_register_tags(
   mid_graph = JaxprGraph(
       name=graph.name,
       closed_jaxpr=ClosedJaxpr(
-          graph.jaxpr.replace(eqns=eqns),
-          graph.consts,
+          jaxpr=graph.jaxpr.replace(eqns=eqns),
+          consts=graph.consts,
       ),
       params_tree=graph.params_tree,
       params_vars=graph.params_vars,
@@ -2111,8 +2113,8 @@ def _auto_register_tags(
   final_graph = JaxprGraph(
       name=mid_graph.name,
       closed_jaxpr=ClosedJaxpr(
-          mid_graph.jaxpr.replace(eqns=eqns, outvars=final_outvars),
-          mid_graph.closed_jaxpr.consts
+          jaxpr=mid_graph.jaxpr.replace(eqns=eqns, outvars=final_outvars),
+          consts=mid_graph.closed_jaxpr.consts
       ),
       params_tree=mid_graph.params_tree,
       params_vars=mid_graph.params_vars,
