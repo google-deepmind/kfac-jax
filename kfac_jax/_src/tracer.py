@@ -228,7 +228,7 @@ class ProcessedJaxpr(utils.Finalizable):
     self.in_tree = in_tree
     self.params_index = params_index
 
-    closed_jaxpr = jex.core.ClosedJaxpr(self.jaxpr, self.consts)
+    closed_jaxpr = jex.core.ClosedJaxpr(jaxpr=self.jaxpr, consts=self.consts)
     self.jaxpr, self.layer_tags = tgm.clean_layer_tags_jaxpr(closed_jaxpr)
     self.jaxpr = self.jaxpr.jaxpr
 
