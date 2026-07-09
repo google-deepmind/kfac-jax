@@ -25,8 +25,8 @@ try:
   no_effects: Effects = jex.core.no_effects
 except AttributeError:
   # JAX v0.9.2 and older
-  Effects = jax.core.Effects
-  no_effects = jax.core.no_effects
+  Effects = jax.core.Effects  # pytype: disable=module-attr
+  no_effects = jax.core.no_effects  # pytype: disable=module-attr
 
 
 # Types for annotation

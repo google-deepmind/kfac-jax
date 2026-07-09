@@ -41,12 +41,12 @@ if jax_version >= (0, 10, 0):
   new_jaxpr_eqn = jex.core.new_jaxpr_eqn
 else:
   if jax_version >= (0, 5, 1):
-    DebugInfo = jax.core.DebugInfo
+    DebugInfo = jax.core.DebugInfo  # pytype: disable=module-attr
   else:
     DebugInfo = jax.core.JaxprDebugInfo  #  pytype: disable=module-attr
-  DropVar = jax.core.DropVar
-  gensym = jax.core.gensym
-  new_jaxpr_eqn = jax.core.new_jaxpr_eqn
+  DropVar = jax.core.DropVar  # pytype: disable=module-attr
+  gensym = jax.core.gensym  # pytype: disable=module-attr
+  new_jaxpr_eqn = jax.core.new_jaxpr_eqn  # pytype: disable=module-attr
 
 
 HIGHER_ORDER_NAMES = ("cond", "while", "scan", "pjit", "xla_call", "xla_pmap")
