@@ -19,7 +19,7 @@ implementation of the [K-FAC] optimizer and curvature estimator.
 
 KFAC-JAX is written in pure Python, but depends on C++ code via JAX.
 
-First, follow [these instructions](https://github.com/google/jax#installation)
+First, follow [these instructions](https://github.com/jax-ml/jax#installation)
 to install JAX with the relevant accelerator support.
 
 Then, install KFAC-JAX using pip:
@@ -219,6 +219,6 @@ and the year corresponds to the project's open-source release.
 
 
 [K-FAC]: https://arxiv.org/abs/1503.05671
-[JAX]: https://github.com/google/jax
+[JAX]: https://github.com/jax-ml/jax
 [Haiku]: https://github.com/google-deepmind/dm-haiku
 [documentation]: https://kfac-jax.readthedocs.io/
