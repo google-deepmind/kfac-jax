@@ -319,7 +319,7 @@ class JaxprGraph:
   def losses_eqns(self) -> tuple[tags.LossTagEqn, ...]:
     # Note that this function won't look inside higher order primitives of this
     # graph to find loss tags.
-    return tuple(
+    return tuple(  # pyrefly: ignore[bad-return]
         eqn for eqn in self.closed_jaxpr.jaxpr.eqns
         if isinstance(eqn.primitive, tags.LossTag)
     )
@@ -424,7 +424,7 @@ def make_jax_graph(
         ),
         [closed_jaxpr.consts[i] for i in consts_i],
     )
-    out_shapes = [jax.ShapeDtypeStruct(shape=v.aval.shape, dtype=v.aval.dtype)
+    out_shapes = [jax.ShapeDtypeStruct(shape=v.aval.shape, dtype=v.aval.dtype)  # pyrefly: ignore[missing-attribute]
                   for v in closed_jaxpr.jaxpr.outvars]  # pytype:disable=attribute-error
 
   closed_jaxpr = clean_jaxpr(closed_jaxpr)
@@ -932,7 +932,7 @@ def to_closed_jaxpr(jaxpr: JaxprOrClosedJaxpr) -> ClosedJaxpr:
 
 def to_jaxpr_or_closed_jaxpr(closed_jaxpr: ClosedJaxpr, original: J) -> J:
   if isinstance(original, Jaxpr):
-    return closed_jaxpr.jaxpr
+    return closed_jaxpr.jaxpr  # pyrefly: ignore[bad-return]
   return closed_jaxpr  # pyrefly: ignore[bad-return]
 
 

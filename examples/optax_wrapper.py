@@ -259,10 +259,10 @@ class OptaxWrapper:
         norm = param_norms[key]  # pyrefly: ignore[bad-index]
         stats[key] = norm
 
-        grad_key = key.replace("param", "grad")
+        grad_key = key.replace("param", "grad")  # pyrefly: ignore[missing-attribute]
         stats["rel_" + grad_key] = stats[grad_key] / norm
 
-        upd_key = key.replace("param", "update")
+        upd_key = key.replace("param", "update")  # pyrefly: ignore[missing-attribute]
         stats["rel_" + upd_key] = stats[upd_key] / norm
 
     if self._value_func_has_state:
