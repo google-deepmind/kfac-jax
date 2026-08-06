@@ -180,7 +180,7 @@ class MultiChunkAccumulator(Generic[TArrayTree]):  # pyrefly: ignore[invalid-typ
     if self._multi_device:
       return parallel.pmap_sync_and_divide_value(self.accumulator, self.weight)
     else:
-      return parallel.jit_sync_and_divide_value(self.accumulator, self.weight)
+      return parallel.jit_sync_and_divide_value(self.accumulator, self.weight)  # pyrefly: ignore[bad-argument-type]
 
   def clear(self) -> None:
     """Sets the underlying accumulator and weight to `None`."""

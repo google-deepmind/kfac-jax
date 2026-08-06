@@ -269,7 +269,7 @@ class Full(CurvatureBlock, abc.ABC):
         else:
           matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)  # pyrefly: ignore[unsupported-operation]
           state.cache[str(power)] = (  # pyrefly: ignore[unsupported-operation]
-              (scale ** power) * jnp.linalg.matrix_power(matrix, power))
+              (scale ** power) * jnp.linalg.matrix_power(matrix, power))  # pyrefly: ignore[bad-argument-type]
 
     return state
 
