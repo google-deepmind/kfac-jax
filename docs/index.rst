@@ -3,7 +3,7 @@
 KFAC-JAX Documentation
 ======================
 
-KFAC-JAX is a library built on top of `JAX <https://github.com/google/jax>`_ for
+KFAC-JAX is a library built on top of `JAX <https://github.com/jax-ml/jax>`_ for
 second-order optimization of neural networks and for computing scalable
 curvature approximations.
 The main goal of the library is to provide researchers with an easy-to-use
@@ -16,7 +16,7 @@ Installation
 
 KFAC-JAX is written in pure Python, but depends on C++ code via JAX.
 
-First, follow `these instructions <https://github.com/google/jax#installation>`_
+First, follow `these instructions <https://github.com/jax-ml/jax#installation>`_
 to install JAX with the relevant accelerator support.
 
 Then, install KFAC-JAX using pip::
