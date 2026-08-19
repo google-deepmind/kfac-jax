@@ -436,21 +436,22 @@ def with_warmup(
 
 def construct_schedule(
     name: str,
-    dataset_size: int,
-    train_total_batch_size: int | None,
-    total_steps: int | None,
-    total_epochs: float | None,
+    dataset_size: int | None = None,
+    train_total_batch_size: int | None = None,
+    total_steps: int | None = None,
+    total_epochs: float | None = None,
     mode: str = "steps",
     output_transform: Callable[[Numeric], Numeric] | None = None,
     **kwargs,
 ) -> kfac_jax.utils.ScheduleType:
   """Constructs the schedule from its name and extra kwargs.
 
-  The `mode` argument (one of 'epochs', 'steps', or 'fraction') indicates how
-  certain parameters (given in PARAM_CONVERSION and also warmup_duration) are
-  interpreted:
+  The `mode` argument (one of 'epochs', 'steps', 'fraction', or 'step_fraction')
+  indicates how certain parameters (given in PARAM_CONVERSION and also
+  warmup_duration) are interpreted:
     - 'epochs': values (e.g. boundaries, start) are in epochs.
     - 'fraction': values are fractions of total epochs.
+    - 'step_fraction': values are fractions of total optimizer steps.
     - 'steps': values are in optimizer steps.
 
   This function will also add linear warmup into the schedule if the 'warmup'
@@ -470,7 +471,7 @@ def construct_schedule(
       if mode is 'epochs' or 'fraction' in cases where data_seen is not passed
       to the schedule.
     total_steps: The total number of optimizer steps. Must be set if mode is
-      'steps'. Must be None if total_epochs is set.
+      'steps' or 'step_fraction'. Must be None if total_epochs is set.
     total_epochs: The total number of epochs. Must be set if mode is 'epochs' or
       'fraction'. Must be None if total_steps is set.
     mode: The mode of the schedule (see above).
@@ -486,29 +487,54 @@ def construct_schedule(
   if total_steps is not None and total_epochs is not None:
     raise ValueError("Only one of total_steps and total_epochs can be set.")
 
-  if mode == "fraction" and total_epochs is None and total_steps is None:
+  if (mode in ("fraction", "step_fraction") and total_epochs is None
+      and total_steps is None):
     raise ValueError(
         "One of total_steps or total_epochs must be set when mode is"
-        f" 'fraction' for schedule '{name}'."
+        f" '{mode}' for schedule '{name}'."
     )
 
   if name not in SCHEDULE_METADATA:
     raise ValueError(f"Schedule '{name}' is not valid.")
 
-  if mode not in ("epochs", "steps", "fraction"):
-    raise ValueError("Mode must be one of 'epochs', 'steps', or 'fraction'.")
-
   if mode == "epochs":
+    if dataset_size is None:
+      raise ValueError(
+          f"dataset_size must be set when mode is 'epochs' for schedule "
+          f"'{name}'."
+      )
     conversion_fn = lambda x: x * dataset_size
   elif mode == "steps":
     conversion_fn = lambda x: x
+  elif mode == "step_fraction":
+    if total_steps is None:
+      assert total_epochs is not None
+      if dataset_size is None or train_total_batch_size is None:
+        raise ValueError(
+            "dataset_size and train_total_batch_size must be set when mode is "
+            f"'step_fraction' and total_steps is None for schedule '{name}'."
+        )
+      total_steps = int(total_epochs * dataset_size / train_total_batch_size)
+    conversion_fn = lambda x: x * total_steps
   elif mode == "fraction":
     if total_epochs is not None:
+      if dataset_size is None:
+        raise ValueError(
+            f"dataset_size must be set when mode is 'fraction' and "
+            f"total_epochs is set for schedule '{name}'."
+        )
       conversion_fn = lambda x: x * total_epochs * dataset_size
     else:
+      if train_total_batch_size is None:
+        raise ValueError(
+            f"train_total_batch_size must be set when mode is 'fraction' and "
+            f"total_steps is set for schedule '{name}'."
+        )
       conversion_fn = lambda x: x * total_steps * train_total_batch_size
   else:
-    raise ValueError("Mode must be one of 'epochs', 'steps', or 'fraction'.")
+    raise ValueError(
+        "Mode must be one of 'epochs', 'steps', 'fraction', or 'step_fraction'."
+    )
 
   # Convert all FieldReferences to their values. This is supposed to happen
   # automatically when the config is finalized, but doesn't work recursively for
@@ -526,7 +552,7 @@ def construct_schedule(
 
   if SCHEDULE_METADATA[name]["include_total"]:
 
-    if mode == "steps":
+    if mode in ("steps", "step_fraction"):
 
       if total_steps is None:
         total_steps = int(total_epochs * dataset_size / train_total_batch_size)  # pyrefly: ignore[unsupported-operation]
@@ -539,6 +565,7 @@ def construct_schedule(
       if total_epochs is None:
         new_kwargs["total"] = total_steps * train_total_batch_size  # pyrefly: ignore[unsupported-operation]
       else:
+        assert dataset_size is not None
         new_kwargs["total"] = total_epochs * dataset_size
 
     elif mode == "fraction":
@@ -547,7 +574,8 @@ def construct_schedule(
       if total_steps:
         new_kwargs["total"] = total_steps * train_total_batch_size  # pyrefly: ignore[unsupported-operation]
       else:
-        new_kwargs["total"] = total_epochs * dataset_size  # pyrefly: ignore[unsupported-operation]
+        assert dataset_size is not None and total_epochs is not None
+        new_kwargs["total"] = total_epochs * dataset_size
 
   # Create the base schedule (which does not include warmup).
   base_schedule = lambda count: SCHEDULE_METADATA[name]["ctor"](count,  # pyrefly: ignore[not-callable]
@@ -605,6 +633,8 @@ def construct_schedule(
       return schedule(global_step)
 
   if output_transform is not None:
-    return lambda x: output_transform(schedule_with_input_conversion(x))
+    return lambda *args, **kwargs: output_transform(
+        schedule_with_input_conversion(*args, **kwargs)
+    )
 
   return schedule_with_input_conversion
