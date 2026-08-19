@@ -1688,7 +1688,11 @@ class TagLocation:
 
         p_indexes = [eqn.params["jaxpr"].jaxpr.invars.index(p)
                      for p in param_vars]
-        checks = [pi < eqn.params["num_consts"] for pi in p_indexes]
+        if "ft_in" in eqn.params:
+          num_consts, _, _ = (len(g) for g in eqn.params["ft_in"].unpack())
+        else:
+          num_consts = eqn.params["num_consts"]
+        checks = [pi < num_consts for pi in p_indexes]
 
         if not (all(checks) or all(not ci for ci in checks)):
           raise ValueError("Parameters inside scan of the same tag are not both"
