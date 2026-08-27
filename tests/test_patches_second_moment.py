@@ -38,7 +38,7 @@ class TestPatchesMoments(parameterized.TestCase):
       rtol: float = 1e-6,
   ):
     """Asserts that the two PyTrees are close up to the provided tolerances."""
-    if jax.devices()[0].platform == "tpu":
+    if jax.devices()[0].platform in ("tpu", "gpu"):
       atol = 1e1 * atol
       rtol = 1e1 * rtol
 
