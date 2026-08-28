@@ -42,6 +42,8 @@ ValueFunc = types.ValueFunc
 ValueAndGradFunc = types.ValueAndGradFunc
 AssumedFuncOutput = types.AssumedFuncOutput
 ScheduleType = types.ScheduleType
+Mask = types.Mask
+MaskOrFn = types.MaskOrFn
 tree_is_empty = types.tree_is_empty
 abstract_objects_equal = types.abstract_objects_equal
 get_float_dtype_and_check_consistency = (
@@ -49,6 +51,7 @@ get_float_dtype_and_check_consistency = (
 del types
 
 # misc
+apply_mask = misc.apply_mask
 deserialize_state_tree = misc.deserialize_state_tree
 serialize_state_tree = misc.serialize_state_tree
 to_tuple_or_repeat = misc.to_tuple_or_repeat

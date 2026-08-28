@@ -45,6 +45,8 @@ ScheduleType = (
     Callable[[Numeric, Numeric | None], Numeric] |
     Callable[[Numeric], Numeric]
     )
+Mask = PyTree[bool] | bool | None
+MaskOrFn = Mask | Callable[[Params], Mask]
 
 
 def tree_is_empty(obj: ArrayTree) -> bool:

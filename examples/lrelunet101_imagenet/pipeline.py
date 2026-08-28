@@ -18,6 +18,7 @@ from absl import app
 from absl import flags
 from jaxline import base_config
 from jaxline import platform
+from examples import utils
 from examples.lrelunet101_imagenet import experiment
 from ml_collections import config_dict
 
@@ -53,6 +54,7 @@ def get_config() -> config_dict.ConfigDict:
               ),
               loss_kwargs=dict(
                   label_smoothing=0.1,
+                  l2_reg_params_mask=utils.haiku_exclude_batch_norm_and_biases,
               ),
               batch_size=dict(
                   train=dict(
@@ -76,6 +78,7 @@ def get_config() -> config_dict.ConfigDict:
                       use_adaptive_learning_rate=False,
                       use_adaptive_momentum=False,
                       use_adaptive_damping=False,
+                      regularized_params_mask=utils.haiku_exclude_batch_norm_and_biases,
                       learning_rate_schedule=dict(
                           mode="epochs",
                           name="cosine",

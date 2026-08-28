@@ -17,7 +17,8 @@ import dataclasses
 import functools
 import inspect
 import itertools
-from typing import Any, Callable, Iterator, Sequence, TypeVar
+from typing import Any, Callable, Iterator, Sequence, TypeVar, cast
+from absl import logging
 
 import jax
 import jax.numpy as jnp
@@ -29,6 +30,7 @@ Array = types.Array
 Numeric = types.Numeric
 ArrayTree = types.ArrayTree
 TArrayTree = types.TArrayTree
+MaskOrFn = types.MaskOrFn
 StateType = TypeVar("StateType")
 StateTree = types.PyTree["State"]  # pyrefly: ignore[not-a-type]
 
@@ -393,3 +395,51 @@ def call_func_with_conditional_kwargs(
   func_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
 
   return func(*func_args, **func_kwargs)
+
+
+def apply_mask(
+    tree: TArrayTree,
+    mask: MaskOrFn,
+    log_paths: bool = False,
+    log_prefix: str | None = None,
+) -> TArrayTree:
+  """Applies a mask to a PyTree, zeroing out masked elements.
+
+  Args:
+    tree: The PyTree of arrays to mask.
+    mask: A PyTree of booleans, prefix PyTree, or a callable returning such a
+      PyTree given `tree`. `True` indicates elements to keep, `False` indicates
+      elements to zero out. If None, no masking is applied.
+    log_paths: Whether to log the masking status of each leaf.
+    log_prefix: Optional prefix message for logging when `log_paths` is True.
+
+  Returns:
+    The masked PyTree with unselected elements zeroed out.
+  """
+  if mask is None:
+    return tree
+
+  callable_leaves = jax.tree.leaves(jax.tree.map(callable, mask))
+  if len(callable_leaves) > 0 and all(callable_leaves):  # pylint: disable=g-explicit-length-test
+    mask_tree = cast(Callable[[Any], Any], mask)(tree)
+  else:
+    mask_tree = mask
+
+  if mask_tree is None:
+    return tree
+
+  mask_tree = jax.tree.broadcast(mask_tree, tree)
+
+  if log_paths and log_prefix:
+    logging.info(log_prefix)
+
+  def mask_leaf(path: tuple[Any, ...], p: Array, m: bool) -> Array:
+    if log_paths:
+      logging.info(
+          "  %s out %s", "Masking" if not m else "Not masking", path
+      )
+
+    return p if m else jnp.zeros_like(p)
+
+  return jax.tree.map_with_path(mask_leaf, tree, mask_tree)
+

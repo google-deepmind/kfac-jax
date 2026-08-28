@@ -19,6 +19,7 @@ import chex
 import haiku as hk
 from examples import losses
 from examples import training
+from examples import utils
 from ml_collections import config_dict
 
 
@@ -65,6 +66,7 @@ def resnet50_loss(
     num_classes: int = 1000,
     bn_decay_rate: float = 0.9,
     batch_norm_synced: bool = False,
+    l2_reg_params_mask: utils.MaskOrFn = None,
     **kwargs: Any,
 ) -> tuple[
     chex.Array,
@@ -85,8 +87,7 @@ def resnet50_loss(
       labels_as_int=batch["labels"],  # pyrefly: ignore[bad-argument-type]
       params=params,
       l2_reg=l2_reg if is_training else 0.0,  # pyrefly: ignore[bad-argument-type]
-      haiku_exclude_batch_norm=True,
-      haiku_exclude_biases=True,
+      l2_reg_params_mask=l2_reg_params_mask,
       label_smoothing=label_smoothing if is_training else 0.0,
   )
 

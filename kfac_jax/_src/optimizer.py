@@ -16,7 +16,6 @@
 
 import functools
 from typing import Any, Callable, Generic, Iterator, Sequence
-from absl import logging
 
 import jax
 from jax import lax
@@ -36,6 +35,7 @@ FuncState = Any
 FuncAux = utils.FuncAux
 Scalar = utils.Scalar
 ScheduleType = utils.ScheduleType
+MaskOrFn = utils.MaskOrFn
 
 FuncArgsVariants = (
     tuple[Params, Batch] |
@@ -127,7 +127,7 @@ class Optimizer(utils.WithStagedMethods):
       self,
       value_and_grad_func: ValueAndGradFunc,
       l2_reg: Numeric,
-      regularized_parameters_path_exclusions: str = "",
+      regularized_params_mask: MaskOrFn = None,
       value_func_has_aux: bool = False,
       value_func_has_state: bool = False,
       value_func_has_rng: bool = False,
@@ -247,13 +247,12 @@ class Optimizer(utils.WithStagedMethods):
         an additional diagonal term to the curvature and hence will affect the
         quadratic model when using adaptive damping. Note that the user is still
         responsible for adding regularization to the loss.
-      regularized_parameters_path_exclusions: str. A comma-separated list
-        specifying the names of parameters that are excluded from L2
-        regularization. If any string in the path to a parameter is found in
-        this list, the parameter is considered excluded from L2 regularization.
-        A number of convenience examples are given in this module, e.g.
-        HAIKU_BIASES_AND_NORMS, which is ``"b,bias,scale,offset"``.
-        (Default: ``""``)
+      regularized_params_mask: A tree with the same structure as (or a prefix
+        of) the params PyTree, or a Callable that returns such a pytree given
+        the params. The leaves should be booleans, ``True`` for leaves/subtrees
+        you want to regularize (apply L2 regularization / weight decay to), and
+        ``False`` for those you want to skip. If ``None`` (or ``True``), all
+        parameters are regularized. (Default: ``None``)
       value_func_has_aux: Boolean. Specifies whether the provided callable
         ``value_and_grad_func`` returns auxiliary data. (Default: ``False``)
       value_func_has_state: Boolean. Specifies whether the provided callable
@@ -505,8 +504,7 @@ class Optimizer(utils.WithStagedMethods):
     )
 
     self._l2_reg = l2_reg
-    self._regularized_parameters_path_exclusions = (
-        regularized_parameters_path_exclusions.split(","))
+    self._regularized_params_mask = regularized_params_mask
 
     self._use_adaptive_learning_rate = use_adaptive_learning_rate
     self._learning_rate_schedule = learning_rate_schedule
@@ -1011,8 +1009,10 @@ class Optimizer(utils.WithStagedMethods):
 
     if self._l2_reg > 0.0:
 
-      l2_reg_val = self._l2_reg / 2 * utils.squared_norm(
-          func_args[self._params_index])
+      params = self._maybe_mask_out_unregularized_parameters(
+          func_args[self._params_index]
+      )
+      l2_reg_val = (self._l2_reg / 2) * utils.squared_norm(params)
 
       loss += l2_reg_val
 
@@ -1381,7 +1381,7 @@ class Optimizer(utils.WithStagedMethods):
     NOTE: when ``multi_device`` is ``True``, all of the JAX array arguments to
     this function (including arrays inside of trees), should have an extra
     leading axis the size of the number of local devices. Slices of ``batch``
-    and ``rng`` should be different for each device, whereas the other arugments
+    and ``rng`` should be different for each device, whereas the other arguments
     should be identical for each slice. Passing the arguments any other way will
     result in an exception, or possibly undefined behavior.
 
@@ -1574,38 +1574,17 @@ class Optimizer(utils.WithStagedMethods):
         vectors, grads, func_args, state=state, **kwargs)
 
   def _maybe_mask_out_unregularized_parameters(
-      self, params: Params, log_paths: bool = False) -> Params:
-    """Mask out parameters that are not l2 regularized."""
-
-    if log_paths:
-      logging.info("Unregularized parameters masking info (for curvature "
-                   "calculations and L2 regularization)")
-
-    def maybe_mask_out_single_param(
-        path: tuple[Any, ...],
-        param: Array
-    ) -> Array:
-      """Zero out a single parameter."""
-      str_path = []
-      for p in path:
-        if isinstance(p, jax.tree_util.DictKey):
-          str_path.append(p.key)
-        elif isinstance(p, jax.tree_util.GetAttrKey):
-          str_path.append(p.name)
-
-      should_mask = any(
-          p in str_path
-          for p in self._regularized_parameters_path_exclusions
-      )
-
-      if log_paths:
-        log_message = "Masking" if should_mask else "Not masking"
-        logging.info("  %s out %s", log_message, path)
-
-      return jnp.zeros_like(param) if should_mask else param
-
-    return jax.tree.map_with_path(
-        maybe_mask_out_single_param, params
+      self, params: Params, log_paths: bool = False
+  ) -> Params:
+    """Mask out parameters that are not regularized."""
+    return utils.apply_mask(
+        params,
+        self._regularized_params_mask,
+        log_paths=log_paths,
+        log_prefix=(
+            "Unregularized parameters masking info (for curvature calculations"
+            " and L2 regularization)"
+        ),
     )
 
   @utils.auto_scope_method

@@ -21,6 +21,7 @@ import jax.numpy as jnp
 import kfac_jax
 from examples import losses
 from examples import training
+from examples import utils
 import ml_collections
 import numpy as np
 
@@ -349,6 +350,7 @@ def lrelunet_loss(
     label_smoothing: float = 0.0,
     num_classes: int = 1000,
     depth: int = 101,
+    l2_reg_params_mask: utils.MaskOrFn = None,
     **kwargs: Any,
 ) -> tuple[
     Array,
@@ -363,8 +365,7 @@ def lrelunet_loss(
       labels_as_int=batch["labels"],
       params=params,
       l2_reg=l2_reg if is_training else 0.0,  # pyrefly: ignore[bad-argument-type]
-      haiku_exclude_batch_norm=True,
-      haiku_exclude_biases=True,
+      l2_reg_params_mask=l2_reg_params_mask,
       label_smoothing=label_smoothing if is_training else 0.0,
   )
 

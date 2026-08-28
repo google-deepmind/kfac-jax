@@ -14,9 +14,8 @@
 """Utility functions for computing and automatically registering losses."""
 import types
 
-from typing import Any, Sequence, Mapping
+from typing import Any, Sequence
 
-import haiku as hk
 import jax
 from jax import lax
 import jax.numpy as jnp
@@ -27,37 +26,27 @@ Array = kfac_jax.utils.Array
 Numeric = kfac_jax.utils.Numeric
 Scalar = kfac_jax.utils.Scalar
 Params = kfac_jax.utils.Params
+MaskOrFn = kfac_jax.utils.MaskOrFn
 
 
 def l2_regularizer(
     params: Params,
-    haiku_exclude_batch_norm: bool = False,
-    haiku_exclude_biases: bool = False,
+    l2_reg_params_mask: MaskOrFn = None,
 ) -> Array:
   """Computes an L2 regularizer.
 
-  Computes 0.5 * ||params||^2, optionally excluding batch norm parameters
-  and/or biases (assuming Haiku model conventions).
+  Computes 0.5 * ||params||^2, optionally masked by ``l2_reg_params_mask``.
 
   Args:
-    params: The model parameters. Must be a Mapping (e.g. a Haiku parameter
-      dict).
-    haiku_exclude_batch_norm: If True, excludes parameters from modules whose
-      names contain "batchnorm" from the regularizer.
-    haiku_exclude_biases: If True, excludes parameters named "b" from the
-      regularizer.
+    params: The model parameters.
+    l2_reg_params_mask: A boolean, PyTree of booleans, prefix PyTree, or
+      callable returning such a PyTree, specifying which parameters to
+      regularize. If None or True, all parameters are regularized.
 
   Returns:
     The L2 regularizer value: 0.5 * sum of squared parameter values.
   """
-  assert isinstance(params, Mapping)
-
-  if haiku_exclude_batch_norm:
-    params = hk.data_structures.filter(
-        lambda m, _, __: "batchnorm" not in m, params)
-
-  if haiku_exclude_biases:
-    params = hk.data_structures.filter(lambda _, n, __: n != "b", params)
+  params = kfac_jax.utils.apply_mask(params, l2_reg_params_mask)
 
   return 0.5 * kfac_jax.utils.inner_product(params, params)
 
@@ -408,8 +397,7 @@ def classifier_loss_and_stats(
     labels_as_int: Array,
     params: Params,
     l2_reg: Scalar,
-    haiku_exclude_batch_norm: bool,
-    haiku_exclude_biases: bool,
+    l2_reg_params_mask: MaskOrFn = None,
     label_smoothing: float = 0.0,
     top_k_stats: Sequence[int] = (1, 5),
     register_loss: bool = True,
@@ -431,10 +419,9 @@ def classifier_loss_and_stats(
       be of shape predictions.shape[:-1].
     params: The parameters of the model.
     l2_reg: The L2 regularization coefficient.
-    haiku_exclude_batch_norm: Whether to exclude batch norm parameters from the
-      L2 regularization (assumes models are Haiku models).
-    haiku_exclude_biases: Whether to exclude biases from the L2 regularization
-      (assumes models are Haiku models).
+    l2_reg_params_mask: A boolean, PyTree of booleans, prefix PyTree, or
+      callable returning such a PyTree, specifying which parameters to
+      regularize. If None or True, all parameters are regularized.
     label_smoothing: The label smoothing coefficient.
     top_k_stats: The top-k accuracies to compute.
     register_loss: Whether to register the loss.
@@ -535,7 +522,9 @@ def classifier_loss_and_stats(
   if l2_reg > 0.0:
 
     l2_reg_val = l2_regularizer(
-        params, haiku_exclude_batch_norm, haiku_exclude_biases)
+        params=params,
+        l2_reg_params_mask=l2_reg_params_mask,
+    )
 
     stats["raw_loss"] = loss
     stats["l2_reg_val"] = l2_reg_val

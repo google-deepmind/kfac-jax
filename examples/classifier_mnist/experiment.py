@@ -69,8 +69,6 @@ def classifier_loss(
       labels_as_int=batch["labels"],
       params=params,
       l2_reg=l2_reg if is_training else 0.0,  # pyrefly: ignore[bad-argument-type]
-      haiku_exclude_batch_norm=False,
-      haiku_exclude_biases=False,
       top_k_stats=(1,),
   )
 

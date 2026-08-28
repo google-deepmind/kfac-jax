@@ -18,6 +18,7 @@ from absl import app
 from absl import flags
 from jaxline import base_config
 from jaxline import platform
+from examples import utils
 from examples.resnet50_imagenet import experiment
 from ml_collections import config_dict
 
@@ -56,6 +57,7 @@ def get_config() -> config_dict.ConfigDict:
               ),
               loss_kwargs=dict(
                   label_smoothing=0.0,
+                  l2_reg_params_mask=utils.haiku_exclude_batch_norm_and_biases,
               ),
               batch_size=dict(
                   train=dict(
@@ -85,6 +87,7 @@ def get_config() -> config_dict.ConfigDict:
                       num_burnin_steps=5,
                       curvature_ema=0.99,
                       batch_norm_registration="diag",
+                      regularized_params_mask=utils.haiku_exclude_batch_norm_and_biases,
                   ),
                   sgd=dict(
                       decay=0.9,

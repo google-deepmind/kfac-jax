@@ -75,7 +75,7 @@ def autoencoder_loss(
   loss = losses.sigmoid_cross_entropy(logits, batch)
 
   if l2_reg > 0.0:
-    l2_reg_val = losses.l2_regularizer(params, False, False)
+    l2_reg_val = losses.l2_regularizer(params)
     stats["l2_reg_val"] = l2_reg_val
     if is_training:
       stats["raw_loss"] = loss
