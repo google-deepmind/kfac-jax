@@ -614,7 +614,7 @@ class Optimizer(utils.WithStagedMethods):
     self._implicit = curvature_estimator.ImplicitExactCurvature(
         self._value_func,  # pyrefly: ignore[bad-argument-type]
         params_index=self._params_index,
-        batch_size_extractor=batch_size_extractor,  # pyrefly: ignore[bad-argument-type]
+        batch_size_extractor=batch_size_extractor,
     )
 
     # Each subclass should call finalize on its own, so this gets called only

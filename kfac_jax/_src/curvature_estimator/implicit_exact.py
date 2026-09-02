@@ -21,6 +21,7 @@ from kfac_jax._src import utils
 
 # Types for annotation
 Array = utils.Array
+Numeric = utils.Numeric
 Shape = utils.Shape
 LossFunction = loss_functions.LossFunction
 LossFunctionsTuple = tuple[loss_functions.LossFunction, ...]
@@ -37,7 +38,7 @@ class ImplicitExactCurvature:
       self,
       func: utils.Func,
       params_index: int = 0,
-      batch_size_extractor: Callable[[utils.Batch], int] =
+      batch_size_extractor: Callable[[utils.Batch], Numeric] =
       utils.default_batch_size_extractor,
   ):
     """Initializes the ImplicitExactCurvature instance.
@@ -68,7 +69,7 @@ class ImplicitExactCurvature:
     )
     self._batch_size_extractor = batch_size_extractor
 
-  def batch_size(self, func_args: utils.FuncArgs) -> int:
+  def batch_size(self, func_args: utils.FuncArgs) -> Numeric:
     """The expected batch size given a list of loss instances."""
     return self._batch_size_extractor(func_args[-1])
 
@@ -587,7 +588,7 @@ class ImplicitExactCurvature:
       self,
       func_args: utils.FuncArgs,
       mode: str
-  ) -> tuple[tuple[Shape, ...], int]:
+  ) -> tuple[tuple[Shape, ...], Numeric]:
     """Get shapes of loss inner vectors, and the batch size.
 
     Args:
@@ -596,7 +597,7 @@ class ImplicitExactCurvature:
        inner vectors. Can be "fisher" or "ggn".
 
     Returns:
-      Shapes of loss inner vectors in a tuple, and the batch size as an int.
+      Shapes of loss inner vectors in a tuple, and the batch size.
     """
     losses, _ = self._loss_tags_vjp(func_args)
     shapes = []
@@ -619,7 +620,7 @@ class ImplicitExactCurvature:
   def get_loss_input_shapes_and_batch_size(
       self,
       func_args: utils.FuncArgs,
-  ) -> tuple[tuple[tuple[Shape, ...], ...], int]:
+  ) -> tuple[tuple[tuple[Shape, ...], ...], Numeric]:
     """Get shapes of loss input vectors, and the batch size.
 
     Args:
@@ -627,7 +628,7 @@ class ImplicitExactCurvature:
 
     Returns:
       A tuple over losses of tuples containing the shapes of their different
-      inputs, and the batch size (as an int).
+      inputs, and the batch size.
     """
     losses, _ = self._loss_tags_vjp(func_args)  # pytype: disable=attribute-error  # always-use-return-annotations
     batch_size = self.batch_size(func_args)
