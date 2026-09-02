@@ -100,7 +100,7 @@ class OptaxWrapper:
       self._learning_rate = learning_rate
 
     # Wraps the optax optimizer (gradient transformation), so that it ignores
-    # extra args (i.e. `precond_state` for preconditioner) if not needed.
+    # extra args (e.g. `precond_state` for preconditioner) if not needed.
     self._optax_optimizer = optax.with_extra_args_support(
         optax_optimizer_ctor(self._learning_rate)
     )
@@ -231,6 +231,7 @@ class OptaxWrapper:
         optax_state,
         params,
         precond_state=precond_state,
+        func_args=func_args,
     )
     new_state = OptaxAndPreconditionState(new_optax_state, precond_state)  # pyrefly: ignore[bad-argument-type]
     new_params = optax.apply_updates(params, updates)
