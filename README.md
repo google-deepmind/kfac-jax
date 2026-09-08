@@ -125,7 +125,7 @@ opt_state = optimizer.init(params, key, (dummy_images, dummy_labels))
 for i, batch in enumerate(input_dataset):
   rng, key = jax.random.split(rng)
   params, opt_state, stats = optimizer.step(
-      params, opt_state, key, batch=batch, global_step_int=i)
+      params, opt_state, key, batch=batch)
   print(i, stats)
 ```
 

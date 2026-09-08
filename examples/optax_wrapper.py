@@ -15,6 +15,7 @@
 from typing import Callable, Iterator, Mapping, NamedTuple
 
 import jax
+import jax.numpy as jnp
 import kfac_jax
 import optax
 
@@ -34,7 +35,8 @@ Preconditioner = kfac_jax.OptaxPreconditioner
 
 class OptaxAndPreconditionState(NamedTuple):
   optax_state: OptaxState
-  precond_state: PreconditionState | None = None
+  step_counter: Array
+  precond_state: PreconditionState | None
 
 
 class OptaxWrapper:
@@ -121,14 +123,19 @@ class OptaxWrapper:
         in_axes=(0,) * 5 + (None,),
     )
     self._pmap_init = jax.pmap(
-        lambda p, *_: OptaxAndPreconditionState(self._optax_optimizer.init(p)),  # pyrefly: ignore[bad-argument-type]
+        lambda p, *_: OptaxAndPreconditionState(
+            optax_state=self._optax_optimizer.init(p),  # pyrefly: ignore[bad-argument-type]
+            step_counter=jnp.zeros([], dtype=jnp.int32),
+            precond_state=None,
+        ),
         axis_name=self.pmap_axis_name,
     )
     self._pmap_rng_split = jax.pmap(
         lambda rng, num: tuple(jax.random.split(rng, num)),
         axis_name=self.pmap_axis_name,
-        static_broadcasted_argnums=1
+        static_broadcasted_argnums=1,
     )
+    self._step_counter = -1
 
     if self._preconditioner is not None:
 
@@ -233,7 +240,12 @@ class OptaxWrapper:
         precond_state=precond_state,
         func_args=func_args,
     )
-    new_state = OptaxAndPreconditionState(new_optax_state, precond_state)  # pyrefly: ignore[bad-argument-type]
+    new_step_counter = state.step_counter + 1
+    new_state = OptaxAndPreconditionState(
+        optax_state=new_optax_state,  # pyrefly: ignore[bad-argument-type]
+        step_counter=new_step_counter,
+        precond_state=precond_state,
+    )
     new_params = optax.apply_updates(params, updates)
 
     # Add step and batch size
@@ -278,7 +290,6 @@ class OptaxWrapper:
       rng: PRNGKey,
       data_iterator: Iterator[Batch],
       func_state: FuncState | None = None,
-      global_step_int: int | None = None,
   ) -> (
       tuple[Params, OptaxAndPreconditionState, FuncState, Mapping[str, Array]] |
       tuple[Params, OptaxAndPreconditionState, Mapping[str, Array]]
@@ -294,7 +305,17 @@ class OptaxWrapper:
       precond_state = self._pmap_init_preconditioner(
           params, rng_init, batch, func_state
       )
-      state = OptaxAndPreconditionState(state.optax_state, precond_state)
+      state = OptaxAndPreconditionState(
+          optax_state=state.optax_state,
+          step_counter=state.step_counter,
+          precond_state=precond_state,
+      )
+
+    if self._step_counter < 0:
+      self._step_counter = int(kfac_jax.utils.get_first(state.step_counter))
+
+    step_int = self._step_counter
+    self._step_counter += 1
 
     return self._pmap_step(
         params,
@@ -302,5 +323,5 @@ class OptaxWrapper:
         rng_step,
         batch,
         func_state,
-        global_step_int,
+        step_int,
     )

@@ -468,6 +468,10 @@ class Optimizer(utils.WithStagedMethods):
         (Default: ``'ggn'``)
     """
 
+    modifiable_attribute_exceptions = (
+        tuple(modifiable_attribute_exceptions) + ("_step_counter",)
+    )
+
     super().__init__(
         multi_device=multi_device,
         pmap_axis_name=pmap_axis_name if multi_device else None,
@@ -617,6 +621,8 @@ class Optimizer(utils.WithStagedMethods):
         batch_size_extractor=batch_size_extractor,
     )
 
+    self._step_counter: int = -1
+
     # Each subclass should call finalize on its own, so this gets called only
     # for instances of exactly this class type.
     if type(self) == Optimizer:  # pylint: disable=unidiomatic-typecheck
@@ -688,7 +694,6 @@ class Optimizer(utils.WithStagedMethods):
       learning_rate: Array | None = None,
       momentum: Array | None = None,
       damping: Array | None = None,
-      global_step_int: int | None = None,
   ) -> int:
     """Verifies that the arguments passed to the step function are correct."""
 
@@ -735,10 +740,15 @@ class Optimizer(utils.WithStagedMethods):
       raise ValueError("When you have passed a `damping_schedule` you should "
                        "not pass a value to the step function.")
 
-    if global_step_int is None:
-      return int(self.get_first(step_counter))
+    if self._step_counter >= 0:
+      step = self._step_counter
+      self._step_counter += 1
+      return step
 
-    return global_step_int
+    # Cold start after preemption / checkpoint restore:
+    step = int(self.get_first(step_counter))
+    self._step_counter = step + 1
+    return step
 
   @utils.staged
   def _setup_state_and_schedules(
@@ -1370,7 +1380,6 @@ class Optimizer(utils.WithStagedMethods):
       learning_rate: Array | None = None,
       momentum: Array | None = None,
       damping: Array | None = None,
-      global_step_int: int | None = None
   )-> ReturnEither:
     """Performs a single update step using the optimizer.
 
@@ -1405,8 +1414,6 @@ class Optimizer(utils.WithStagedMethods):
         ``use_adaptive_damping=False`` and ``damping_schedule=None``. Should be
         ``None`` otherwise. See discussion of constructor argument
         ``initial_damping`` for more information about damping.
-      global_step_int: The global step as a python int. Note that this must
-        match the step internal to the optimizer that is part of its state.
 
     Returns:
       (params, state, stats) if ``value_func_has_state=False`` and
@@ -1430,7 +1437,6 @@ class Optimizer(utils.WithStagedMethods):
         learning_rate=learning_rate,
         momentum=momentum,
         damping=damping,
-        global_step_int=global_step_int,
     )
 
     if step_counter_int == 0:

@@ -641,7 +641,6 @@ class SupervisedExperiment(abc.ABC):
         rng=rng,
         data_iterator=self.train_inputs,  # pyrefly: ignore[bad-argument-type]
         func_state=self._state if self.has_func_state else None,
-        global_step_int=self._python_step,
     )
 
     # Unpack result
