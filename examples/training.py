@@ -403,10 +403,10 @@ class SupervisedExperiment(abc.ABC):
 
   def _update_polyak_average(
       self,
-      params_polyak: WeightedMovingAverage[Params] | None,
+      params_polyak: WeightedMovingAverage[Params] | None,  # pyrefly: ignore[unsupported-operation]
       params: Params,
       weight: Numeric = 1.0,
-  ) -> WeightedMovingAverage[Params]:
+  ) -> WeightedMovingAverage[Params]:  # pyrefly: ignore[unsupported-operation]
     """Updates the polyak-averaged version of the parameters."""
 
     assert self._use_polyak_avg_with_decay_factor is not None

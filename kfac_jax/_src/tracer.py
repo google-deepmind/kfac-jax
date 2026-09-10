@@ -559,7 +559,7 @@ def construct_compute_losses_inputs(
           write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, read(eqn.invars)))
 
         losses_inputs.append(read(eqn.invars))
-        losses_p_deps.append(read(tags.loss_eqn_parameter_dependants(eqn)))
+        losses_p_deps.append(read(tags.loss_eqn_parameter_dependants(eqn)))  # pyrefly: ignore[bad-argument-type]
         losses_so_far += 1
 
       else:
@@ -973,7 +973,7 @@ def _layer_tag_vjp(
     """
     [tangents_dict] = aux_vjp(tangents)
 
-    read_primals = functools.partial(tgm.read_env, primals_dict)
+    read_primals = functools.partial(tgm.read_env, primals_dict)  # pyrefly: ignore[bad-argument-type]
     read_tangents = functools.partial(tgm.read_env, tangents_dict)
     layers_info = []
 
@@ -990,8 +990,8 @@ def _layer_tag_vjp(
       # which affects the tag inputs but not the corresponding layer in the
       # graph.
       layers_info.append(LayerVjpData(
-          primals=tag.primitive.layer_data(primals, tag.params),
-          tangents=tag.primitive.layer_data(tangents, tag.params,
+          primals=tag.primitive.layer_data(primals, tag.params),  # pyrefly: ignore[missing-attribute]
+          tangents=tag.primitive.layer_data(tangents, tag.params,  # pyrefly: ignore[missing-attribute]
                                             exclude_inputs=True),
       ))
 

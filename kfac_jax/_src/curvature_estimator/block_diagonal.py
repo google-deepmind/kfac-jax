@@ -781,7 +781,7 @@ class BlockDiagonalCurvature(
       if self.func_and_grad is not None:
         params_grad = self.func_and_grad(*func_args)[1]
       else:
-        params_grad = jax.grad(self.func, self.params_index)(*func_args)
+        params_grad = jax.grad(self.func, self.params_index)(*func_args)  # pyrefly: ignore[bad-argument-type]
 
       if estimation_mode == "fisher_empirical_direct_synced":
         params_grad = utils.pmean_if_pmap(params_grad, pmap_axis_name)

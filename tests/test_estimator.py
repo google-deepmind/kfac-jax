@@ -371,7 +371,7 @@ class TestEstimator(parameterized.TestCase):
         model_func,
         layer_tag_to_block_ctor=dict(  # pyrefly: ignore[bad-argument-type]
             dense=kfac_jax.DenseTwoKroneckerFactored,
-            conv2d=None,
+            conv2d=None,  # pyrefly: ignore[bad-assignment]
             scale_and_shift=kfac_jax.ScaleAndShiftFull,
         )
     )

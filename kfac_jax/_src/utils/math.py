@@ -1135,7 +1135,7 @@ def loop_and_parallelize_average(
     loop_args = jax.tree_util.tree_map(lambda x: x[:all_chunks_size], args)
 
     if num_parallel_chunks == 1:
-      averaged_value = jnp.mean(vmap_fn(*loop_args), axis=0)
+      averaged_value = jnp.mean(vmap_fn(*loop_args), axis=0)  # pyrefly: ignore[bad-argument-type]
 
     else:
 
@@ -1167,7 +1167,7 @@ def loop_and_parallelize_average(
 
     # Index to get the remainder arguments
     remainder_args = jax.tree_util.tree_map(lambda x: x[all_chunks_size:], args)
-    remainder_value = jnp.mean(vmap_fn(*remainder_args), axis=0)
+    remainder_value = jnp.mean(vmap_fn(*remainder_args), axis=0)  # pyrefly: ignore[bad-argument-type]
 
     avg_weight = all_chunks_size / leading_size
     remainder_weight = remainder_size / leading_size

@@ -113,7 +113,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):  # pyrefly: ignore
       cls,
       shape: Shape,
       dtype: DType | None = None,
-  ) -> "WeightedMovingAverage[Array]":
+  ) -> "WeightedMovingAverage[Array]":  # pyrefly: ignore[unsupported-operation]
     """Initializes a `WeightedMovingAverage` with a single array of zeros."""
 
     return cls(  # pytype: disable=wrong-keyword-args
@@ -122,7 +122,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):  # pyrefly: ignore
     )
 
   @classmethod
-  def zeros_like(cls, value: TArrayTree) -> "WeightedMovingAverage[TArrayTree]":
+  def zeros_like(cls, value: TArrayTree) -> "WeightedMovingAverage[TArrayTree]":  # pyrefly: ignore[unsupported-operation]
     """Initializes a `WeightedMovingAverage` with zeros structure like `value`."""
 
     return cls(  # pytype: disable=wrong-keyword-args
@@ -293,5 +293,5 @@ class MultiChunkAccumulator(Generic[TArrayTree]):  # pyrefly: ignore[invalid-typ
 jax.tree_util.register_pytree_node(
     MultiChunkAccumulator,
     lambda x: ((x.accumulator, x.weight), (x.multi_device,)),
-    lambda fixed, arrays: MultiChunkAccumulator(*arrays, *fixed)
+    lambda fixed, arrays: MultiChunkAccumulator(*arrays, *fixed)  # pyrefly: ignore[bad-argument-type]
 )
