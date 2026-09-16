@@ -271,7 +271,7 @@ class _DeterministicBernoulliNegativeLogProbLoss(
 
   @property
   def dist(self):
-    return _DeterministicBernoulli(logits=self._logits, dtype=jnp.int32)
+    return _DeterministicBernoulli(logits=self._logits, dtype=jnp.int32)  # pyrefly: ignore[bad-argument-type]
 
 
 def _register_deterministic_bernoulli(
@@ -310,7 +310,7 @@ class _DeterministicCategoricalNegativeLogProbLoss(
 
   @property
   def dist(self) -> _DeterministicCategorical:
-    return _DeterministicCategorical(logits=self._logits, dtype=jnp.int32)
+    return _DeterministicCategorical(logits=self._logits, dtype=jnp.int32)  # pyrefly: ignore[bad-argument-type]
 
 
 def _register_deterministic_categorical(

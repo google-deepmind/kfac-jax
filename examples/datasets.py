@@ -170,7 +170,7 @@ def imagenet_dataset(
     buffer_size_factor: int = 10,
     shuffle: bool = False,
     cache: bool = False,
-    dtype: jnp.dtype = jnp.float32,
+    dtype: jnp.dtype = jnp.float32,  # pyrefly: ignore[bad-function-definition]
     image_size: Shape = (224, 224),
     data_dir: str | None = None,
     extra_preprocessing_func: (

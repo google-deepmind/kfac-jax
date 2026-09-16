@@ -943,7 +943,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   @property
   def dist(self) -> distrax.Bernoulli:
-    return distrax.Bernoulli(logits=self._logits, dtype=jnp.int32)
+    return distrax.Bernoulli(logits=self._logits, dtype=jnp.int32)  # pyrefly: ignore[bad-argument-type]
 
   def _evaluate(self, targets: Array) -> Array:
 
@@ -1062,7 +1062,7 @@ class CategoricalLogitsNegativeLogProbLoss(DistributionNegativeLogProbLoss,
 
   @property
   def dist(self) -> distrax.Categorical:
-    return distrax.Categorical(logits=self._logits, dtype=jnp.int32)
+    return distrax.Categorical(logits=self._logits, dtype=jnp.int32)  # pyrefly: ignore[bad-argument-type]
 
   def _evaluate(self, targets: Array) -> Array:
 
@@ -1168,7 +1168,7 @@ class OneHotCategoricalLogitsNegativeLogProbLoss(
 
   @property
   def dist(self) -> distrax.OneHotCategorical:
-    return distrax.OneHotCategorical(logits=self._logits, dtype=jnp.int32)
+    return distrax.OneHotCategorical(logits=self._logits, dtype=jnp.int32)  # pyrefly: ignore[bad-argument-type]
 
 
 def insert_slice_in_zeros(
