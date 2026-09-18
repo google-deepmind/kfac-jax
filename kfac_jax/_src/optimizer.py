@@ -164,6 +164,7 @@ class Optimizer(utils.WithStagedMethods):
       batch_process_func: Callable[[Batch], Batch] | None = None,
       register_only_generic: bool = False,
       patterns_to_skip: Sequence[str] = (),
+      fallback_to_outputs_if_no_losses: bool = False,
       use_automatic_registration: bool = True,
       auto_register_kwargs: dict[str, Any] | None = None,
       layer_tag_to_block_ctor: (
@@ -387,6 +388,12 @@ class Optimizer(utils.WithStagedMethods):
         to automatically pick up any kind of layer tags. (Default: ``False``)
       patterns_to_skip: tuple. A list of any patterns that should be skipped by
         the graph matcher when auto-tagging. (Default: ``()``)
+      fallback_to_outputs_if_no_losses: Bool. If ``True``, and no loss tags are
+        found, falls back to treating the primary function output as the anchor
+        for graph reachability (for auto-registration). This is convenient if
+        one wants to use the optimizer with curvature estimation modes that
+        don't require any registered losses (e.g. ``fisher_empirical_direct``).
+        (Default: ``False``)
       use_automatic_registration: Bool. If ``True``, the optimizer will try to
         automatically register the layers of your network. (Default: ``True``)
       auto_register_kwargs: Any additional kwargs to be passed down to
@@ -548,6 +555,7 @@ class Optimizer(utils.WithStagedMethods):
     self._inverse_update_period = inverse_update_period
     self._layer_tag_to_block_cls = layer_tag_to_block_ctor
     self._patterns_to_skip = patterns_to_skip
+    self._fallback_to_outputs_if_no_losses = fallback_to_outputs_if_no_losses
     self._batch_process_func = batch_process_func or (lambda x: x)
     self._include_norms_in_stats = include_norms_in_stats
     self._include_per_param_norms_in_stats = include_per_param_norms_in_stats
@@ -578,10 +586,11 @@ class Optimizer(utils.WithStagedMethods):
 
     estimator_ctor = (custom_estimator_ctor or BlockDiagonalCurvature)
 
-    auto_register_kwargs = auto_register_kwargs or {}
+    auto_register_kwargs = dict(auto_register_kwargs or {})
     auto_register_kwargs.update(dict(
         register_only_generic=register_only_generic,
         patterns_to_skip=patterns_to_skip,
+        fallback_to_outputs_if_no_losses=fallback_to_outputs_if_no_losses,
     ))
 
     if value_func_for_estimator is None:
@@ -1330,8 +1339,10 @@ class Optimizer(utils.WithStagedMethods):
         precon_damping=precon_damping,
         rho=rho,
         quad_model_change=quad_model_change,
-        scaled_grad_norm_sq=scaled_grad_norm_sq,
     )
+
+    if scaled_grad_norm_sq is not None:
+      stats["scaled_grad_norm_sq"] = scaled_grad_norm_sq
 
     if self._use_step_rejection:
       stats["step_rejected"] = reject_step

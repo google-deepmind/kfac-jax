@@ -631,6 +631,139 @@ class TestEstimator(parameterized.TestCase):
 
     self.assert_trees_all_close(c_v_1, c_v_2)
 
+  def test_fallback_to_outputs_if_no_losses(self):
+    """Tests BlockDiagonalCurvature with fallback_to_outputs_if_no_losses."""
+    def model_fn(params, data):
+      x, y = data["x"], data["y"]
+      logits = x @ params["w"] + params["b"]
+      return jnp.mean((logits - y) ** 2)
+
+    rng = jax.random.PRNGKey(0)
+    data = {
+        "x": jax.random.normal(rng, (4, 3)),
+        "y": jax.random.normal(rng, (4, 2)),
+    }
+    params = {
+        "w": jax.random.normal(rng, (3, 2)),
+        "b": jnp.zeros((2,)),
+    }
+    func_args = (params, data)
+
+    # Without fallback, finalize should raise ValueError about no registered
+    # losses
+    estimator_no_fb = kfac_jax.BlockDiagonalCurvature(
+        model_fn,  # pyrefly: ignore[bad-argument-type]
+    )
+    with self.assertRaisesRegex(
+        ValueError, "No registered losses have been found during tracing."
+    ):
+      estimator_no_fb.finalize(func_args)
+
+    # With fallback, init/finalize works
+    estimator_fb = kfac_jax.BlockDiagonalCurvature(
+        model_fn,  # pyrefly: ignore[bad-argument-type]
+        auto_register_kwargs=dict(fallback_to_outputs_if_no_losses=True),
+        default_estimation_mode="fisher_empirical_direct",
+        layer_tag_to_block_ctor=dict(dense=kfac_jax.NaiveDiagonal),
+    )
+    state = estimator_fb.init(
+        rng=rng,
+        func_args=func_args,
+        exact_powers_to_cache=None,
+        approx_powers_to_cache=None,
+    )
+    self.assertEqual(estimator_fb.num_blocks, 1)
+
+    # fisher_empirical_direct succeeds
+    new_state = estimator_fb.update_curvature_matrix_estimate(
+        state=state,
+        ema_old=0.9,
+        ema_new=0.1,
+        identity_weight=1e-3,
+        batch_size=4,
+        rng=rng,
+        func_args=func_args,
+        estimation_mode="fisher_empirical_direct",
+    )
+    self.assertIsNotNone(new_state)
+
+    # fisher_empirical_direct_synced succeeds
+    new_state_synced = estimator_fb.update_curvature_matrix_estimate(
+        state=state,
+        ema_old=0.9,
+        ema_new=0.1,
+        identity_weight=1e-3,
+        batch_size=4,
+        rng=rng,
+        func_args=func_args,
+        estimation_mode="fisher_empirical_direct_synced",
+    )
+    self.assertIsNotNone(new_state_synced)
+
+    # Modes requiring registered losses should raise ValueError
+    loss_dependent_modes = (
+        "fisher_gradients",
+        "fisher_empirical",
+        "fisher_curvature_prop",
+        "ggn_curvature_prop",
+        "fisher_exact",
+        "ggn_exact",
+    )
+    for mode in loss_dependent_modes:
+      with self.assertRaisesRegex(
+          ValueError,
+          f"Estimation mode '{mode}' requires at least one registered loss tag,"
+          " but none were found.",
+      ):
+        estimator_fb.update_curvature_matrix_estimate(
+            state=state,
+            ema_old=0.9,
+            ema_new=0.1,
+            identity_weight=1e-3,
+            batch_size=4,
+            rng=rng,
+            func_args=func_args,
+            estimation_mode=mode,
+        )
+
+  def test_optimizer_fallback_to_outputs_if_no_losses(self):
+    """Tests Optimizer with fallback_to_outputs_if_no_losses."""
+    def model_fn(params, data):
+      x, y = data["x"], data["y"]
+      logits = x @ params["w"] + params["b"]
+      return jnp.mean((logits - y) ** 2)
+
+    rng = jax.random.PRNGKey(0)
+    data = {
+        "x": jax.random.normal(rng, (4, 3)),
+        "y": jax.random.normal(rng, (4, 2)),
+    }
+    params = {
+        "w": jax.random.normal(rng, (3, 2)),
+        "b": jnp.zeros((2,)),
+    }
+
+    opt = kfac_jax.Optimizer(
+        value_and_grad_func=jax.value_and_grad(model_fn),
+        l2_reg=0.0,
+        fallback_to_outputs_if_no_losses=True,
+        estimation_mode="fisher_empirical_direct",
+        layer_tag_to_block_ctor=dict(dense=kfac_jax.NaiveDiagonal),
+        learning_rate_schedule=lambda step: 1e-3,
+        momentum_schedule=lambda step: 0.9,
+        damping_schedule=lambda step: 1e-3,
+        multi_device=False,
+        num_burnin_steps=0,
+    )
+    opt_state = opt.init(params, rng, data)
+    step_key, rng = jax.random.split(rng)
+    new_params, new_opt_state, stats = opt.step(  # pyrefly: ignore[bad-unpacking]
+        params, opt_state, step_key, batch=data
+    )
+    self.assertIsNotNone(new_params)
+    self.assertIsNotNone(new_opt_state)
+    self.assertIsNotNone(stats)
+
 
 if __name__ == "__main__":
   absltest.main()

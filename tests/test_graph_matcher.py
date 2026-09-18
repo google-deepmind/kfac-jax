@@ -197,6 +197,71 @@ class TestGraphMatcher(parameterized.TestCase):
     tagged_jaxpr = jax.make_jaxpr(tagged_func)(params, data).jaxpr
     self.check_jaxpr_equal(jaxpr, tagged_jaxpr, False)
 
+  def test_fallback_to_outputs_if_no_losses(self):
+    """Tests auto-registration with fallback_to_outputs_if_no_losses."""
+    def model_fn(params, data):
+      x = data["x"]
+      w1, b1 = params["w1"], params["b1"]
+      w2, b2 = params["w2"], params["b2"]
+      h = jnp.tanh(x @ w1 + b1)
+      y = h @ w2 + b2
+      loss = jnp.sum(y ** 2)
+      aux = jnp.sum(data["aux_weight"] * x)
+      return loss, aux
+
+    rng = jax.random.PRNGKey(42)
+    params = {
+        "w1": jax.random.normal(rng, (4, 8)),
+        "b1": jnp.zeros((8,)),
+        "w2": jax.random.normal(rng, (8, 2)),
+        "b2": jnp.zeros((2,)),
+    }
+    data = {
+        "x": jax.random.normal(rng, (5, 4)),
+        "aux_weight": jax.random.normal(rng, (5, 4)),
+    }
+    func_args = (params, data)
+
+    # With fallback_to_outputs_if_no_losses=False and
+    # compute_only_loss_tags=True, since there are no loss tags, all equations
+    # are pruned out.
+    tagged_fn_no_fallback = kfac_jax.tag_graph_matcher.auto_register_tags(
+        model_fn,
+        func_args,
+        fallback_to_outputs_if_no_losses=False,
+    )
+    no_fallback_jaxpr = jax.make_jaxpr(tagged_fn_no_fallback)(*func_args).jaxpr
+    layer_tags_no_fb = [
+        eqn for eqn in no_fallback_jaxpr.eqns
+        if isinstance(eqn.primitive, kfac_jax.LayerTag)
+    ]
+    dense_tags_no_fb = [
+        eqn for eqn in layer_tags_no_fb
+        if eqn.params.get("meta") and eqn.params["meta"].variant == "dense"
+    ]
+    self.assertEmpty(dense_tags_no_fb)
+
+    # With fallback_to_outputs_if_no_losses=True,
+    # equations leading to the primary output (loss) should be preserved,
+    # and dense layers should be recognized and tagged.
+    tagged_fn_with_fallback = kfac_jax.tag_graph_matcher.auto_register_tags(
+        model_fn,
+        func_args,
+        fallback_to_outputs_if_no_losses=True,
+    )
+    with_fallback_jaxpr = jax.make_jaxpr(
+        tagged_fn_with_fallback)(*func_args).jaxpr
+    layer_tags_fb = [
+        eqn for eqn in with_fallback_jaxpr.eqns
+        if isinstance(eqn.primitive, kfac_jax.LayerTag)
+    ]
+    dense_tags_fb = [
+        eqn for eqn in layer_tags_fb
+        if eqn.params.get("meta") and eqn.params["meta"].variant == "dense"
+    ]
+    # Both layers (w1 and w2) should be tagged as dense
+    self.assertLen(dense_tags_fb, 2)
+
 
 if __name__ == "__main__":
   absltest.main()

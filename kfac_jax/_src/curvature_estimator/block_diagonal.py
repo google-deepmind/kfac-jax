@@ -708,18 +708,22 @@ class BlockDiagonalCurvature(
 
     estimation_mode = estimation_mode or self.default_estimation_mode
 
-    # Compute the losses and the VJP function from the function inputs
-    losses, losses_vjp = self._compute_losses_vjp(func_args)
+    if estimation_mode == "fisher_gradients":
 
-    if estimation_mode in {"fisher_gradients", "fisher_empirical"}:
+      losses, losses_vjp = self._compute_losses_vjp(func_args)
+
+      if not losses:
+        raise ValueError(
+            f"Estimation mode '{estimation_mode}' requires at least one "
+            f"registered loss tag, but none were found."
+        )
+
       if any(not isinstance(l, loss_functions.NegativeLogProbLoss)
              for l in losses):
         raise ValueError(
             f"One of the losses in the function is not an instance of "
             f"`loss_functions.NegativeLogProbLoss`, which is incompatible "
             f"with the estimation mode provided - {estimation_mode}.")
-
-    if estimation_mode == "fisher_gradients":
 
       def update_func(state_i, rng_i, ema_old_i):
 
@@ -742,6 +746,14 @@ class BlockDiagonalCurvature(
       return self._maybe_do_multiple_updates(update_func, state, rng, ema_old)
 
     elif estimation_mode == "fisher_empirical":
+
+      losses, losses_vjp = self._compute_losses_vjp(func_args)
+
+      if not losses:
+        raise ValueError(
+            f"Estimation mode '{estimation_mode}' requires at least one "
+            f"registered loss tag, but none were found."
+        )
 
       vjp_vec = tuple(
           loss.grad_of_evaluate(None, coefficient_mode="regular")
@@ -807,6 +819,14 @@ class BlockDiagonalCurvature(
 
     elif estimation_mode in ("fisher_curvature_prop", "ggn_curvature_prop"):
 
+      losses, losses_vjp = self._compute_losses_vjp(func_args)
+
+      if not losses:
+        raise ValueError(
+            f"Estimation mode '{estimation_mode}' requires at least one "
+            f"registered loss tag, but none were found."
+        )
+
       def update_func(state_i, rng_i, ema_old_i):
 
         keys = jax.random.split(
@@ -838,6 +858,14 @@ class BlockDiagonalCurvature(
       return self._maybe_do_multiple_updates(update_func, state, rng, ema_old)
 
     elif estimation_mode in ("fisher_exact", "ggn_exact"):
+
+      losses, losses_vjp = self._compute_losses_vjp(func_args)
+
+      if not losses:
+        raise ValueError(
+            f"Estimation mode '{estimation_mode}' requires at least one "
+            f"registered loss tag, but none were found."
+        )
 
       zero_tangents = jax.tree_util.tree_map(
           jnp.zeros_like, list(loss.parameter_dependants for loss in losses))

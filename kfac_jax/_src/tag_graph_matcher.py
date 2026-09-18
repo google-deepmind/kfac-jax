@@ -362,6 +362,7 @@ def make_jax_graph(
     compute_only_loss_tags: bool,
     clean_broadcasts: bool,
     tag_ctor: TagCtor | None = None,
+    fallback_to_outputs_if_no_losses: bool = False,
 ) -> JaxprGraph:
   """Creates a :class:`~JaxGraph` instance from the provided function and arguments."""
 
@@ -370,10 +371,21 @@ def make_jax_graph(
 
   if compute_only_loss_tags:
 
+    has_loss_tags = any(
+        isinstance(eqn.primitive, tags.LossTag)
+        for eqn in closed_jaxpr.jaxpr.eqns
+    )
+
     make_var_func = gensym()
     eqns = []
-    sub_graph_vars = set()
     loss_tags_output_vars = []
+
+    if not has_loss_tags and fallback_to_outputs_if_no_losses:
+      final_outvars = [closed_jaxpr.jaxpr.outvars[0]]
+      sub_graph_vars = set(final_outvars)
+    else:
+      sub_graph_vars = set()
+      final_outvars = None
 
     for eqn in reversed(closed_jaxpr.jaxpr.eqns):
 
@@ -397,8 +409,10 @@ def make_jax_graph(
           eqns.append(eqn)
 
         sub_graph_vars.update(
-            v for v in eqn.invars if not isinstance(v, jex.core.Literal)
-        )
+            v for v in eqn.invars if not isinstance(v, jex.core.Literal))
+
+    if final_outvars is None:
+      final_outvars = loss_tags_output_vars[::-1]
 
     consts_i = [
         i
@@ -412,20 +426,22 @@ def make_jax_graph(
           debug_info.traced_for,
           debug_info.func_src_info,
           debug_info.arg_names,
-          tuple([f"{i}" for i in range(len(loss_tags_output_vars))]),
+          tuple([f"{i}" for i in range(len(final_outvars))]),
       )
 
     closed_jaxpr = ClosedJaxpr(
         closed_jaxpr.jaxpr.replace(
             eqns=eqns[::-1],
             constvars=[closed_jaxpr.jaxpr.constvars[i] for i in consts_i],
-            outvars=loss_tags_output_vars[::-1],
+            outvars=final_outvars,
             debug_info=debug_info,
         ),
         [closed_jaxpr.consts[i] for i in consts_i],
     )
-    out_shapes = [jax.ShapeDtypeStruct(shape=v.aval.shape, dtype=v.aval.dtype)  # pyrefly: ignore[missing-attribute]
-                  for v in closed_jaxpr.jaxpr.outvars]  # pytype:disable=attribute-error
+    out_shapes = [
+        jax.ShapeDtypeStruct(shape=v.aval.shape, dtype=v.aval.dtype)  # pyrefly: ignore[missing-attribute]
+        for v in closed_jaxpr.jaxpr.outvars
+    ]
 
   closed_jaxpr = clean_jaxpr(closed_jaxpr)
 
@@ -1843,11 +1859,13 @@ def _auto_register_tags(
       "xla_pmap": 0,
     }
 
-  # Extract the sub-graph that leads to losses
+  # Extract the sub-graph that leads to losses, or to final outputs if no losses
+  # are found.
   if register_only_until_losses:
 
+    sub_graph_vars = set(graph.outvars[:1]) if not graph.losses_eqns else set()
+
     eqns_for_registration = []
-    sub_graph_vars = set()
     for eqn in reversed(graph.jaxpr.eqns):
 
       # Note that graph.losses_eqns won't recurse into higher order primitives
@@ -2136,6 +2154,7 @@ def auto_register_tags(
     patterns_to_skip: Sequence[str] = (),
     graph_matcher_rules: GraphMatcherComparator = GraphMatcherComparator(),
     graph_patterns: Sequence[GraphPattern] = DEFAULT_GRAPH_PATTERNS,
+    fallback_to_outputs_if_no_losses: bool = False,
 ) -> TaggedFunction:
   """Transforms the function by automatically registering layer tags.
 
@@ -2156,6 +2175,9 @@ def auto_register_tags(
     graph_patterns: A sequence of :class:`~GraphPattern` objects, which contain
       all patterns to use, in order of precedence, which to try to find in the
       graph before registering a parameter with a generic layer tag.
+    fallback_to_outputs_if_no_losses: If ``True``, and no loss tags are found,
+      falls back to treating the primary function output as the anchor for
+      graph reachability.
   Returns:
     A transformed function as described above.
   """
@@ -2167,6 +2189,7 @@ def auto_register_tags(
       name="main",
       compute_only_loss_tags=compute_only_loss_tags,
       clean_broadcasts=True,
+      fallback_to_outputs_if_no_losses=fallback_to_outputs_if_no_losses,
   )
 
   patterns = () if register_only_generic else tuple(

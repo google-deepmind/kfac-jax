@@ -456,7 +456,11 @@ def cached_transformation(
           **auto_registration_kwargs,
       )
 
-      if not allow_no_losses and not processed_jaxpr.loss_tags:
+      if (not allow_no_losses
+          and not auto_registration_kwargs.get(
+              "fallback_to_outputs_if_no_losses", False)
+          and not processed_jaxpr.loss_tags
+          ):
         raise ValueError("No registered losses have been found during tracing.")
 
       if cache and raise_error_on_diff_jaxpr:
