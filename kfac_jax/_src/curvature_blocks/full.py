@@ -143,7 +143,7 @@ class Full(CurvatureBlock, abc.ABC):
 
     if len(exact_powers_to_cache) <= self._eigen_decomposition_threshold:
       for power in exact_powers_to_cache:
-        cache[str(power)] = jnp.zeros([self.dim, self.dim], self.dtype)
+        cache[str(float(power))] = jnp.zeros([self.dim, self.dim], self.dtype)
 
     return Full.State(
         cache=cache,  # pyrefly: ignore[unexpected-keyword]
@@ -175,6 +175,8 @@ class Full(CurvatureBlock, abc.ABC):
   ) -> tuple[Array, ...]:
 
     vector = self.parameters_list_to_single_vector(vector)  # pyrefly: ignore[bad-assignment]
+
+    power = float(power)
 
     if power == 1:
 
@@ -262,6 +264,8 @@ class Full(CurvatureBlock, abc.ABC):
             state.matrix.value)[0]  # pyrefly: ignore[bad-argument-type]
 
       for power in exact_powers:
+
+        power = float(power)
 
         if power == -1:
           state.cache[str(power)] = utils.psd_inv(  # pyrefly: ignore[unsupported-operation]

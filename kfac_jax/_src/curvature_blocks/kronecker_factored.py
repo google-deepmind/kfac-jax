@@ -191,7 +191,9 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
       for power in approx_powers_to_cache:
 
-        if power != -1:
+        power = float(power)
+
+        if power not in [-1, -0.5, 0.5]:
           raise NotImplementedError(
               f"Approximations for power {power} is not yet implemented."
           )
@@ -199,7 +201,8 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
         if str(power) not in cache:
           cache[str(power)] = {}
 
-        cache[str(power)][f"{i}_factor"] = jnp.zeros((d, d), dtype=self.dtype)
+        cache[str(power)][f"{i}_factor"] = jnp.zeros(
+            (d, d), dtype=self.dtype)
 
     return KroneckerFactored.State(
         cache=cache,  # pyrefly: ignore[unexpected-keyword]
@@ -231,6 +234,8 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
   ) -> tuple[Array, ...]:
 
     assert len(state.factors) == self.array_ndim
+
+    power = float(power)
 
     vector = self.parameters_shaped_list_to_array(vector)  # pyrefly: ignore[bad-assignment]
 
@@ -288,16 +293,12 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
         )
 
       if use_cached:
-
-        assert power != -0.5
-
         factors = [
             state.cache[str(power)][f"{i}_factor"]  # pyrefly: ignore[unsupported-operation]
             for i in range(len(state.factors))
         ]
 
       else:
-
         factors = [factor.value for factor in state.factors]
 
         factors = utils.pi_adjusted_kronecker_factors(
@@ -305,7 +306,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
         if power == -1:
           factors = utils.invert_psd_matrices(factors)
-        elif power == -0.5:
+        elif power == -0.5:  # should get rid of this
           factors = utils.inverse_sqrt_psd_matrices(factors)
         # TODO(timothycnguyen): Hacky psd square root. Will find a better way.
         elif power == 0.5:
@@ -375,24 +376,48 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
         if exact_powers:
           state.cache[f"{i}_factor_eigen_vectors"] = q[i]  # pyrefly: ignore[unsupported-operation]
 
-    for power in approx_powers:
+    if approx_powers:
 
-      if power != -1:
-        raise NotImplementedError(
-            f"Approximations for power {power} is not yet implemented."
-        )
-
-      cache = state.cache[str(power)]  # pyrefly: ignore[unsupported-operation]
-
-      # This computes the approximate inverse factors using the generalization
-      # of the pi-adjusted inversion from the original KFAC paper.
-      inv_factors = utils.pi_adjusted_kronecker_inverse(
+      damped_factors = utils.pi_adjusted_kronecker_factors(
           *[factor.value for factor in state.factors],  # pyrefly: ignore[bad-argument-type]
           damping=identity_weight,
       )
 
-      for i in range(len(state.factors)):
-        cache[f"{i}_factor"] = inv_factors[i] / factor_scale
+      for power in approx_powers:
+
+        power = float(power)
+
+        if power not in [-1, -0.5, 0.5]:
+          raise NotImplementedError(
+              f"Approximations for power {power} is not yet implemented."
+          )
+
+        cache = state.cache[str(power)]  # pyrefly: ignore[unsupported-operation]
+
+        if power == -1:
+          factors = utils.invert_psd_matrices(damped_factors)
+        elif power == -0.5:
+          factors = utils.inverse_sqrt_psd_matrices(damped_factors)
+        # TODO(timothycnguyen): Hacky psd square root. Will find a better way.
+        elif power == 0.5:
+          inverse_sqrt_factors = utils.inverse_sqrt_psd_matrices(damped_factors)
+
+          def matmul(x, y):
+            if x.ndim == y.ndim == 2:
+              return jnp.dot(x, y)
+            assert x.ndim == y.ndim == 1
+            return x * y
+
+          factors = [
+              matmul(x, y) for x, y in zip(damped_factors, inverse_sqrt_factors)
+          ]
+        else:
+          raise NotImplementedError()
+
+        power_scale = jnp.power(factor_scale, power)
+
+        for i, factor in enumerate(factors):
+          cache[f"{i}_factor"] = factor * power_scale  # pyrefly: ignore[unsupported-operation]
 
     return state
 
