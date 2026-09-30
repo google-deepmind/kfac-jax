@@ -352,11 +352,12 @@ class Optimizer(utils.WithStagedMethods):
         damping with Levenberg-Marquardt is used). (Default: ``False``)
       reject_damping_increase_factor: The damping parameter is increased by this
         factor if the step is rejected. (Default: ``1.0``)
-      norm_constraint: Scalar. If specified, the update is scaled down so that
-        its approximate squared Fisher norm ``v^T F v`` is at most the specified
-        value. (Note that here ``F`` is the approximate curvature matrix, not
-        the exact.) May only be used when ``use_adaptive_learning_rate`` is
-        ``False``. (Default: ``None``)
+      norm_constraint: Scalar. If specified, the preconditioned gradient is
+        scaled down so that its approximate squared Fisher norm ``v^T F v`` is
+        at most the specified value. This happens before the velocity vector for
+        momentum is accumulated. (Note that here ``F`` is the approximate
+        curvature matrix, not the exact.) May only be used when
+        ``use_adaptive_learning_rate`` is ``False``. (Default: ``None``)
       num_burnin_steps: Int. At the start of optimization, e.g. the first step,
         before performing the actual step the optimizer will perform this many
         times updates to the curvature approximation without updating the actual
