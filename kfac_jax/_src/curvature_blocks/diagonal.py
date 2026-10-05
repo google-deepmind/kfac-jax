@@ -58,14 +58,14 @@ class Diagonal(CurvatureBlock, abc.ABC):
     del rng
 
     return Diagonal.State(
-        cache=None,  # pyrefly: ignore[unexpected-keyword]
-        diagonal_factors=tuple(  # pyrefly: ignore[unexpected-keyword]
+        cache=None,
+        diagonal_factors=tuple(
             utils.WeightedMovingAverage.zeros_array(shape, self.dtype)
             for shape in self.parameters_shapes
         ),
     )
 
-  def sync(  # pyrefly: ignore[bad-override]
+  def sync(
       self,
       state: State,
       pmap_axis_name: str,
@@ -79,7 +79,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
     return state
 
-  def _multiply_matpower_unscaled(  # pyrefly: ignore[bad-override]
+  def _multiply_matpower_unscaled(
       self,
       state: State,
       vector: Sequence[Array],
@@ -93,7 +93,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
     # caller of this function (multiply_matpower) when use_cached=True
     scale = self.state_dependent_scale(state) if use_cached else 1.0
 
-    factors = tuple(scale * f.value + identity_weight  # pyrefly: ignore[unsupported-operation]
+    factors = tuple(scale * f.value + identity_weight
                     for f in state.diagonal_factors)
 
     assert len(factors) == len(vector)
@@ -105,15 +105,15 @@ class Diagonal(CurvatureBlock, abc.ABC):
     else:
       return tuple(jnp.power(f, power) * v for f, v in zip(factors, vector))
 
-  def _eigenvalues_unscaled(  # pyrefly: ignore[bad-override]
+  def _eigenvalues_unscaled(
       self,
       state: State,
       use_cached: bool,
   ) -> Array:
-    return jnp.concatenate([f.value.flatten() for f in state.diagonal_factors],  # pyrefly: ignore[missing-attribute]
+    return jnp.concatenate([f.value.flatten() for f in state.diagonal_factors],
                            axis=0)
 
-  def _update_cache(  # pyrefly: ignore[bad-override]
+  def _update_cache(
       self,
       state: State,
       identity_weight: Numeric,
@@ -124,10 +124,10 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
     return state.copy()
 
-  def _to_dense_unscaled(self, state: State) -> Array:  # pyrefly: ignore[bad-override]
+  def _to_dense_unscaled(self, state: State) -> Array:
 
     # Extract factors in canonical order
-    factors = [state.diagonal_factors[i].value.flatten()  # pyrefly: ignore[missing-attribute]
+    factors = [state.diagonal_factors[i].value.flatten()
                for i in self.parameters_canonical_order]
 
     # Construct diagonal matrix
@@ -141,7 +141,7 @@ class Diagonal(CurvatureBlock, abc.ABC):
 
     return utils.product(
         utils.psd_matrix_norm(f.value.flatten(), norm_type=norm_type)
-        for f in state.diagonal_factors)  # pyrefly: ignore[missing-attribute]
+        for f in state.diagonal_factors)
 
 
 class NaiveDiagonal(Diagonal):

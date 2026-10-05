@@ -369,7 +369,7 @@ class TestEstimator(parameterized.TestCase):
     # KF approximation assumes independence between locations as well.
     kf_estimator = kfac_jax.BlockDiagonalCurvature(
         model_func,
-        layer_tag_to_block_ctor=dict(  # pyrefly: ignore[bad-argument-type]
+        layer_tag_to_block_ctor=dict(
             dense=kfac_jax.DenseTwoKroneckerFactored,
             conv2d=None,  # pyrefly: ignore[bad-assignment]
             scale_and_shift=kfac_jax.ScaleAndShiftFull,
@@ -477,16 +477,16 @@ class TestEstimator(parameterized.TestCase):
         cached_state.blocks_states, block_eigenvalues, scales):
       if isinstance(block_state, kfac_jax.KroneckerFactored.State):
         in_eigs, _ = kfac_jax.utils.safe_psd_eigh(
-            block_state.factors[1].value)  # pyrefly: ignore[bad-argument-type]
+            block_state.factors[1].value)
         out_eigs, _ = kfac_jax.utils.safe_psd_eigh(
-            block_state.factors[0].value)  # pyrefly: ignore[bad-argument-type]
+            block_state.factors[0].value)
         self.assert_trees_all_close(scale * jnp.outer(out_eigs, in_eigs), eigs)
       elif isinstance(block_state, kfac_jax.Diagonal.State):
-        diag_eigs = jnp.concatenate([factor.value.flatten() for factor in  # pyrefly: ignore[missing-attribute]
+        diag_eigs = jnp.concatenate([factor.value.flatten() for factor in
                                      block_state.diagonal_factors])
         self.assert_trees_all_close(diag_eigs, eigs)
       elif isinstance(block_state, kfac_jax.Full.State):
-        matrix_eigs, _ = kfac_jax.utils.safe_psd_eigh(block_state.matrix.value)  # pyrefly: ignore[bad-argument-type]
+        matrix_eigs, _ = kfac_jax.utils.safe_psd_eigh(block_state.matrix.value)
         self.assert_trees_all_close(matrix_eigs, eigs)
       elif isinstance(block_state, kfac_jax.CurvatureBlock.State):
         # ScaledIdentity
@@ -652,7 +652,7 @@ class TestEstimator(parameterized.TestCase):
     # Without fallback, finalize should raise ValueError about no registered
     # losses
     estimator_no_fb = kfac_jax.BlockDiagonalCurvature(
-        model_fn,  # pyrefly: ignore[bad-argument-type]
+        model_fn,
     )
     with self.assertRaisesRegex(
         ValueError, "No registered losses have been found during tracing."
@@ -661,7 +661,7 @@ class TestEstimator(parameterized.TestCase):
 
     # With fallback, init/finalize works
     estimator_fb = kfac_jax.BlockDiagonalCurvature(
-        model_fn,  # pyrefly: ignore[bad-argument-type]
+        model_fn,
         auto_register_kwargs=dict(fallback_to_outputs_if_no_losses=True),
         default_estimation_mode="fisher_empirical_direct",
         layer_tag_to_block_ctor=dict(dense=kfac_jax.NaiveDiagonal),

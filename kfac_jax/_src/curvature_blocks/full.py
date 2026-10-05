@@ -146,12 +146,12 @@ class Full(CurvatureBlock, abc.ABC):
         cache[str(float(power))] = jnp.zeros([self.dim, self.dim], self.dtype)
 
     return Full.State(
-        cache=cache,  # pyrefly: ignore[unexpected-keyword]
-        matrix=utils.WeightedMovingAverage.zeros_array(  # pyrefly: ignore[unexpected-keyword]
-            [self.dim, self.dim], self.dtype),  # pyrefly: ignore[bad-argument-type]
+        cache=cache,
+        matrix=utils.WeightedMovingAverage.zeros_array(
+            [self.dim, self.dim], self.dtype),
     )
 
-  def sync(  # pyrefly: ignore[bad-override]
+  def sync(
       self,
       state: State,
       pmap_axis_name: str,
@@ -164,7 +164,7 @@ class Full(CurvatureBlock, abc.ABC):
 
     return state
 
-  def _multiply_matpower_unscaled(  # pyrefly: ignore[bad-override]
+  def _multiply_matpower_unscaled(
       self,
       state: State,
       vector: Sequence[Array],
@@ -193,7 +193,7 @@ class Full(CurvatureBlock, abc.ABC):
 
     elif not use_cached:
 
-      matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)  # pyrefly: ignore[unsupported-operation]
+      matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)
 
       if power == -1:
         result = utils.psd_solve(matrix, vector)  # pyrefly: ignore[bad-argument-type]
@@ -210,32 +210,32 @@ class Full(CurvatureBlock, abc.ABC):
 
     else:
 
-      if str(power) in state.cache:  # pyrefly: ignore[not-iterable]
-        result = jnp.matmul(state.cache[str(power)], vector)  # pyrefly: ignore[bad-argument-type, unsupported-operation]
+      if str(power) in state.cache:
+        result = jnp.matmul(state.cache[str(power)], vector)  # pyrefly: ignore[bad-argument-type]
 
       else:
-        s = state.cache["eigenvalues"]  # pyrefly: ignore[unsupported-operation]
-        q = state.cache["eigen_vectors"]  # pyrefly: ignore[unsupported-operation]
+        s = state.cache["eigenvalues"]
+        q = state.cache["eigen_vectors"]
 
         result = jnp.matmul(jnp.transpose(q), vector)  # pyrefly: ignore[bad-argument-type]
-        result = jnp.power(s + identity_weight, power) * result  # pyrefly: ignore[unsupported-operation]
-        result = jnp.matmul(q, result)  # pyrefly: ignore[bad-argument-type]
+        result = jnp.power(s + identity_weight, power) * result
+        result = jnp.matmul(q, result)
 
     return self.single_vector_to_parameters_list(result)
 
-  def _eigenvalues_unscaled(  # pyrefly: ignore[bad-override]
+  def _eigenvalues_unscaled(
       self,
       state: State,
       use_cached: bool,
   ) -> Array:
 
     if not use_cached:
-      return utils.safe_psd_eigh(state.matrix.value)[0]  # pyrefly: ignore[bad-argument-type]
+      return utils.safe_psd_eigh(state.matrix.value)[0]
 
     else:
-      return state.cache["eigenvalues"]  # pyrefly: ignore[bad-return, unsupported-operation]
+      return state.cache["eigenvalues"]
 
-  def _update_cache(  # pyrefly: ignore[bad-override]
+  def _update_cache(
       self,
       state: State,
       identity_weight: Numeric,
@@ -254,34 +254,34 @@ class Full(CurvatureBlock, abc.ABC):
 
     if len(exact_powers) > self._eigen_decomposition_threshold:
 
-      s, q = utils.safe_psd_eigh(state.matrix.value)  # pyrefly: ignore[bad-argument-type]
+      s, q = utils.safe_psd_eigh(state.matrix.value)
       state.cache = dict(eigenvalues=scale * s, eigen_vectors=q)
 
     else:
 
       if eigenvalues:
-        state.cache["eigenvalues"] = scale * utils.safe_psd_eigh(  # pyrefly: ignore[unsupported-operation]
-            state.matrix.value)[0]  # pyrefly: ignore[bad-argument-type]
+        state.cache["eigenvalues"] = scale * utils.safe_psd_eigh(
+            state.matrix.value)[0]
 
       for power in exact_powers:
 
         power = float(power)
 
         if power == -1:
-          state.cache[str(power)] = utils.psd_inv(  # pyrefly: ignore[unsupported-operation]
-              state.matrix.value + identity_weight * jnp.eye(self.dim)) / scale  # pyrefly: ignore[unsupported-operation]
+          state.cache[str(power)] = utils.psd_inv(
+              state.matrix.value + identity_weight * jnp.eye(self.dim)) / scale
         else:
-          matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)  # pyrefly: ignore[unsupported-operation]
-          state.cache[str(power)] = (  # pyrefly: ignore[unsupported-operation]
-              (scale ** power) * jnp.linalg.matrix_power(matrix, power))  # pyrefly: ignore[bad-argument-type]
+          matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)
+          state.cache[str(power)] = (
+              (scale ** power) * jnp.linalg.matrix_power(matrix, power))
 
     return state
 
-  def _to_dense_unscaled(self, state: State) -> Array:  # pyrefly: ignore[bad-override]
+  def _to_dense_unscaled(self, state: State) -> Array:
 
     # Permute the matrix according to the parameters canonical order
     return utils.block_permuted(
-        state.matrix.value,  # pyrefly: ignore[bad-argument-type]
+        state.matrix.value,
         block_sizes=[utils.product(shape) for shape in self.parameters_shapes],
         block_order=self.parameters_canonical_order
     )
@@ -292,10 +292,10 @@ class Full(CurvatureBlock, abc.ABC):
       norm_type: str
   ) -> Numeric:
 
-    return utils.psd_matrix_norm(state.matrix.value, norm_type=norm_type)  # pyrefly: ignore[missing-attribute]
+    return utils.psd_matrix_norm(state.matrix.value, norm_type=norm_type)
 
-  def _undamped_diagonal_unscaled(self, state: State) -> tuple[Array, ...]:  # pyrefly: ignore[bad-override]
-    diag_vec = jnp.diag(state.matrix.value)  # pyrefly: ignore[bad-argument-type]
+  def _undamped_diagonal_unscaled(self, state: State) -> tuple[Array, ...]:
+    diag_vec = jnp.diag(state.matrix.value)
     return self.single_vector_to_parameters_list(diag_vec)
 
 

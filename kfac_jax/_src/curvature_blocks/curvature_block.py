@@ -132,7 +132,7 @@ class CurvatureBlock(utils.Finalizable):
 
   @property
   def dtype(self) -> DType:
-    dtypes = set(p.aval.dtype for p in self.parameter_variables)  # pytype: disable=attribute-error
+    dtypes = set(p.aval.dtype for p in self.parameter_variables)  # pyrefly: ignore[missing-attribute]
     if len(dtypes) > 1:
       raise ValueError("Not all parameters are the same dtype.")
     return dtypes.pop()
@@ -536,7 +536,7 @@ class ScaledIdentity(CurvatureBlock):
     del rng, exact_powers_to_cache, approx_powers_to_cache  # Unused
 
     return CurvatureBlock.State(
-        cache=None,  # pyrefly: ignore[unexpected-keyword]
+        cache=None,
     )
 
   def sync(

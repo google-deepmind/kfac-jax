@@ -80,7 +80,7 @@ LayerTagVjp = tuple[
     tuple[LossFunction, ...],
     Callable[
         [tuple[LossFunctionInputs, ...]],
-        tuple[LayerVjpData[Array], ...],  # pytype: disable=invalid-annotation
+        tuple[LayerVjpData[Array], ...],
     ],
 ]
 JaxprOrClosedJaxpr = jex.core.Jaxpr | jex.core.ClosedJaxpr
@@ -386,7 +386,7 @@ class ProcessedJaxpr(utils.Finalizable):
 
     # Verify whether parameter shapes are equivalent
     if any(
-        p_i.aval.shape != p_j.aval.shape  # pytype: disable=attribute-error
+        p_i.aval.shape != p_j.aval.shape  # pyrefly: ignore[missing-attribute]
         for p_i, p_j in zip(self.params_vars_flat, other.params_vars_flat)
     ):
       return False
@@ -572,7 +572,7 @@ def construct_compute_losses_inputs(
       if losses_so_far == len(processed_jaxpr.loss_tags):
         break
 
-    return tuple(tuple(p) for p in losses_p_deps), tuple(losses_inputs)  # pytype: disable=bad-return-type
+    return tuple(tuple(p) for p in losses_p_deps), tuple(losses_inputs)
 
   return forward_compute_losses
 
@@ -860,7 +860,7 @@ def _layer_tag_vjp(
 
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 
-    return tuple(read(layer_tag_invars))  # pyrefly: ignore[bad-return]
+    return tuple(read(layer_tag_invars))
 
   def forward_aux(
       aux: dict[Var, Array],
@@ -912,7 +912,7 @@ def _layer_tag_vjp(
 
       if isinstance(eqn.primitive, tags.LossTag):
 
-        loss: LossFunction = tags.loss_eqn_construct_loss(eqn, *input_values)  # pyrefly: ignore[bad-argument-type]
+        loss: LossFunction = tags.loss_eqn_construct_loss(eqn, *input_values)
 
         losses_p_dependants.append(loss.parameter_dependants)
         losses_inputs_values.append(tuple(input_values))
@@ -923,7 +923,7 @@ def _layer_tag_vjp(
           break
 
       else:
-        write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, input_values))  # pyrefly: ignore[bad-argument-type]
+        write(eqn.outvars, tgm.eval_jaxpr_eqn(eqn, input_values))
 
     assert num_losses_passed == len(processed_jaxpr.loss_tags)
 
@@ -962,8 +962,8 @@ def _layer_tag_vjp(
   ]
 
   def vjp_func(
-      tangents: tuple[LossFunctionInputs, ...],  # pytype: disable=invalid-annotation
-  ) -> tuple[LayerVjpData[Array], ...]:  # pytype: disable=invalid-annotation
+      tangents: tuple[LossFunctionInputs, ...],
+  ) -> tuple[LayerVjpData[Array], ...]:
     """Computes a (reverse-mode) vector-Jacobian product w.r.t. all layer tags.
 
     Args:
@@ -983,7 +983,7 @@ def _layer_tag_vjp(
 
     for tag in processed_jaxpr.layer_tags:
 
-      primals = read_primals(tag.invars)  # pytype: disable=wrong-arg-types
+      primals = read_primals(tag.invars)
       tangents = read_tangents(tag.invars)  # pyrefly: ignore[bad-assignment]
 
       # The input tangents could be potentially wrong, so we don't include them.

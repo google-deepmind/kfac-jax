@@ -25,8 +25,8 @@ try:
   no_effects: Effects = jex.core.no_effects
 except AttributeError:
   # JAX v0.9.2 and older
-  Effects = jax.core.Effects  # pytype: disable=module-attr
-  no_effects = jax.core.no_effects  # pytype: disable=module-attr
+  Effects = jax.core.Effects  # pyrefly: ignore[missing-attribute]
+  no_effects = jax.core.no_effects  # pyrefly: ignore[missing-attribute]
 
 
 # Types for annotation
@@ -209,11 +209,11 @@ def loss_eqn_construct_loss(
   if not isinstance(eqn.primitive, LossTag):
     raise ValueError("Primitive must be a LossTag.")
 
-  meta: LossMetaData[T] = eqn.params.get("meta")  # pytype: disable=invalid-annotation
+  meta: LossMetaData[T] = eqn.params.get("meta")  # pyrefly: ignore[bad-assignment, invalid-type-var]
   assert meta is not None and isinstance(meta, LossMetaData)
   assert len(eqn.invars) == len(meta.argument_names)
   kwargs = dict(zip(meta.argument_names, args))
-  return meta.loss_class(**kwargs)  # pyrefly: ignore[not-callable]
+  return meta.loss_class(**kwargs)
 
 
 def loss_eqn_class_name(eqn: jex.core.JaxprEqn) -> str:
@@ -222,10 +222,10 @@ def loss_eqn_class_name(eqn: jex.core.JaxprEqn) -> str:
   if not isinstance(eqn.primitive, LossTag):
     raise ValueError("Primitive must be a LossTag.")
 
-  meta: LossMetaData[T] = eqn.params.get("meta")  # pytype: disable=invalid-annotation
+  meta: LossMetaData[T] = eqn.params.get("meta")  # pyrefly: ignore[bad-assignment, invalid-type-var]
   assert meta is not None and isinstance(meta, LossMetaData)
 
-  return meta.loss_class.__name__  # pyrefly: ignore[bad-return]
+  return meta.loss_class.__name__
 
 
 def get_and_verify_layer_meta(
@@ -300,7 +300,7 @@ class LayerTag(jex.core.Primitive):
     # single example which is the vmap-ed for a batch.
     jax.interpreters.batching.primitive_batchers[self] = self._batching
 
-  def layer_data(  # pytype: disable=invalid-annotation
+  def layer_data(
       self,
       args: Sequence[T],
       params: dict[str, Any],
@@ -362,7 +362,7 @@ class LayerTag(jex.core.Primitive):
     return self.bind(*batched_args, **params), batched_dims[0]  # pyrefly: ignore[bad-index]
 
 
-def layer_eqn_data(  # pytype: disable=invalid-annotation
+def layer_eqn_data(
     eqn: jex.core.JaxprEqn,
     raise_an_error: bool = True,
 ) -> LayerData[jex.core.Var]:

@@ -97,8 +97,8 @@ def to_tuple_or_repeat(
   Returns:
     A tuple constructed by either replicating or splitting `x`.
   """
-  if isinstance(x, jnp.ndarray) and x.size > 1:  # pytype: disable=attribute-error
-    assert x.shape[-1] == length  # pytype: disable=attribute-error
+  if isinstance(x, jnp.ndarray) and x.size > 1:
+    assert x.shape[-1] == length
     return tuple(x[..., i] for i in range(length))
   elif isinstance(x, (list, tuple)):
     assert len(x) == length
@@ -162,11 +162,11 @@ class State(abc.ABC):
 
   @classmethod
   def field_names(cls) -> tuple[str, ...]:
-    return tuple(field.name for field in dataclasses.fields(cls))  # pytype: disable=wrong-arg-types
+    return tuple(field.name for field in dataclasses.fields(cls))  # pyrefly: ignore[bad-argument-type]
 
   @classmethod
   def field_types(cls) -> dict[str, type[Any]]:
-    return {field.name: field.type for field in dataclasses.fields(cls)}  # pytype: disable=wrong-arg-types
+    return {field.name: field.type for field in dataclasses.fields(cls)}  # pyrefly: ignore[bad-argument-type, bad-return]
 
   @property
   def field_values(self) -> tuple[ArrayTree, ...]:
@@ -213,7 +213,7 @@ def register_state_class(class_type: type[Any]) -> type[Any]:
         f"Class {class_type} is not a subclass of kfac_jax.utils.State."
     )
 
-  class_type = dataclasses.dataclass(class_type)  # pyrefly: ignore[bad-assignment]
+  class_type = dataclasses.dataclass(class_type)
   class_type = jax.tree_util.register_pytree_node_class(class_type)
   class_name = f"{class_type.__module__}.{class_type.__qualname__}"
   STATE_CLASSES_SERIALIZATION_DICT[class_name] = class_type
@@ -242,7 +242,7 @@ def serialize_state_tree(instance: StateTree) -> ArrayTree:
     return {k: serialize_state_tree(v) for k, v in instance.items()}
 
   else:
-    return instance  # pytype: disable=bad-return-type
+    return instance
 
 
 def deserialize_state_tree(representation: ArrayTree) -> StateTree:
@@ -308,7 +308,7 @@ class Finalizable(abc.ABC):
   @property
   def finalized(self) -> bool:
     """Whether the object has already been finalized."""
-    return self._finalized  # pytype: disable=attribute-error
+    return self._finalized
 
   def finalize(self, *args: Any, **kwargs: Any):
     """Finalizes the object, after which no attributes can be set."""

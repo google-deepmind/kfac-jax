@@ -117,7 +117,7 @@ class Optimizer(utils.WithStagedMethods):
     @classmethod
     def from_dict(cls, dict_representation: dict[str, Any]) -> Self:
       dict_representation["estimator_state"] = (
-          BlockDiagonalCurvature.State.from_dict(  # pyrefly: ignore[missing-attribute]
+          BlockDiagonalCurvature.State.from_dict(
               dict_representation["estimator_state"]
           )
       )
@@ -1052,8 +1052,8 @@ class Optimizer(utils.WithStagedMethods):
     # these are just dummy values used to perform the tracing.
 
     return Optimizer.State(
-        velocities=jax.tree_util.tree_map(jnp.zeros_like, params),  # pyrefly: ignore[unexpected-keyword]
-        estimator_state=self._estimator.init(  # pyrefly: ignore[unexpected-keyword]
+        velocities=jax.tree_util.tree_map(jnp.zeros_like, params),
+        estimator_state=self._estimator.init(
             rng=rng,
             func_args=make_func_args(
                 params=params,
@@ -1067,11 +1067,11 @@ class Optimizer(utils.WithStagedMethods):
             approx_powers_to_cache=self._approx_powers_to_cache,
             cache_eigenvalues=False
         ),
-        damping=jnp.array(  # pyrefly: ignore[unexpected-keyword]
+        damping=jnp.array(
             (self._initial_damping if self._initial_damping is not None
              else -1e10), dtype=float),
-        data_seen=jnp.array(0, dtype=int),  # pyrefly: ignore[unexpected-keyword]
-        step_counter=jnp.array(0, dtype=int)  # pyrefly: ignore[unexpected-keyword]
+        data_seen=jnp.array(0, dtype=int),
+        step_counter=jnp.array(0, dtype=int)
     )
 
   def init(
@@ -1113,7 +1113,7 @@ class Optimizer(utils.WithStagedMethods):
 
     return self._init(params, rng, batch, func_state)
 
-  @functools.partial(utils.staged, donate_argnums=[1, 3, 5])  # pytype: disable=wrong-arg-types
+  @functools.partial(utils.staged, donate_argnums=[1, 3, 5])
   def _burnin(
       self,
       params: Params,
@@ -1445,7 +1445,7 @@ class Optimizer(utils.WithStagedMethods):
                        "``batch`` must be provided.")
 
     step_counter_int = self._verify_args_and_get_step_counter(
-        step_counter=state.step_counter,  # pyrefly: ignore[bad-argument-type]
+        step_counter=state.step_counter,
         learning_rate=learning_rate,
         momentum=momentum,
         damping=damping,

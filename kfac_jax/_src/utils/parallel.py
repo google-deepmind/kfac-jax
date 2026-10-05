@@ -25,7 +25,7 @@ try:
   from jax.extend.core import unsafe_get_axis_names_DO_NOT_USE  # pylint: disable=g-import-not-at-top
 except ImportError:
   # JAX v0.9.2 or older
-  from jax.core import unsafe_get_axis_names_DO_NOT_USE  # pylint: disable=g-import-not-at-top  # pytype: disable=import-error
+  from jax.core import unsafe_get_axis_names_DO_NOT_USE  # pylint: disable=g-import-not-at-top  # pyrefly: ignore[missing-module-attribute]
 
 jax_version = (
     jax.__version_info__ if hasattr(jax, "__version_info__")

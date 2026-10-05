@@ -74,8 +74,8 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
       class_name = dict_rep.pop("__class__", cls.__name__)
       assert class_name == cls.__name__
       return cls(
-          factors=tuple(  # pyrefly: ignore[unexpected-keyword]
-              utils.WeightedMovingAverage.from_dict(rep)  # pyrefly: ignore[missing-attribute]
+          factors=tuple(
+              utils.WeightedMovingAverage.from_dict(rep)
               for rep in dict_rep["factor"]
           )
       )
@@ -205,11 +205,11 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
             (d, d), dtype=self.dtype)
 
     return KroneckerFactored.State(
-        cache=cache,  # pyrefly: ignore[unexpected-keyword]
-        factors=tuple(factors),  # pyrefly: ignore[unexpected-keyword]
+        cache=cache,
+        factors=tuple(factors),
     )
 
-  def sync(  # pyrefly: ignore[bad-override]
+  def sync(
       self,
       state: State,
       pmap_axis_name: str,
@@ -223,7 +223,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
     return state
 
-  def _multiply_matpower_unscaled(  # pyrefly: ignore[bad-override]
+  def _multiply_matpower_unscaled(
       self,
       state: State,
       vector: Sequence[Array],
@@ -260,27 +260,27 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
         result = scale * utils.kronecker_product_axis_mul_v(
             utils.pi_adjusted_kronecker_factors(
-                *factors, damping=identity_weight / scale),  # pyrefly: ignore[bad-argument-type]
+                *factors, damping=identity_weight / scale),
             vector)  # pyrefly: ignore[bad-argument-type]
 
     elif exact_power:
 
       if use_cached:
         s = [
-            state.cache[f"{i}_factor_eigenvalues"]  # pyrefly: ignore[unsupported-operation]
+            state.cache[f"{i}_factor_eigenvalues"]
             for i in range(len(state.factors))
         ]
         q = [
-            state.cache[f"{i}_factor_eigen_vectors"]  # pyrefly: ignore[unsupported-operation]
+            state.cache[f"{i}_factor_eigen_vectors"]
             for i in range(len(state.factors))
         ]
 
       else:
         s, q = zip(
-            *[utils.safe_psd_eigh(factor.value) for factor in state.factors]  # pyrefly: ignore[bad-argument-type]
+            *[utils.safe_psd_eigh(factor.value) for factor in state.factors]
         )
 
-      eigenvalues = utils.outer_product(*s) + identity_weight  # pyrefly: ignore[bad-argument-type]
+      eigenvalues = utils.outer_product(*s) + identity_weight
       eigenvalues = jnp.power(eigenvalues, power)
 
       result = utils.kronecker_eigen_basis_axis_mul_v(q, eigenvalues, vector)  # pyrefly: ignore[bad-argument-type]
@@ -294,7 +294,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
       if use_cached:
         factors = [
-            state.cache[str(power)][f"{i}_factor"]  # pyrefly: ignore[unsupported-operation]
+            state.cache[str(power)][f"{i}_factor"]
             for i in range(len(state.factors))
         ]
 
@@ -302,7 +302,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
         factors = [factor.value for factor in state.factors]
 
         factors = utils.pi_adjusted_kronecker_factors(
-            *factors, damping=identity_weight)  # pyrefly: ignore[bad-argument-type]
+            *factors, damping=identity_weight)
 
         if power == -1:
           factors = utils.invert_psd_matrices(factors)
@@ -328,7 +328,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
     return self.array_to_parameters_shaped_list(result)
 
-  def _eigenvalues_unscaled(  # pyrefly: ignore[bad-override]
+  def _eigenvalues_unscaled(
       self,
       state: State,
       use_cached: bool,
@@ -338,16 +338,16 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
     if use_cached:
       s = [
-          state.cache[f"{i}_factor_eigenvalues"]  # pyrefly: ignore[unsupported-operation]
+          state.cache[f"{i}_factor_eigenvalues"]
           for i in range(len(state.factors))
       ]
     else:
-      s_q = [utils.safe_psd_eigh(factor.value) for factor in state.factors]  # pyrefly: ignore[bad-argument-type]
+      s_q = [utils.safe_psd_eigh(factor.value) for factor in state.factors]
       s, _ = zip(*s_q)
 
-    return utils.outer_product(*s)  # pyrefly: ignore[bad-argument-type]
+    return utils.outer_product(*s)
 
-  def _update_cache(  # pyrefly: ignore[bad-override]
+  def _update_cache(
       self,
       state: State,
       identity_weight: Numeric,
@@ -366,20 +366,20 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
     if eigenvalues or exact_powers:
 
-      s_q = [utils.safe_psd_eigh(factor.value) for factor in state.factors]  # pyrefly: ignore[bad-argument-type]
+      s_q = [utils.safe_psd_eigh(factor.value) for factor in state.factors]
 
       s, q = zip(*s_q)
 
       for i in range(len(state.factors)):
-        state.cache[f"{i}_factor_eigenvalues"] = factor_scale * s[i]  # pyrefly: ignore[unsupported-operation]
+        state.cache[f"{i}_factor_eigenvalues"] = factor_scale * s[i]
 
         if exact_powers:
-          state.cache[f"{i}_factor_eigen_vectors"] = q[i]  # pyrefly: ignore[unsupported-operation]
+          state.cache[f"{i}_factor_eigen_vectors"] = q[i]
 
     if approx_powers:
 
       damped_factors = utils.pi_adjusted_kronecker_factors(
-          *[factor.value for factor in state.factors],  # pyrefly: ignore[bad-argument-type]
+          *[factor.value for factor in state.factors],
           damping=identity_weight,
       )
 
@@ -392,7 +392,7 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
               f"Approximations for power {power} is not yet implemented."
           )
 
-        cache = state.cache[str(power)]  # pyrefly: ignore[unsupported-operation]
+        cache = state.cache[str(power)]
 
         if power == -1:
           factors = utils.invert_psd_matrices(damped_factors)
@@ -429,9 +429,9 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
     return utils.product(
         utils.psd_matrix_norm(f.value, norm_type=norm_type)
-        for f in state.factors)  # pyrefly: ignore[missing-attribute]
+        for f in state.factors)
 
-  def _to_dense_unscaled(self, state: "KroneckerFactored.State") -> Array:  # pyrefly: ignore[bad-override]
+  def _to_dense_unscaled(self, state: "KroneckerFactored.State") -> Array:
 
     # We currently support this only for 2 parameters
     assert 0 < self.number_of_parameters <= 2
@@ -442,12 +442,12 @@ class KroneckerFactored(CurvatureBlock, abc.ABC):
 
       # Permute the matrix according to the parameters canonical order
       inputs_factor = utils.block_permuted(
-          state.factors[0].value,  # pyrefly: ignore[bad-argument-type]
+          state.factors[0].value,
           block_sizes=[state.factors[0].shape[0] - 1, 1],
           block_order=(1, 0),
       )
 
-    return jnp.kron(inputs_factor, state.factors[1].value)  # pyrefly: ignore[bad-argument-type]
+    return jnp.kron(inputs_factor, state.factors[1].value)
 
 
 class DenseTwoKroneckerFactored(KroneckerFactored):
@@ -532,15 +532,15 @@ class RepeatedDenseKroneckerFactored(DenseTwoKroneckerFactored):
     )
 
     return RepeatedDenseKroneckerFactored.State(
-        average_repeats=utils.WeightedMovingAverage.zeros_array((), self.dtype),  # pyrefly: ignore[unexpected-keyword]
+        average_repeats=utils.WeightedMovingAverage.zeros_array((), self.dtype),
         **super_state.__dict__,
     )
 
-  def state_dependent_scale(  # pyrefly: ignore[bad-override]
+  def state_dependent_scale(
       self,
       state: "RepeatedDenseKroneckerFactored.State",
   ) -> Numeric:
-    return 1.0 / state.average_repeats.value  # pyrefly: ignore[unsupported-operation]
+    return 1.0 / state.average_repeats.value
 
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
@@ -589,7 +589,7 @@ class RepeatedDenseKroneckerFactored(DenseTwoKroneckerFactored):
 
     state.factors[0].update(input_stats, ema_old, ema_new)
     state.factors[1].update(output_stats, ema_old, ema_new)
-    state.average_repeats.update(total / batch_size, ema_old, ema_new)  # pyrefly: ignore[missing-attribute]
+    state.average_repeats.update(total / batch_size, ema_old, ema_new)
 
     return state
 
@@ -655,13 +655,13 @@ class Conv2DTwoKroneckerFactored(KroneckerFactored):
   @property
   def num_inputs_channels(self) -> int:
     """The number of channels in the inputs to the layer."""
-    return self._layer_tag_eq.invars[0].aval.shape[  # pytype: disable=attribute-error
+    return self._layer_tag_eq.invars[0].aval.shape[  # pyrefly: ignore[missing-attribute]
         self.inputs_channel_index]
 
   @property
   def num_outputs_channels(self) -> int:
     """The number of channels in the outputs to the layer."""
-    return self._layer_tag_eq.invars[1].aval.shape[  # pytype: disable=attribute-error
+    return self._layer_tag_eq.invars[1].aval.shape[  # pyrefly: ignore[missing-attribute]
         self.weights_output_channel_index]
 
   def compute_inputs_stats(

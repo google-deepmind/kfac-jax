@@ -630,7 +630,7 @@ class ImplicitExactCurvature:
       A tuple over losses of tuples containing the shapes of their different
       inputs, and the batch size.
     """
-    losses, _ = self._loss_tags_vjp(func_args)  # pytype: disable=attribute-error  # always-use-return-annotations
+    losses, _ = self._loss_tags_vjp(func_args)
     batch_size = self.batch_size(func_args)
 
     return (tuple(tuple(x.shape for x in loss.parameter_dependants)

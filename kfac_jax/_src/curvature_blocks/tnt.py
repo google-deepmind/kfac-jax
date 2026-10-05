@@ -50,11 +50,11 @@ class NaiveTNT(KroneckerFactored):
   unbiased estimator.
   """
 
-  def state_dependent_scale(  # pyrefly: ignore[bad-override]
+  def state_dependent_scale(
       self,
       state: "NaiveTNT.State",
   ) -> Numeric:
-    return utils.tnt_scale([factor.value for factor in state.factors])  # pyrefly: ignore[bad-argument-type]
+    return utils.tnt_scale([factor.value for factor in state.factors])
 
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
@@ -107,8 +107,8 @@ class DenseTNT(kronecker_factored.DenseTwoKroneckerFactored):
   The estimator is unbiased, and will have lower variance then the naive one.
   """
 
-  def state_dependent_scale(self, state: "DenseTNT.State") -> Numeric:  # pyrefly: ignore[bad-override]
-    return utils.tnt_scale([factor.value for factor in state.factors])  # pyrefly: ignore[bad-argument-type]
+  def state_dependent_scale(self, state: "DenseTNT.State") -> Numeric:
+    return utils.tnt_scale([factor.value for factor in state.factors])
 
   @utils.auto_scope_method
   def update_curvature_matrix_estimate(
@@ -186,10 +186,10 @@ class Conv2DTNT(kronecker_factored.Conv2DTwoKroneckerFactored):
         **kwargs,
     )
 
-  def state_dependent_scale(  # pyrefly: ignore[bad-override]
+  def state_dependent_scale(
       self, state: "Conv2DTNT.State"
   ) -> Numeric:
-    return utils.tnt_scale([factor.value for factor in state.factors])  # pyrefly: ignore[bad-argument-type]
+    return utils.tnt_scale([factor.value for factor in state.factors])
 
   def x_squared_spatial_norms(self, x: Array) -> Array:
 

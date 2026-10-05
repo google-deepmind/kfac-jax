@@ -41,12 +41,12 @@ if jax_version >= (0, 10, 0):
   new_jaxpr_eqn = jex.core.new_jaxpr_eqn
 else:
   if jax_version >= (0, 5, 1):
-    DebugInfo = jax.core.DebugInfo  # pytype: disable=module-attr
+    DebugInfo = jax.core.DebugInfo  # pyrefly: ignore[missing-attribute]
   else:
-    DebugInfo = jax.core.JaxprDebugInfo  #  pytype: disable=module-attr
-  DropVar = jax.core.DropVar  # pytype: disable=module-attr
-  gensym = jax.core.gensym  # pytype: disable=module-attr
-  new_jaxpr_eqn = jax.core.new_jaxpr_eqn  # pytype: disable=module-attr
+    DebugInfo = jax.core.JaxprDebugInfo  # pyrefly: ignore[missing-attribute]
+  DropVar = jax.core.DropVar  # pyrefly: ignore[missing-attribute]
+  gensym = jax.core.gensym  # pyrefly: ignore[missing-attribute]
+  new_jaxpr_eqn = jax.core.new_jaxpr_eqn  # pyrefly: ignore[missing-attribute]
 
 
 HIGHER_ORDER_NAMES = ("cond", "while", "scan", "pjit", "xla_call", "xla_pmap")
@@ -130,7 +130,6 @@ def conv_general_dilated_equivalent(
             "lhs_dilation", "rhs_dilation"):
     if len(params1[k]) != len(params2[k]):
       return False
-  # pytype: disable=attribute-error
   if (len(params1["dimension_numbers"].lhs_spec) !=
       len(params2["dimension_numbers"].lhs_spec)):
     return False
@@ -146,7 +145,6 @@ def conv_general_dilated_equivalent(
   if ((params1["batch_group_count"] > 1) !=
       (params2["batch_group_count"] > 1)):
     return False
-  # pytype: enable=attribute-error
   return True
 
 
@@ -281,7 +279,7 @@ class JaxprGraph:
 
   @property
   def outvars(self) -> Vars:
-    return self.jaxpr.outvars  # pytype:disable=bad-return-type
+    return self.jaxpr.outvars  # pyrefly: ignore[bad-return]
 
   def sub_graph_eqns(
       self,
@@ -449,7 +447,7 @@ def make_jax_graph(
     closed_jaxpr = merge_broadcasts_jaxpr(closed_jaxpr)
     closed_jaxpr = clean_jaxpr(closed_jaxpr)
 
-  in_vars = jax.tree_util.tree_unflatten(in_tree, closed_jaxpr.jaxpr.invars)  # pytype:disable=attribute-error
+  in_vars = jax.tree_util.tree_unflatten(in_tree, closed_jaxpr.jaxpr.invars)
 
   if isinstance(params_index, int):
     params_vars = in_vars[params_index]

@@ -107,7 +107,7 @@ class _ConvSpec:
     """Creates a shape according to this layout specification."""
     if len(spatial_dims) != len(self.order) - 2:
       raise ValueError("Incorrect number of spatial dimensions.")
-    result: list[T] = [None] * len(self)  # pytype: disable=annotation-type-mismatch
+    result: list[T] = [None] * len(self)  # pyrefly: ignore[bad-assignment]
     result[self.n_axis] = n
     result[self.c_axis] = c
     for ax, dim in zip(self.spatial_axes, spatial_dims):
@@ -628,7 +628,7 @@ def patches_moments_explicit(
       else:
         wf_n = weighting_array[in_spec.n_axis]
         wf_spatial = [weighting_array.shape[a] for a in in_spec.spatial_axes]
-        wf_sizes = in_spec.create_shape(wf_n, jnp.ones([]), *wf_spatial)  # pytype: disable=wrong-arg-types  # jnp-type
+        wf_sizes = in_spec.create_shape(wf_n, jnp.ones([]), *wf_spatial)
         wf_i = _slice_array(weighting_array, index, wf_sizes)  # pyrefly: ignore[bad-argument-type]
     else:
       wf_i = None
@@ -673,7 +673,7 @@ def patches_moments_explicit(
                jnp.zeros(matrix_target_shape, dtype=inputs.dtype),
                jnp.zeros(vector_target_shape, dtype=inputs.dtype))
 
-  return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]  # pytype: disable=bad-return-type  # lax-types
+  return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]
 
 
 @functools.partial(jax.jit, static_argnums=list(range(1, 12)),
@@ -913,4 +913,4 @@ def patches_moments(
     vector_init = jnp.zeros(vector_shape, dtype=inputs.dtype)
     init_vals = (0, padded_image, matrix_init, vector_init)
 
-    return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]  # pytype: disable=bad-return-type  # lax-types
+    return lax.while_loop(loop_cond, loop_body, init_vals)[-2:]

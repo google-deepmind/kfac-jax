@@ -134,7 +134,7 @@ class LossFunction(utils.Finalizable):
       aux: dict[str, Any] | None,
       children: tuple[Numeric | None, ...],
   ) -> Self:
-    return cls(*children, **(aux or {}))  # pytype: disable=not-instantiable
+    return cls(*children, **(aux or {}))  # pyrefly: ignore[bad-argument-type]
 
   def evaluate(
       self,
@@ -603,10 +603,10 @@ class DistributionNegativeLogProbLoss(NegativeLogProbLoss):
 
   def _evaluate(self, targets: Array) -> Array:
     # keeps leading dims intact
-    return -self.dist.log_prob(targets)  # pytype: disable=bad-return-type
+    return -self.dist.log_prob(targets)  # pyrefly: ignore[bad-return, unsupported-operation]
 
   def sample(self, rng: PRNGKey) -> Array:
-    return self.dist.sample(seed=rng)  # pytype: disable=bad-return-type
+    return self.dist.sample(seed=rng)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -960,7 +960,7 @@ class MultiBernoulliNegativeLogProbLoss(DistributionNegativeLogProbLoss,
     if self.mask is not None:
       return self.dist.probs * self.mask  # pyrefly: ignore[bad-return]
     else:
-      return self.dist.probs  # pytype: disable=bad-return-type
+      return self.dist.probs  # pyrefly: ignore[bad-return]
 
   @property
   def params(self) -> tuple[Array]:

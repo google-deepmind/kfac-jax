@@ -453,8 +453,8 @@ class BlockDiagonalCurvature(
       blocks_init.append(block_init)
 
     return BlockDiagonalCurvature.State(
-        synced=jnp.asarray(True),  # pyrefly: ignore[unexpected-keyword]
-        blocks_states=tuple(blocks_init),  # pyrefly: ignore[unexpected-keyword]
+        synced=jnp.asarray(True),
+        blocks_states=tuple(blocks_init),
     )
 
   def _sync_state(
@@ -469,8 +469,8 @@ class BlockDiagonalCurvature(
       block_states.append(block.sync(block_state.copy(), pmap_axis_name))  # pyrefly: ignore[bad-argument-type]
 
     return BlockDiagonalCurvature.State(
-        synced=jnp.asarray(True),  # pyrefly: ignore[unexpected-keyword]
-        blocks_states=tuple(block_states),  # pyrefly: ignore[unexpected-keyword]
+        synced=jnp.asarray(True),
+        blocks_states=tuple(block_states),
     )
 
   @utils.auto_scope_method
@@ -644,8 +644,8 @@ class BlockDiagonalCurvature(
       )
 
     return BlockDiagonalCurvature.State(
-        synced=jnp.asarray(False),  # pyrefly: ignore[unexpected-keyword]
-        blocks_states=tuple(new_state),  # pyrefly: ignore[unexpected-keyword]
+        synced=jnp.asarray(False),
+        blocks_states=tuple(new_state),
     )
 
   def _maybe_do_multiple_updates(self, update_func, state, rng, ema_old):
@@ -997,8 +997,8 @@ class BlockDiagonalCurvature(
       new_states = tuple(thunk() for thunk in thunks)
 
     return BlockDiagonalCurvature.State(
-        synced=state.synced,  # pyrefly: ignore[unexpected-keyword]
-        blocks_states=new_states,  # pyrefly: ignore[unexpected-keyword]
+        synced=state.synced,
+        blocks_states=new_states,
     )
 
   def undamped_diagonal(self, state: State) -> utils.Params:

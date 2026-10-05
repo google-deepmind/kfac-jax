@@ -52,17 +52,17 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):  # pyrefly: ignore
   @property
   def ndim(self) -> int:
     assert self.value is not None
-    return self.value.ndim  # pytype: disable=attribute-error
+    return self.value.ndim
 
   @property
   def shape(self) -> Shape:
     assert self.value is not None
-    return self.value.shape  # pytype: disable=attribute-error
+    return self.value.shape
 
   @property
   def dtype(self) -> DType:
     assert self.value is not None
-    return self.value.dtype  # pytype: disable=attribute-error
+    return self.value.dtype
 
   def update(
       self,
@@ -116,7 +116,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):  # pyrefly: ignore
   ) -> "WeightedMovingAverage[Array]":  # pyrefly: ignore[unsupported-operation]
     """Initializes a `WeightedMovingAverage` with a single array of zeros."""
 
-    return cls(  # pytype: disable=wrong-keyword-args
+    return cls(
         weight=jnp.zeros([], dtype=dtype),  # pyrefly: ignore[unexpected-keyword]
         value=jnp.zeros(shape, dtype=dtype),  # pyrefly: ignore[unexpected-keyword]
     )
@@ -125,7 +125,7 @@ class WeightedMovingAverage(Generic[TArrayTree], misc.State):  # pyrefly: ignore
   def zeros_like(cls, value: TArrayTree) -> "WeightedMovingAverage[TArrayTree]":  # pyrefly: ignore[unsupported-operation]
     """Initializes a `WeightedMovingAverage` with zeros structure like `value`."""
 
-    return cls(  # pytype: disable=wrong-keyword-args
+    return cls(
         weight=jnp.array(  # pyrefly: ignore[unexpected-keyword]
             0.0, dtype=types.get_float_dtype_and_check_consistency(value)
         ),
@@ -180,7 +180,7 @@ class MultiChunkAccumulator(Generic[TArrayTree]):  # pyrefly: ignore[invalid-typ
     if self._multi_device:
       return parallel.pmap_sync_and_divide_value(self.accumulator, self.weight)
     else:
-      return parallel.jit_sync_and_divide_value(self.accumulator, self.weight)  # pyrefly: ignore[bad-argument-type]
+      return parallel.jit_sync_and_divide_value(self.accumulator, self.weight)
 
   def clear(self) -> None:
     """Sets the underlying accumulator and weight to `None`."""
@@ -221,7 +221,7 @@ class MultiChunkAccumulator(Generic[TArrayTree]):  # pyrefly: ignore[invalid-typ
         raise ValueError("`weight` should be an instance of float, int or "
                          "jax.Array.")
 
-      elif self._weight.shape != weight.shape:  # pytype: disable=attribute-error  # numpy-scalars
+      elif self._weight.shape != weight.shape:  # pyrefly: ignore[missing-attribute]
         raise ValueError("If `weight` is an `jnp.ndarray` then should have the "
                          "same shape as the weight of the accumulator.")
       else:

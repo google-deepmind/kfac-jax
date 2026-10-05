@@ -367,7 +367,7 @@ class SupervisedExperiment(abc.ABC):
     if self._init_batch is None:
 
       if self.mode == "train":
-        self._init_batch = self.train_input.peek()  # pytype: disable=attribute-error
+        self._init_batch = self.train_input.peek()  # pyrefly: ignore[missing-attribute]
       else:
         self._init_batch = next(self.eval_input["train"]())
 
@@ -600,9 +600,9 @@ class SupervisedExperiment(abc.ABC):
         assert self._params_polyak is not None
 
         if isinstance(self.train_inputs, tuple):
-          batch = self.train_inputs[0].peek()  # pytype: disable=attribute-error
+          batch = self.train_inputs[0].peek()  # pyrefly: ignore[missing-attribute]
         else:
-          batch = self.train_inputs.peek()  # pytype: disable=attribute-error
+          batch = self.train_inputs.peek()  # pyrefly: ignore[missing-attribute]
 
         loss_polyak, _, aux_polyak = self.train_batch_pmap(
             params=self._get_value_pmap(self._params_polyak),
@@ -838,7 +838,7 @@ class SupervisedExperiment(abc.ABC):
       # Note that MultiChunkAccumulator.value will perform a pmean
       # automatically, so it's fine to call "get_first" here instead of taking
       # the mean.
-      for k, v in averaged_stats.value.items():  # pytype: disable=attribute-error
+      for k, v in averaged_stats.value.items():  # pyrefly: ignore[missing-attribute]
         all_stats[f"{name}_{k}"] = kfac_jax.utils.get_first(v)
 
       logging.info(
@@ -849,7 +849,7 @@ class SupervisedExperiment(abc.ABC):
 
     all_stats["progress"] = self.progress(self._python_step)
 
-    return all_stats  # pytype: disable=bad-return-type
+    return all_stats
 
 
 class JaxlineExperiment(SupervisedExperiment, experiment.AbstractExperiment):
@@ -875,7 +875,7 @@ class JaxlineExperiment(SupervisedExperiment, experiment.AbstractExperiment):
   ) -> bool:
     return not self.terminate_training(global_step, config)
 
-  def step(  # pytype: disable=signature-mismatch
+  def step(  # pyrefly: ignore[bad-override]
       self,
       global_step: Array,
       rng: PRNGKey,
@@ -884,7 +884,7 @@ class JaxlineExperiment(SupervisedExperiment, experiment.AbstractExperiment):
     self.maybe_initialize_state()
     return self.train_step(global_step, rng)
 
-  def evaluate(  # pytype: disable=signature-mismatch
+  def evaluate(  # pyrefly: ignore[bad-override]
       self,
       global_step: Array,
       rng: PRNGKey,

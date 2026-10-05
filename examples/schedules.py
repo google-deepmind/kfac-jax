@@ -430,7 +430,7 @@ def with_warmup(
       transition_steps=warmup_duration,  # pyrefly: ignore[bad-argument-type]
   )
 
-  return optax.join_schedules([warmup_sched, base_schedule_fn],  # pytype: disable=bad-return-type
+  return optax.join_schedules([warmup_sched, base_schedule_fn],  # pyrefly: ignore[bad-argument-type, bad-return]
                               [warmup_duration])  # pyrefly: ignore[bad-argument-type]
 
 

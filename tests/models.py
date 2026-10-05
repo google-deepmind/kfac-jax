@@ -77,7 +77,7 @@ class _Linear(hk.Linear):
     self._explicit_tagging = explicit_tagging
     super().__init__(*args, **kwargs)
 
-  def __call__(self, inputs: LayerInputs, *_) -> LayerInputs:  # pytype: disable=signature-mismatch  # overriding-parameter-name-checks
+  def __call__(self, inputs: LayerInputs, *_) -> LayerInputs:
 
     x, layer_values, aux = inputs
 
@@ -173,7 +173,7 @@ class _LayerNorm(hk.LayerNorm):
     self._explicit_tagging = explicit_tagging
     super().__init__(*args, create_scale=True, create_offset=True, **kwargs)
 
-  def __call__(self, inputs: LayerInputs, *_) -> LayerInputs:  # pytype: disable=signature-mismatch  # jax-ndarray
+  def __call__(self, inputs: LayerInputs, *_) -> LayerInputs:
     x, layer_values, aux = inputs
 
     mean = jnp.mean(x, axis=self.axis, keepdims=True)  # pyrefly: ignore[bad-argument-type]
@@ -218,7 +218,7 @@ class _VanillaRNN(hk.VanillaRNN):
     self.activation = activation
     self.explicit_tagging = explicit_tagging
 
-  def __call__(  # pytype: disable=signature-mismatch  # jax-nn-types
+  def __call__(
       self,
       inputs: LayerInputs,
       prev_state: Array,
