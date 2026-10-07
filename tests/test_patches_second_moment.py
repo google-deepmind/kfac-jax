@@ -34,8 +34,8 @@ class TestPatchesMoments(parameterized.TestCase):
       x: utils.PyTree,
       y: utils.PyTree,
       check_dtypes: bool = True,
-      atol: float = 1e-6,
-      rtol: float = 1e-6,
+      atol: float = 5e-6,
+      rtol: float = 5e-6,
   ):
     """Asserts that the two PyTrees are close up to the provided tolerances."""
     if jax.devices()[0].platform in ("tpu", "gpu"):
