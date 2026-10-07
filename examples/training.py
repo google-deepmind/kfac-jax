@@ -721,7 +721,7 @@ class SupervisedExperiment(abc.ABC):
     if opt_state is not None and hasattr(opt_state, "data_seen"):
       stats["data_seen"] = opt_state.data_seen
 
-    return stats
+    return stats  # pyrefly: ignore[bad-return]
 
   def _refresh_func_state(
       self,
