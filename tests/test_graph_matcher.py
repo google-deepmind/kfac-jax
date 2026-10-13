@@ -262,6 +262,37 @@ class TestGraphMatcher(parameterized.TestCase):
     # Both layers (w1 and w2) should be tagged as dense
     self.assertLen(dense_tags_fb, 2)
 
+  def test_closed_over_constant_input(self):
+    """Tests auto-registration when the layer input is a closed-over constant."""
+    rng = jax.random.PRNGKey(42)
+    x_const = jax.random.normal(rng, (5, 4))
+    params = {
+        "w1": jax.random.normal(rng, (4, 8)),
+        "b1": jnp.zeros((8,)),
+        "w2": jax.random.normal(rng, (8, 2)),
+        "b2": jnp.zeros((2,)),
+    }
+
+    def model_fn(p):
+      h = jnp.tanh(x_const @ p["w1"] + p["b1"])
+      y = h @ p["w2"] + p["b2"]
+      kfac_jax.register_squared_error_loss(y)
+      return jnp.sum(y ** 2)
+
+    tagged_fn = kfac_jax.tag_graph_matcher.auto_register_tags(
+        model_fn, (params,)
+    )
+    tagged_jaxpr = jax.make_jaxpr(tagged_fn)(params).jaxpr
+    dense_tags = [
+        eqn for eqn in tagged_jaxpr.eqns
+        if isinstance(eqn.primitive, kfac_jax.LayerTag)
+        and eqn.params.get("meta")
+        and eqn.params["meta"].variant == "dense"
+    ]
+    self.assertLen(dense_tags, 2)
+    for eqn in dense_tags:
+      self.assertEqual(eqn.params["meta"].params_index, (2, 3))
+
 
 if __name__ == "__main__":
   absltest.main()
