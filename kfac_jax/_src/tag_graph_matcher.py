@@ -380,7 +380,9 @@ def make_jax_graph(
 
     if not has_loss_tags and fallback_to_outputs_if_no_losses:
       final_outvars = [closed_jaxpr.jaxpr.outvars[0]]
-      sub_graph_vars = set(final_outvars)
+      sub_graph_vars = {
+          v for v in final_outvars if not isinstance(v, jex.core.Literal)
+      }
     else:
       sub_graph_vars = set()
       final_outvars = None
@@ -1249,11 +1251,14 @@ def merge_broadcasts_jaxpr(jaxpr: J) -> J:
 
 
 def num_unique_inputs(eqns: Sequence[JaxprEqn]) -> int:
+  """Returns the number of unique inputs to the given sequence of equations."""
   n = 0
   vars_so_far = set()
   for eqn in eqns:
     for v in eqn.invars:
-      if v not in vars_so_far:
+      if isinstance(v, jex.core.Literal):
+        n += 1
+      elif v not in vars_so_far:
         vars_so_far.add(v)
         n += 1
     for v in eqn.outvars:
@@ -1861,7 +1866,11 @@ def _auto_register_tags(
   # are found.
   if register_only_until_losses:
 
-    sub_graph_vars = set(graph.outvars[:1]) if not graph.losses_eqns else set()
+    sub_graph_vars = (
+        {v for v in graph.outvars[:1] if not isinstance(v, jex.core.Literal)}
+        if not graph.losses_eqns
+        else set()
+    )
 
     eqns_for_registration = []
     for eqn in reversed(graph.jaxpr.eqns):
