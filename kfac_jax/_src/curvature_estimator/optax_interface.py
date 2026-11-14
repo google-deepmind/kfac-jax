@@ -27,6 +27,7 @@ import optax
 
 Array = utils.Array
 Numeric = utils.Numeric
+Scalar = utils.Scalar
 PRNGKey = utils.PRNGKey
 Params = utils.Params
 Batch = utils.Batch
@@ -214,15 +215,15 @@ class OptaxPreconditioner:
     )
 
   @property
-  def _exact_powers_to_cache(self) -> int | None:
+  def _exact_powers_to_cache(self) -> Scalar | None:
     if self._use_exact_inverses and self._use_cached_inverses:
-      return -1
+      return -0.5 if self._use_sqrt_inv else -1
     return None
 
   @property
-  def _approx_powers_to_cache(self) -> int | None:
+  def _approx_powers_to_cache(self) -> Scalar | None:
     if not self._use_exact_inverses and self._use_cached_inverses:
-      return -1
+      return -0.5 if self._use_sqrt_inv else -1
     return None
 
   @property
@@ -320,6 +321,7 @@ class OptaxPreconditioner:
       rng: PRNGKey,
       ema_old: Numeric,
       ema_new: Numeric,
+      identity_weight: Numeric,
       sync: Array | bool = True
   ) -> EstimatorState:
     """Updates the curvature estimator state."""
@@ -330,7 +332,7 @@ class OptaxPreconditioner:
         ema_new=ema_new,
         # Note that the batch is always the last entry of FuncArgsVariantsdef
         batch_size=self._batch_size_extractor(func_args[-1]),
-        identity_weight=self.get_identity_weight(estimator_state),
+        identity_weight=identity_weight,
         rng=rng,
         func_args=func_args,
         pmap_axis_name=self.pmap_axis_name,
@@ -364,6 +366,7 @@ class OptaxPreconditioner:
         rng=rng,
         ema_old=ema_old,
         ema_new=1.0,
+        identity_weight=self.get_identity_weight(state),
         sync=sync,
     )
 

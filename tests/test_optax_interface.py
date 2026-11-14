@@ -151,6 +151,202 @@ class TestOptaxPreconditioner(parameterized.TestCase):
       d = d + block.shape[0]
     self.assertEqual(d, full_matrix.shape[0])
 
+  def test_damping_schedule(self):
+    """Tests OptaxPreconditioner with a step-dependent damping_schedule."""
+    layer_widths = [4, 4]
+    init_func = models.autoencoder(layer_widths, output_dim=3).init
+    model_func = functools.partial(
+        models.autoencoder_deterministic_loss, layer_widths=layer_widths
+    )
+    init_key, data_key, estimator_key = jax.random.split(
+        jax.random.PRNGKey(0), 3
+    )
+    data = {"images": jax.random.uniform(data_key, (4, 3))}
+    params = init_func(init_key, data)
+    func_args = (params, data)
+    grads = jax.grad(model_func)(params, data)
+
+    schedule = lambda count: 0.1 * (count + 1)
+    sched_precon = kfac_jax.OptaxPreconditioner(
+        model_func,
+        damping_schedule=schedule,
+        l2_reg=1e-3,
+        curvature_ema=0.0,
+        inverse_update_period=2,
+        estimation_mode="fisher_exact",
+        distributed_inverses=False,
+        distributed_precon_apply=False,
+    )
+    state = sched_precon.init(func_args, estimator_key)
+    state = sched_precon.maybe_update(state, func_args, estimator_key)
+
+    fixed_step0 = kfac_jax.OptaxPreconditioner(
+        model_func,
+        damping=0.1,
+        l2_reg=1e-3,
+        curvature_ema=0.0,
+        inverse_update_period=2,
+        estimation_mode="fisher_exact",
+        distributed_inverses=False,
+        distributed_precon_apply=False,
+    )
+    fixed_state0 = fixed_step0.init(func_args, estimator_key)
+    fixed_state0 = fixed_step0.maybe_update(
+        fixed_state0, func_args, estimator_key
+    )
+    self.assert_trees_all_close(
+        sched_precon.apply(grads, state),
+        fixed_step0.apply(grads, fixed_state0),
+    )
+
+    # Advance two steps so count == 2 and the inverse cache updates at step 2.
+    state = sched_precon.increment_count(sched_precon.increment_count(state))
+    state = sched_precon.maybe_update(state, func_args, estimator_key)
+
+    fixed_step2 = kfac_jax.OptaxPreconditioner(
+        model_func,
+        damping=0.3,
+        l2_reg=1e-3,
+        curvature_ema=0.0,
+        inverse_update_period=2,
+        estimation_mode="fisher_exact",
+        distributed_inverses=False,
+        distributed_precon_apply=False,
+    )
+    fixed_state2 = fixed_step2.init(func_args, estimator_key)
+    fixed_state2 = fixed_step2.maybe_update(
+        fixed_state2, func_args, estimator_key
+    )
+    self.assert_trees_all_close(
+        sched_precon.apply(grads, state),
+        fixed_step2.apply(grads, fixed_state2),
+    )
+
+  def test_use_sqrt_inv(self):
+    """Tests OptaxPreconditioner with use_sqrt_inv=True."""
+    layer_widths = [4, 4]
+    init_func = models.autoencoder(layer_widths, output_dim=3).init
+    model_func = functools.partial(
+        models.autoencoder_deterministic_loss, layer_widths=layer_widths
+    )
+    init_key, data_key, estimator_key = jax.random.split(
+        jax.random.PRNGKey(1), 3
+    )
+    data = {"images": jax.random.uniform(data_key, (4, 3))}
+    params = init_func(init_key, data)
+    func_args = (params, data)
+    grads = jax.grad(model_func)(params, data)
+
+    # Verify default approximate Kronecker cache initializes power -0.5.
+    approx_cached = kfac_jax.OptaxPreconditioner(
+        model_func,
+        damping=0.1,
+        use_sqrt_inv=True,
+        distributed_inverses=False,
+        distributed_precon_apply=False,
+    )
+    approx_init_state = approx_cached.init(func_args, estimator_key)
+    zero_updates = approx_cached.apply(grads, approx_init_state)
+    self.assert_trees_all_close(
+        zero_updates, jax.tree_util.tree_map(jnp.zeros_like, grads)
+    )
+
+    # Verify exact cached inverse square root matches uncached and squares to
+    # the full inverse: (F + damping * I)^(-1/2)^2 g == (F + damping * I)^(-1) g
+    for register_only_generic in (False, True):
+      sqrt_cached = kfac_jax.OptaxPreconditioner(
+          model_func,
+          damping=0.1,
+          curvature_ema=0.0,
+          inverse_update_period=5,
+          use_exact_inverses=not register_only_generic,
+          use_sqrt_inv=True,
+          register_only_generic=register_only_generic,
+          estimation_mode="fisher_exact",
+          distributed_inverses=False,
+          distributed_precon_apply=False,
+      )
+      sqrt_uncached = kfac_jax.OptaxPreconditioner(
+          model_func,
+          damping=0.1,
+          curvature_ema=0.0,
+          inverse_update_period=1,
+          use_exact_inverses=not register_only_generic,
+          use_sqrt_inv=True,
+          register_only_generic=register_only_generic,
+          estimation_mode="fisher_exact",
+          distributed_inverses=False,
+          distributed_precon_apply=False,
+      )
+      inv_cached = kfac_jax.OptaxPreconditioner(
+          model_func,
+          damping=0.1,
+          curvature_ema=0.0,
+          inverse_update_period=5,
+          use_exact_inverses=not register_only_generic,
+          use_sqrt_inv=False,
+          register_only_generic=register_only_generic,
+          estimation_mode="fisher_exact",
+          distributed_inverses=False,
+          distributed_precon_apply=False,
+      )
+
+      sqrt_cached_state = sqrt_cached.maybe_update(
+          sqrt_cached.init(func_args, estimator_key), func_args, estimator_key
+      )
+      sqrt_uncached_state = sqrt_uncached.maybe_update(
+          sqrt_uncached.init(func_args, estimator_key), func_args, estimator_key
+      )
+      inv_cached_state = inv_cached.maybe_update(
+          inv_cached.init(func_args, estimator_key), func_args, estimator_key
+      )
+
+      cached_out = sqrt_cached.apply(grads, sqrt_cached_state)
+      uncached_out = sqrt_uncached.apply(grads, sqrt_uncached_state)
+      self.assert_trees_all_close(cached_out, uncached_out, atol=1e-5)
+
+      twice_out = sqrt_cached.apply(cached_out, sqrt_cached_state)
+      inv_out = inv_cached.apply(grads, inv_cached_state)
+      self.assert_trees_all_close(twice_out, inv_out, atol=1e-5)
+
+    # Verify exact cached power -1 on Full curvature blocks matches uncached.
+    full_cached = kfac_jax.OptaxPreconditioner(
+        model_func,
+        damping=0.1,
+        curvature_ema=0.0,
+        inverse_update_period=5,
+        use_exact_inverses=True,
+        use_sqrt_inv=False,
+        layer_tag_to_block_ctor=dict(dense=kfac_jax.DenseFull),
+        estimation_mode="fisher_exact",
+        distributed_inverses=False,
+        distributed_precon_apply=False,
+    )
+    full_uncached = kfac_jax.OptaxPreconditioner(
+        model_func,
+        damping=0.1,
+        curvature_ema=0.0,
+        inverse_update_period=1,
+        use_exact_inverses=True,
+        use_sqrt_inv=False,
+        layer_tag_to_block_ctor=dict(dense=kfac_jax.DenseFull),
+        estimation_mode="fisher_exact",
+        distributed_inverses=False,
+        distributed_precon_apply=False,
+    )
+    full_cached_state = full_cached.maybe_update(
+        full_cached.init(func_args, estimator_key), func_args, estimator_key
+    )
+    full_uncached_state = full_uncached.maybe_update(
+        full_uncached.init(func_args, estimator_key), func_args, estimator_key
+    )
+    self.assert_trees_all_close(
+        full_cached.apply(grads, full_cached_state),
+        full_uncached.apply(grads, full_uncached_state),
+        atol=1e-5,
+    )
+
+
 
 if __name__ == "__main__":
   absltest.main()
