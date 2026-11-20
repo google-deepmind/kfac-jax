@@ -266,14 +266,21 @@ class Full(CurvatureBlock, abc.ABC):
       for power in exact_powers:
 
         power = float(power)
+        matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)
 
         if power == -1:
-          state.cache[str(power)] = utils.psd_inv(
-              state.matrix.value + identity_weight * jnp.eye(self.dim)) / scale
+          state.cache[str(power)] = utils.psd_inv(matrix) / scale
         else:
-          matrix = state.matrix.value + identity_weight * jnp.eye(self.dim)
-          state.cache[str(power)] = (
-              (scale ** power) * jnp.linalg.matrix_power(matrix, power))
+          if power == -0.5:
+            matrix = utils.inverse_sqrt_psd_matrices(matrix)
+          elif power == 0.5:
+            matrix = jnp.dot(matrix, utils.inverse_sqrt_psd_matrices(matrix))  # pyrefly: ignore[bad-argument-type]
+          elif power.is_integer():
+            matrix = jnp.linalg.matrix_power(matrix, int(power))
+          else:
+            raise ValueError(f"Unsupported power: {power}")
+
+          state.cache[str(power)] = (scale ** power) * matrix
 
     return state
 
