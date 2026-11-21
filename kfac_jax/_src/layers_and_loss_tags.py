@@ -274,7 +274,7 @@ class LayerTag(jex.core.Primitive):
   """
 
   def __init__(self):
-    """Initializes a layer tag primitive with the given name.
+    """Initializes a layer tag primitive.
 
     Any layer tag primitive must have the following interface `layer_tag(
     *outputs, *inputs, *parameters, **kwargs)`. We refer collectively to
